@@ -586,17 +586,24 @@ void main() {
           over.add('${p.panelId}/${c.circuitId}');
         }
       }
-      expect(over.toSet(), {'lp3/lp3-l1'});
-      expect(_way(sys.panels['mdp']!, 'mdp-f-lp3').voltageDrop.dropPercent,
-          1.07);
-      expect(_way(sys.panels['lp3']!, 'lp3-l1').cumulativeDropPercent, 3.59);
-      expect(_way(sys.panels['lp3']!, 'lp3-l2').cumulativeDropPercent, 2.51);
+      // Reference tower T3 (2026-11-13): the open-plan run's OWN drop
+      // (2.52 %) is within its 3 % limit, so the excess is upstream and the
+      // auto-sized LP-3 feeder is raised until it is cured: 16 mm² 1.07 % ⇒
+      // 25 mm² ⇒ 35 mm² 0.50 % (3.02 %, still over) ⇒ 50 mm² 0.38 %, so
+      // "Lighting open plan" = 2.52 + 0.38 = 2.90 % and "Lighting corridor"
+      // = 1.44 + 0.38 = 1.82 %. No run is over any more.
+      expect(over.toSet(), isEmpty);
+      final lp3f = _way(sys.panels['mdp']!, 'mdp-f-lp3');
+      expect(lp3f.voltageDrop.dropPercent, 0.38);
+      expect(lp3f.cable.csaMm2, 50.0);
+      expect(lp3f.cableRaisedForDownstreamVd, isTrue);
+      expect(_way(sys.panels['lp3']!, 'lp3-l1').cumulativeDropPercent, 2.90);
+      expect(_way(sys.panels['lp3']!, 'lp3-l2').cumulativeDropPercent, 1.82);
       expect(_way(sys.panels['lp2']!, 'lp2-l1').cumulativeDropPercent, 2.81);
-      // Each is surfaced, once, as a locatable warning.
-      final w = everyWarning
-          .where((w) => w.code == 'cumulative-voltage-drop-exceeded')
-          .toList();
-      expect(w.map((x) => x.circuitId).toSet(), {'lp3-l1'});
+      expect(
+          everyWarning
+              .where((w) => w.code == 'cumulative-voltage-drop-exceeded'),
+          isEmpty);
     });
 
     test('the drop the engine prints is the drop its own primitive computes',
@@ -668,6 +675,10 @@ void main() {
       // misses by 0.4 A, so 10 mm² (26.8 A) is ONE step: 26.8 / 19.7 = 1.36.
       final mdp = sys.panels['mdp']!;
       for (final c in mdp.circuits) {
+        // Reference tower T3 — a feeder raised for its downstream ways'
+        // cumulative drop (LP-3, 50 mm²) is raised for VOLTAGE DROP, not
+        // for discrimination: outside this guard.
+        if (c.cableRaisedForDownstreamVd) continue;
         expect(c.cable.deratedIz.amperes / c.cable.izRequired!.amperes,
             lessThan(1.6),
             reason: '${c.name}: Iz ${c.cable.deratedIz.amperes} A on '
@@ -1005,7 +1016,8 @@ void main() {
       // genuinely cannot be drawn through a 40 A device).
       expect(byCode, {
         'non-selective': 6,
-        'cumulative-voltage-drop-exceeded': 1,
+        // Reference tower T3 — the LP-3 feeder now cures the one
+        // cumulative over-run (no `cumulative-voltage-drop-exceeded`).
         'fire-pump-protection': 2,
         'phase-imbalance-inherent': 1,
         'feeder-below-fed-headroom': 2,
@@ -1015,7 +1027,7 @@ void main() {
         // the source to the controller.
         'life-safety-feeder-cable': 1,
       });
-      expect(everyWarning.length, 13); // 6 + 1 + 2 + 1 + 2 + 1 (Round 43)
+      expect(everyWarning.length, 12); // 6 + 2 + 1 + 2 + 1 (T3: no VD)
       for (final w in everyWarning
           .where((w) => w.code == 'feeder-below-fed-headroom')) {
         final parent = project.panels.firstWhere((p) => p.id == w.panelId);
@@ -1496,7 +1508,9 @@ void main() {
       // `2P` — a 32 A MCB since Round-7: its 25.5 A real-pf load on 10 mm²
       // leaves no headroom for the floor to lift it.)
       expect(devices, contains('MCCB 80A 3ph 16kA'));
-      expect(devices, contains('MCB 32A 2P 10kA'));
+      // Reference tower T3 — LP-3's feeder is 50 mm² for its downstream
+      // drop, so its device follows the floor to the 63 A its Iz protects.
+      expect(devices, contains('MCB 63A 2P 10kA'));
       // The INCOMER sub-line still carries the board figure (the panel map).
       // (315 A since the service-capacity floor: 197 kVA → 284.35 A → 315.)
       expect(
@@ -1538,9 +1552,11 @@ void main() {
       expect(cables.where((c) => c.contains('4x25+16 mm2')).first,
           contains('PVC 50mm'));
       expect(byName['Feeder AC-1']!.conduitSizeMm, 40.0);
-      expect(cables.where((c) => c.contains('3x16 mm2')).first,
-          contains('PVC 32mm'));
-      expect(byName['Feeder LP-3']!.conduitSizeMm, 32.0);
+      // Reference tower T3 — LP-3's feeder is 50 mm² (3-core 2x50+25):
+      // ladder 50 mm vs containment 40 mm (the two bases disagree).
+      expect(cables.where((c) => c.contains('2x50+25 mm2')).first,
+          contains('PVC 50mm'));
+      expect(byName['Feeder LP-3']!.conduitSizeMm, 40.0);
       // And the ampacity that sized the cable used the CONDUIT reference
       // method (the panel default), not a tray method — a third basis.
       expect(project.panels.first.installMethod, CableInstallMethod.conduit);
@@ -1587,8 +1603,13 @@ void main() {
       final lp3Feeder = _way(mdp, 'mdp-f-lp3');
       expect(lp3Feeder.threePhase, isFalse);
       expect(sys.panels['lp3']!.demandW, lessThan(6000));
-      expect(lp3Feeder.breaker.ratingA.amperes, 32);
-      expect(lp3Feeder.cable.csaMm2, 16.0);
+      // Reference tower T3 — the LOAD-sized 16 mm² is raised to 50 mm² for
+      // its downstream ways' cumulative drop (never for discrimination), and
+      // the device then floors to the largest rung that Iz 71.8 A protects,
+      // 63 A (still below the 80 A target).
+      expect(lp3Feeder.breaker.ratingA.amperes, 63);
+      expect(lp3Feeder.cable.csaMm2, 50.0);
+      expect(lp3Feeder.cableRaisedForDownstreamVd, isTrue);
 
       // Neither reached its target, so neither is claimed as floored.
       expect(sys.feederFloorsApplied, isEmpty);

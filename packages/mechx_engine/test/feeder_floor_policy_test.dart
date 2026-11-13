@@ -456,7 +456,8 @@ void main() {
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-pp1')));
     });
 
-    test('LP-3: the small 1-phase board no longer takes 50 mm2', () {
+    test('LP-3: the small 1-phase board takes 50 mm2 only for its downstream '
+        'voltage drop (T3), never for discrimination', () {
       // LP-3 connected 1400 + 1000 + 2600×0.7 + 2000×0.7 = 5620 W, diversity
       // 0.9 ⇒ demand 5058 W. Its feeder follows the FED board — 1φ at 220 V
       // (E8a) — and (Round-7 elec-props-2) LP-3's REAL power factor: every way
@@ -466,18 +467,24 @@ void main() {
       // CABLE: Iz ≥ max(32, 1.25 × 25.545 = 31.93) = 32 A at derating 0.5358.
       //   Re-derived Round 11 (conduit = IEC B.52.4 B1): 10 mm² → 50 × 0.5358
       //   = 26.8 ✗; 16 mm² → 68 × 0.5358 = 36.4 ✓ ⇒ 16 mm² (old policy: 50).
+      // Reference tower T3 (2026-11-13): the load-sized 16 mm² (1.07 %)
+      // leaves LP-3's open-plan lighting at 2.52 + 1.07 = 3.59 % > 3 % with
+      // its own drop within the limit, so the auto-sized feeder is raised
+      // for that downstream drop: 25 ⇒ 35 mm² (0.50 %, 3.02 % still over) ⇒
+      // 50 mm² (0.38 %, 2.90 %), Iz 134 × 0.5358 = 71.8 A.
       final f = _way(mdp, 'mdp-f-lp3');
       expect(f.threePhase, isFalse);
       expect(f.designCurrent.amperes, 25.5);
-      expect(f.cable.csaMm2, 16.0);
-      expect(f.cable.deratedIz.amperes, closeTo(36.4, 0.05));
+      expect(f.cable.csaMm2, 50.0);
+      expect(f.cableRaisedForDownstreamVd, isTrue);
+      expect(f.cable.deratedIz.amperes, closeTo(71.8, 0.05));
 
       // DEVICE: LP-3's incomer is 40 A (28.5 A × 1.20 headroom = 34.2 ⇒ 40), so
-      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 36.4 ⇒ the
-      // largest rung ≤ 36.4 is 32 A: the device stays at its load pick. Copper
-      // never moved.
+      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 71.8 ⇒ the
+      // largest rung ≤ 71.8 is 63 A: the device follows the bigger cable to
+      // 63 A, still short of the target (not listed as floored).
       expect(sys.panels['lp3']!.incomer.breaker.ratingA.amperes, 40);
-      expect(f.breaker.ratingA.amperes, 32);
+      expect(f.breaker.ratingA.amperes, 63);
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-lp3')));
     });
 
@@ -491,6 +498,9 @@ void main() {
       // 26.8 / 19.7 = 1.36, one section step (26.8 / 15.8 = 1.70 against the
       // bare Ib, which ignores the 1.25 continuous margin every run carries).
       for (final c in mdp.circuits) {
+        // Reference tower T3 — raised for downstream VOLTAGE DROP (LP-3), not
+        // inflated for discrimination: outside this guard.
+        if (c.cableRaisedForDownstreamVd) continue;
         final need = c.cable.izRequired!.amperes;
         expect(c.cable.deratedIz.amperes / need, lessThan(1.6),
             reason: '${c.name}: Iz ${c.cable.deratedIz.amperes} A for '

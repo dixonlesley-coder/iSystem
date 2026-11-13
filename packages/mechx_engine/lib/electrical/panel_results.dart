@@ -161,6 +161,12 @@ class ElectricalCircuitResult {
   /// floor, never the engineer's cable override (no '(set)' mark).
   final bool cableRaisedForAds;
 
+  /// Reference tower T3 (2026-11-13) — true when this FEEDER's conductor was
+  /// stepped up the section ladder by `computeSystem` so the auto-sized ways
+  /// of the board(s) it feeds meet their cumulative voltage-drop limit: an
+  /// ENGINE floor, never the engineer's cable override.
+  final bool cableRaisedForDownstreamVd;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -184,6 +190,7 @@ class ElectricalCircuitResult {
     this.motorLeads,
     this.motorLeadsPeCsaMm2,
     this.cableRaisedForAds = false,
+    this.cableRaisedForDownstreamVd = false,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -216,6 +223,7 @@ class ElectricalCircuitResult {
         motorLeads: motorLeads,
         motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
         cableRaisedForAds: cableRaisedForAds,
+        cableRaisedForDownstreamVd: cableRaisedForDownstreamVd,
       );
 }
 

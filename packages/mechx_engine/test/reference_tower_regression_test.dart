@@ -14,6 +14,19 @@
 // pump) → DN40, capped at the DN100 standpipe riser. The heads' line is not
 // touched; a sprinkler-only system is unchanged; shuffling the drawing never
 // changes the result.
+//
+// T3 — an AUTO-sized feeder cable is raised (a) until its own earth-fault
+// loop meets ADS and (b) until the auto-sized ways of the board it feeds meet
+// their cumulative voltage-drop limit. The tower's 15…131 m floor feeders
+// (10 mm² load-sized) raised `cumulative-voltage-drop-exceeded` ×78 and
+// `ads-disconnection` ×3 (PP-Lt28..30); now none. A user-fixed feeder cable
+// is never raised, and keeps its findings.
+import 'package:mechx_engine/electrical/advanced_study.dart';
+import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/fault.dart'
+    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
+import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart'
     show drainageFixtureUnit;
@@ -25,6 +38,7 @@ import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/sprinkler_feed_main.dart';
+import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -199,6 +213,97 @@ void main() {
         expect(b.sizing[id]!.diameter.inMillimeters,
             a.sizing[id]!.diameter.inMillimeters);
       }
+    });
+  });
+
+  group('T3 — auto-sized feeders are raised for ADS and downstream VD', () {
+    ({ElectricalSystemResult sys, List<String> codes}) solve(
+        ElectricalProject project) {
+      final tower = buildTower();
+      final fault = estimatedServiceFaultLevelA(project) ??
+          const Current(defaultLvUtilityFaultKa * 1000);
+      final sys = computeSystem(
+        const PuilProfile(),
+        project,
+        calibrationBySheet: tower.calibrations,
+        building: tower.building,
+        originFaultLevel: fault,
+        busbarClearingTimeS: 0.1,
+        phaseReassignThresholdA: 1.0,
+      );
+      final adv = computeAdvancedStudy(const PuilProfile(), project, sys);
+      return (
+        sys: sys,
+        codes: [
+          for (final w in [
+            ...sys.warnings,
+            ...adv.fault.warnings,
+            ...adv.warnings,
+          ])
+            '${w.code}:${w.circuitId}',
+        ],
+      );
+    }
+
+    ElectricalCircuitResult feeder(ElectricalSystemResult sys, int f) =>
+        sys.panels[kTowerMainPanelId]!.circuits
+            .firstWhere((c) => c.circuitId == towerFloorFeederId(f));
+
+    test('no cumulative-VD or ADS finding is left on the auto-sized tree', () {
+      final r = solve(buildTower().electrical);
+      expect(
+          r.codes.where((c) =>
+              c.startsWith('cumulative-voltage-drop-exceeded') ||
+              c.startsWith('ads-disconnection:')),
+          isEmpty);
+      // The short Lantai 1 feeder keeps its load-sized 10 mm²; the 131 m
+      // Lantai 30 feeder is raised, flagged with its reason.
+      expect(feeder(r.sys, 0).cable.csaMm2, 10);
+      expect(feeder(r.sys, 0).cableRaisedForDownstreamVd, isFalse);
+      final top = feeder(r.sys, kTowerFloors - 1);
+      expect(top.cable.csaMm2, greaterThan(10));
+      expect(top.cableRaisedForDownstreamVd || top.cableRaisedForAds, isTrue);
+      // Every final way of every floor board meets its cumulative limit.
+      for (var f = 0; f < kTowerFloors; f++) {
+        for (final w in r.sys.panels[towerFloorPanelId(f)]!.circuits) {
+          expect(w.cumulativeDropPercent,
+              lessThanOrEqualTo(w.voltageDrop.limitPercent + 1e-9),
+              reason: w.circuitId);
+        }
+      }
+    });
+
+    test('a user-fixed feeder cable is never raised and keeps its findings',
+        () {
+      final base = buildTower().electrical;
+      final fixedId = towerFloorFeederId(kTowerFloors - 1);
+      final project = ElectricalProject(
+        id: base.id,
+        name: base.name,
+        supplyKind: base.supplyKind,
+        transformerKva: base.transformerKva,
+        capacitorBankKvar: base.capacitorBankKvar,
+        sources: base.sources,
+        panels: [
+          for (final p in base.panels)
+            p.id == kTowerMainPanelId
+                ? p.copyWith(circuits: [
+                    for (final c in p.circuits)
+                      c.id == fixedId ? c.copyWith(cableOverrideMm2: 10) : c,
+                  ])
+                : p,
+        ],
+      );
+      final r = solve(project);
+      final top = feeder(r.sys, kTowerFloors - 1);
+      expect(top.cable.csaMm2, 10);
+      expect(top.cableRaisedForDownstreamVd, isFalse);
+      expect(top.cableRaisedForAds, isFalse);
+      expect(r.codes, contains('ads-disconnection:$fixedId'));
+      expect(
+          r.codes
+              .where((c) => c.startsWith('cumulative-voltage-drop-exceeded')),
+          isNotEmpty);
     });
   });
 }
