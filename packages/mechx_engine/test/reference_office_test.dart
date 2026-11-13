@@ -23,6 +23,7 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/fault.dart'
     show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
+import 'package:mechx_engine/hydraulics.dart' show headLossHazenWilliams;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart' show defaultPrvSetpoint;
@@ -393,5 +394,340 @@ void main() {
       _p('- [${w.severity.name}] ${w.code} (${w.panelId}/${w.circuitId}): '
           '${w.message}');
     }
+  });
+
+  // ── Hand-derived pins (reviewer pass 2, 2026-11-13) ─────────────────────
+  group('hand values — cold water (public, flush-valve curve)', () {
+    late Map<String, EdgeSizing> sz;
+    late Map<String, double> fu;
+    setUpAll(() {
+      sz = size();
+      fu = Map.of(fuOut);
+    });
+    // UBAP per floor 2 x 10 (WC valve) + 2 (urinal) + 2 x 1 (LAV) = 24.
+    // Valve curve: 24 → 0.88333 + 14/15 x 0.63334 = 1.47445; 48 → 1.51667 +
+    // 23/25 x 1.06666 = 2.49800; 72 → 2.58333 + 22/50 x 1.45 = 3.22133; 96 →
+    // 2.58333 + 46/50 x 1.45 = 3.91733; WC 10 → 0.88333; UR 2 → 0.17667;
+    // LAV 1 → 0.08833. DN: first nominal with v <= 2.0 m/s.
+    const trunk = <String, ({double l, double fu, double q, int dn, double v})>{
+      'e_cw_WM_GT': (l: 6.7, fu: 96, q: 3.91733, dn: 50, v: 1.995),
+      'e_cw_GT_P1': (l: 1.0, fu: 96, q: 3.91733, dn: 50, v: 1.995),
+      'e_cw_P1_R0': (l: 5.7, fu: 96, q: 3.91733, dn: 50, v: 1.995),
+      'e_cw_R0_R1': (l: 4.0, fu: 72, q: 3.22133, dn: 50, v: 1.641),
+      'e_cw_R1_R2': (l: 4.0, fu: 48, q: 2.49800, dn: 40, v: 1.988),
+      'e_cw_R2_R3': (l: 4.0, fu: 24, q: 1.47445, dn: 32, v: 1.833),
+    };
+    // Per floor: plan + the drop from the ceiling main (3.7 m above its
+    // slab) to the 1.1 m fixture = plan + 2.6 m.
+    const branch = <String, ({double l, double fu, double q, int dn, double v})>{
+      'WCa': (l: 3.6, fu: 10, q: 0.88333, dn: 25, v: 1.800),
+      'WCb': (l: 4.6, fu: 10, q: 0.88333, dn: 25, v: 1.800),
+      'UR': (l: 5.6, fu: 2, q: 0.17667, dn: 15, v: 1.000),
+      'LAVa': (l: 4.1, fu: 1, q: 0.08833, dn: 15, v: 0.500),
+      'LAVb': (l: 5.1, fu: 1, q: 0.08833, dn: 15, v: 0.500),
+    };
+    void check(
+        String id, ({double l, double fu, double q, int dn, double v}) x) {
+      expect(lengthOf(net.edgeById(id)!), closeTo(x.l, 1e-9), reason: id);
+      expect(fu[id], closeTo(x.fu, 1e-9), reason: id);
+      expect(sz[id]!.flow.inLitersPerSecond, closeTo(x.q, 5e-5), reason: id);
+      expect(sz[id]!.diameter.inMillimeters, x.dn, reason: id);
+      expect(sz[id]!.velocity.metersPerSecond, closeTo(x.v, 5e-4),
+          reason: id);
+    }
+
+    test('trunk and riser', () {
+      for (final MapEntry(:key, :value) in trunk.entries) {
+        check(key, value);
+      }
+    });
+    test('every floor: R → T DN32 at 24 UBAP and the five branches', () {
+      for (var f = 0; f < 4; f++) {
+        check('e_cw_R${f}_T$f',
+            (l: 3.0, fu: 24, q: 1.47445, dn: 32, v: 1.833));
+        for (final MapEntry(:key, :value) in branch.entries) {
+          check('e_cw_T${f}_$key$f', value);
+        }
+      }
+    });
+    test('Hazen–Williams C150 friction per metre', () {
+      double hf(double lps, int dn) => headLossHazenWilliams(
+            flow: FlowRate.litersPerSecond(lps),
+            length: const Length(1),
+            diameter: Diameter.mm(dn.toDouble()),
+            hazenWilliamsC: 150,
+          ).meters;
+      expect(hf(3.917333, 50), closeTo(0.075302, 5e-6));
+      expect(hf(3.221333, 50), closeTo(0.052414, 5e-6));
+      expect(hf(2.498, 40), closeTo(0.097030, 5e-6));
+      expect(hf(1.474445, 32), closeTo(0.108357, 5e-6));
+      expect(hf(0.883333, 25), closeTo(0.139615, 5e-6));
+    });
+  });
+
+  group('hand values — upfeed from GT', () {
+    test('required head 38.539 m at WCb3, statics by floor, all residuals',
+        () {
+      final sizing = size();
+      final target =
+          SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
+      final sol = solvePressurized(
+        net: net,
+        service: ServiceType.coldWater,
+        sourceId: 'GT',
+        edgeFlows: {
+          for (final e in net.edges)
+            if (e.service == ServiceType.coldWater && sizing[e.id] != null)
+              e.id: sizing[e.id]!.flow,
+        },
+        sizing: sizing,
+        calibrationBySheet: office.calibrations,
+        building: office.building,
+        targetResidual: target,
+        mounting: office.mounting,
+        prvSetpoint: defaultPrvSetpoint(
+          targetResidual: target,
+          maxFixtureStatic: profile.maxFixtureStaticPressure.value,
+        ),
+      );
+      // Path GT → WCb3: 0.075302 x 6.7 (GT→P1 1.0 + P1→R0 5.7) + 0.052414 x
+      // 4 + 0.097030 x 4 + 0.108357 x 7 (R2→R3 4 + R3→T3 3) + 0.139615 x
+      // 4.6 = 2.503 m; + lift 13.1 (WCb3 at 12.0 + 1.1) + 225 / 9.81 =
+      // 38.539 m.
+      expect(sol.criticalNodeId, 'WCb3');
+      expect(sol.requiredPumpHead.meters, closeTo(38.539, 5e-4));
+      // Fixture static = 9.81 x (38.539 − z), z = 1.1 / 5.1 / 9.1 / 13.1.
+      const statics = [367.275, 328.035, 288.795, 249.555];
+      const residuals = <String, List<double>>{
+        'WCa': [354.206, 312.909, 269.862, 226.370],
+        'WCb': [352.836, 311.539, 268.492, 225.000],
+        'UR': [354.451, 313.154, 270.106, 226.614],
+        'LAVa': [358.186, 316.889, 273.842, 230.350],
+        'LAVb': [357.954, 316.658, 273.610, 230.118],
+      };
+      for (var f = 0; f < 4; f++) {
+        for (final MapEntry(:key, :value) in residuals.entries) {
+          final id = '$key$f';
+          expect(sol.deliveryNodeIds, contains(id));
+          expect(sol.noFlowStaticPressure[id]!.inKiloPascals,
+              closeTo(statics[f], 2e-3),
+              reason: id);
+          expect(sol.residualPressure[id]!.inKiloPascals,
+              closeTo(value[f], 2e-3),
+              reason: id);
+          // Above the SNI floor (98.067 at a flush-valve WC, 49.033
+          // otherwise); every static under 392.266 kPa.
+          expect(sol.residualPressure[id]!.inKiloPascals,
+              greaterThan(key.startsWith('WC') ? 98.067 : 49.033));
+          expect(sol.noFlowStaticPressure[id]!.inKiloPascals,
+              lessThan(392.266));
+        }
+      }
+    });
+  });
+
+  group('hand values — drainage, vent, rainwater', () {
+    late Map<String, EdgeSizing> sz;
+    late Map<String, double> fu;
+    setUpAll(() {
+      sz = size();
+      fu = Map.of(fuOut);
+    });
+    test('fixture arms, stack, building drain, vent', () {
+      // DFU: WC valve 8, urinal 4, LAV 1 ⇒ 22 per floor. WC arm DN75 (WC
+      // floor), UR DN50 (trap floor), LAV DN40 (branch table <= 3).
+      for (var f = 0; f < 4; f++) {
+        for (final (b, dfu, dn) in [
+          ('WCa', 8.0, 75), ('WCb', 8.0, 75), ('UR', 4.0, 50),
+          ('LAVa', 1.0, 40), ('LAVb', 1.0, 40), //
+        ]) {
+          final id = 'e_dr_$b${f}_D$f';
+          expect(fu[id], dfu, reason: id);
+          expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+        }
+      }
+      // Stack table <= 42 → DN75, <= 240 → DN100; the drain on the branch
+      // table <= 160 → DN100.
+      for (final (id, dfu, dn) in [
+        ('e_dr_D3_D2', 22.0, 75), ('e_dr_D2_D1', 44.0, 100),
+        ('e_dr_D1_D0', 66.0, 100), ('e_dr_D0_OUT', 88.0, 100),
+        // Vent: 88 DFU (84 < 88 <= 256 ⇒ DN100).
+        ('e_vt_D3_VTR', 88.0, 100), //
+      ]) {
+        expect(fu[id], dfu, reason: id);
+        expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+      }
+      // 16.0 roof − 11.7 (the D3 under-slab datum) = 4.3 m.
+      expect(lengthOf(net.edgeById('e_vt_D3_VTR')!), closeTo(4.3, 1e-9));
+    });
+    test('rainwater 0.9 x 200 x 150 / 3.6e6 = 7.5 L/s per drain', () {
+      // Half-full Manning n 0.010 @ 1 %: DN125 6.09 < 7.5, DN150 9.90 ⇒
+      // DN150; downpipes 15 L/s DN150; RW0→RWOUT DN150 9.90 < 15, DN200
+      // 21.3 ⇒ DN200.
+      for (final id in ['e_rw_RDa_RW3', 'e_rw_RDb_RW3']) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(7.5, 1e-9));
+        expect(sz[id]!.diameter.inMillimeters, 150);
+      }
+      for (final id in ['e_rw_RW3_RW2', 'e_rw_RW2_RW1', 'e_rw_RW1_RW0']) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(15.0, 1e-9));
+        expect(sz[id]!.diameter.inMillimeters, 150);
+      }
+      expect(sz['e_rw_RW0_RWOUT']!.diameter.inMillimeters, 200);
+    });
+  });
+
+  group('hand values — fire', () {
+    test('sprinkler design + remote head (light hazard)', () {
+      // ceil(84 / 20) = 5 heads; share 2.25 x 84 / 5 = 37.8 L/min →
+      // (37.8 / 80)² = 0.223 bar < 0.5 ⇒ head at 80 √0.5 = 56.569 L/min.
+      expect(sprinkler.sprinklerCount, 5);
+      expect(sprinkler.flowPerSprinkler.inLitersPerSecond,
+          closeTo(37.8 / 60, 1e-9));
+      expect(remote.governedByMinimumPressure, isTrue);
+      expect(remote.remoteHeadFlow.inLitersPerSecond, closeTo(0.94281, 5e-6));
+      expect(
+          remote.remoteAreaDemand.inLitersPerSecond, closeTo(4.71405, 5e-5));
+    });
+    test('fire pipes and the hydrant index friction (C120)', () {
+      final sz = size();
+      // Standpipe 500 gpm = 31.545 L/s; NFPA 20 discharge DN125 on the pump
+      // legs, the Class I riser DN100 (v 4.016), boxes 5 L/s on DN65.
+      for (final id in ['e_fh_FT_FP', 'e_fh_FP_H0', 'e_sp_FP_S0']) {
+        expect(sz[id]!.diameter.inMillimeters, 125, reason: id);
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+      }
+      for (var f = 1; f < 4; f++) {
+        final id = 'e_fh_H${f - 1}_H$f';
+        expect(sz[id]!.diameter.inMillimeters, 100, reason: id);
+        expect(sz[id]!.velocity.metersPerSecond, closeTo(4.016, 5e-4));
+      }
+      for (var f = 0; f < 4; f++) {
+        final id = 'e_fh_H${f}_HYD$f';
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(5.0, 1e-9));
+        expect(sz[id]!.diameter.inMillimeters, 65, reason: id);
+      }
+      // After O1: the sprinkler riser and the line keep their own sizes
+      // (heads accumulate 0.94281 each, capped at the 5-head demand).
+      const sp = <String, (double, int)>{
+        'e_sp_S0_S1': (4.71405, 32), 'e_sp_S1_S2': (4.71405, 32),
+        'e_sp_S2_S3': (4.71405, 32), 'e_sp_S3_SP1': (4.71405, 32),
+        'e_sp_SP1_SP2': (4.71405, 32), 'e_sp_SP2_SP3': (3.77124, 32),
+        'e_sp_SP3_SP4': (2.82843, 25), 'e_sp_SP4_SP5': (1.88562, 25),
+        'e_sp_SP5_SP6': (0.94281, 25),
+      };
+      for (final MapEntry(key: id, value: (q, dn)) in sp.entries) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(q, 5e-5), reason: id);
+        expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+      }
+      // Index friction FP → HYD3 at C = 120: FP→H0 6.7 m DN125 @ 31.545 +
+      // three 4.0 m DN100 risers @ 31.545 + H3→HYD3 4.6 m DN65 @ 5.0.
+      double hf(String id) => headLossHazenWilliams(
+            flow: sz[id]!.flow,
+            length: Length(lengthOf(net.edgeById(id)!)),
+            diameter: sz[id]!.diameter,
+            hazenWilliamsC: 120,
+          ).meters;
+      final byHand = hf('e_fh_FP_H0') +
+          hf('e_fh_H0_H1') +
+          hf('e_fh_H1_H2') +
+          hf('e_fh_H2_H3') +
+          hf('e_fh_H3_HYD3');
+      final fr = fireIndexPathFrictionM(
+        net: net,
+        system: fireSystems(net).single,
+        pumpId: 'FP',
+        sizing: sz,
+        lengthOf: lengthOf,
+        terminals: FireTerminalKind.hydrant,
+      )!;
+      expect(fr, closeTo(byHand, 1e-9));
+      expect(fr, closeTo(2.872, 5e-4));
+      // Below the 15 m allowance ⇒ H = 13.2 + 15 + 690 / 9.81 = 98.536 m.
+      expect(fr, lessThan(15));
+      expect(standpipe.pumpHead.meters, closeTo(98.536, 5e-4));
+      expect(standpipe.pumpHydraulicPower.watts, closeTo(30492.8, 0.05));
+      expect(standpipe.pumpShaftPower.watts, closeTo(43561.2, 0.05));
+    });
+  });
+
+  group('hand values — room air', () {
+    test('150 x 3.7 x 6 / 3600 = 0.925 m³/s; trunk DN500', () {
+      final r = officeRoomAir();
+      expect(r.airflow.cubicMetersPerSecond, closeTo(0.925, 1e-12));
+      // √(4 x 0.925 / (5π)) = 485 mm → 500, v = 4.711.
+      expect(r.supplyDuctDiameter.inMillimeters, 500);
+      expect(r.supplyDuctVelocity.metersPerSecond, closeTo(4.711, 5e-4));
+    });
+  });
+
+  group('hand values — floor sub-boards (each of 4) and their feeders', () {
+    test('ways at 231 V, demand, lines, incomer, feeder', () {
+      final project = office.electrical;
+      final sys = computeSystem(
+        const PuilProfile(),
+        project,
+        calibrationBySheet: office.calibrations,
+        building: office.building,
+        originFaultLevel: estimatedServiceFaultLevelA(project)!,
+        busbarClearingTimeS: 0.1,
+        phaseReassignThresholdA: 1.0,
+      );
+      // 164 000 VA declared ⇒ still the 10 kA (<= 197 kVA) rung.
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 10000);
+      // Lighting 1200 / (231 x 0.9) = 5.772; socket run 2000 / (231 x 0.9)
+      // = 9.620; AC run 3500 / (231 x 0.85) = 17.825.
+      const ways = <String,
+          ({double run, int mcb, String curve, double csa, double vd})>{
+        'lampu_a': (run: 5.8, mcb: 6, curve: 'b', csa: 1.5, vd: 1.31),
+        'lampu_b': (run: 5.8, mcb: 6, curve: 'b', csa: 1.5, vd: 1.63),
+        'kk_a': (run: 9.6, mcb: 10, curve: 'c', csa: 2.5, vd: 1.00),
+        'kk_b': (run: 9.6, mcb: 10, curve: 'c', csa: 2.5, vd: 1.34),
+        'kk_c': (run: 9.6, mcb: 10, curve: 'c', csa: 2.5, vd: 1.67),
+        'ac_1': (run: 17.8, mcb: 20, curve: 'c', csa: 4.0, vd: 1.10),
+        'ac_2': (run: 17.8, mcb: 20, curve: 'c', csa: 4.0, vd: 1.32),
+        'ac_3': (run: 17.8, mcb: 20, curve: 'c', csa: 4.0, vd: 1.53),
+      };
+      const feederVd = [0.40, 0.56, 0.72, 0.88];
+      final lvmdp = sys.panels[kOfficeMainPanelId]!;
+      for (var i = 0; i < 4; i++) {
+        final t = kOfficeFloorTags[i];
+        final p = sys.panels[officePanelId(t)]!;
+        for (final MapEntry(key: base, value: x) in ways.entries) {
+          final r =
+              p.circuits.firstWhere((c) => c.circuitId == 'c_${base}_$t');
+          expect(r.runCurrentA.amperes, closeTo(x.run, 1e-9), reason: base);
+          expect(r.breaker.ratingA.amperes, x.mcb, reason: base);
+          expect(r.breaker.curve.name, x.curve, reason: base);
+          expect(r.cable.csaMm2, x.csa, reason: base);
+          expect(r.voltageDrop.dropPercent, closeTo(x.vd, 1e-9),
+              reason: base);
+          // Cumulative = the feeder's own drop + the way's own.
+          expect(r.cumulativeDropPercent, closeTo(feederVd[i] + x.vd, 1e-9),
+              reason: base);
+          expect(r.rcd.required, base.startsWith('kk'), reason: base);
+        }
+        // 2400 + 0.7 x 6000 + 0.9 x 10 500 = 16 050 W; VA 2400 / 0.9 +
+        // 4200 / 0.9 + 9450 / 0.85 = 18 451.
+        expect(p.demandW, closeTo(16050, 1e-6));
+        expect(p.demandVa, closeTo(18451, 0.5));
+        // Lines sorted: 16.04 + 6.73 + 5.77 = 28.5 twice, 16.04 + 6.73 =
+        // 22.8.
+        final lines = [p.phaseBalance.l1, p.phaseBalance.l2, p.phaseBalance.l3]
+          ..sort();
+        expect(lines, [22.8, 28.5, 28.5]);
+        expect(p.incomer.breaker.ratingA.amperes, 32);
+        expect(p.incomer.poles, 4);
+        // Feeder: Ib = the worst line 28.5 A; MCB 32 A C (the 1.6 x 32 =
+        // 51.2 A selectivity floor is capped by Iz 36 of 6 mm²), NYY 5 x 6.
+        final fd = lvmdp.circuits
+            .firstWhere((c) => c.circuitId == officeFeederId(t));
+        expect(fd.designCurrent.amperes, 28.5);
+        expect(fd.breaker.ratingA.amperes, 32);
+        expect(fd.breaker.curve.name, 'c');
+        expect(fd.cable.csaMm2, 6);
+        expect(fd.grounding.cores, 5);
+        expect(fd.voltageDrop.dropPercent, closeTo(feederVd[i], 1e-9));
+      }
+    });
   });
 }
