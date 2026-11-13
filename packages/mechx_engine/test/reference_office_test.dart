@@ -410,6 +410,13 @@ void main() {
     // 23/25 x 1.06666 = 2.49800; 72 → 2.58333 + 22/50 x 1.45 = 3.22133; 96 →
     // 2.58333 + 46/50 x 1.45 = 3.91733; WC 10 → 0.88333; UR 2 → 0.17667;
     // LAV 1 → 0.08833. DN: first nominal with v <= 2.0 m/s.
+    // Backlog G-1 (2026-11-13) — the curve is chosen per PIPE: only a pipe
+    // with a flush-valve WC downstream reads the valve curve. The urinal
+    // (flush tank) and lavatory branches serve none, so they read the TANK
+    // curve (below 10 UBAP: 0.05 L/s per UBAP): UR 2 → 0.1000 L/s (was
+    // 0.17667), LAV 1 → 0.0500 L/s (was 0.08833); DN15 either way, v =
+    // 0.1e-3 / (π/4 x 0.015²) = 0.566 / 0.283 m/s. Every pipe serving a WC
+    // (the trunk, riser, R → T and the WC branches) keeps its valve flow.
     const trunk = <String, ({double l, double fu, double q, int dn, double v})>{
       // Backlog D-3: 3.0 plan + the meter at 0.5 down to GT's slab (was
       // 3.0 + the 3.7 ceiling = 6.7).
@@ -425,9 +432,9 @@ void main() {
     const branch = <String, ({double l, double fu, double q, int dn, double v})>{
       'WCa': (l: 3.6, fu: 10, q: 0.88333, dn: 25, v: 1.800),
       'WCb': (l: 4.6, fu: 10, q: 0.88333, dn: 25, v: 1.800),
-      'UR': (l: 5.6, fu: 2, q: 0.17667, dn: 15, v: 1.000),
-      'LAVa': (l: 4.1, fu: 1, q: 0.08833, dn: 15, v: 0.500),
-      'LAVb': (l: 5.1, fu: 1, q: 0.08833, dn: 15, v: 0.500),
+      'UR': (l: 5.6, fu: 2, q: 0.10000, dn: 15, v: 0.566),
+      'LAVa': (l: 4.1, fu: 1, q: 0.05000, dn: 15, v: 0.283),
+      'LAVb': (l: 5.1, fu: 1, q: 0.05000, dn: 15, v: 0.283),
     };
     void check(
         String id, ({double l, double fu, double q, int dn, double v}) x) {
@@ -465,6 +472,12 @@ void main() {
       expect(hf(2.498, 40), closeTo(0.097030, 5e-6));
       expect(hf(1.474445, 32), closeTo(0.108357, 5e-6));
       expect(hf(0.883333, 25), closeTo(0.139615, 5e-6));
+      // Backlog G-1 — the tank-curve branches (and the valve-curve flows
+      // they replaced: 0.176667 → 0.085298, 0.088333 → 0.023628).
+      expect(hf(0.1, 15), closeTo(0.029731, 5e-6));
+      expect(hf(0.05, 15), closeTo(0.0082356, 5e-6));
+      expect(hf(0.176667, 15), closeTo(0.085298, 5e-6));
+      expect(hf(0.088333, 15), closeTo(0.023628, 5e-6));
     });
   });
 
@@ -504,9 +517,15 @@ void main() {
       const residuals = <String, List<double>>{
         'WCa': [354.206, 312.909, 269.862, 226.370],
         'WCb': [352.836, 311.539, 268.492, 225.000],
-        'UR': [354.451, 313.154, 270.106, 226.614],
-        'LAVa': [358.186, 316.889, 273.842, 230.350],
-        'LAVb': [357.954, 316.658, 273.610, 230.118],
+        // Backlog G-1 — the tank-curve branches lose less on their own
+        // DN15 leg; everything upstream (the WC path) is unchanged:
+        // UR  + (0.085298 − 0.029731) x 5.6 x 9.80665 = +3.052 kPa
+        //     (354.451 → 357.503 ...);
+        // LAVa + (0.023628 − 0.0082357) x 4.1 x 9.80665 = +0.619 kPa;
+        // LAVb + (0.023628 − 0.0082357) x 5.1 x 9.80665 = +0.770 kPa.
+        'UR': [357.503, 316.207, 273.159, 229.667],
+        'LAVa': [358.805, 317.509, 274.461, 230.969],
+        'LAVb': [358.725, 317.428, 274.380, 230.888],
       };
       for (var f = 0; f < 4; f++) {
         for (final MapEntry(:key, :value) in residuals.entries) {

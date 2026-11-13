@@ -2449,7 +2449,9 @@ Map<String, String> serviceComponentRoots(
 ///     COLD water only; hot water always takes the flush-tank branch (it
 ///     never serves a flush valve). Round 27: with [flushValveNodeIds] the
 ///     branch is chosen per cold-water COMPONENT (flush valve only where one
-///     of those nodes is on it) — see [flushSystemForRoot].
+///     of those nodes is on it) — see [flushSystemForRoot]. Backlog G-1: per
+///     PIPE — the valve branch only on a pipe with one of those nodes
+///     DOWNSTREAM (a lavatory branch beside a valve WC reads the tank curve).
 ///   • Everything else (or water without fixture-unit data): accumulate the
 ///     flat [leafDemand] flows.
 ///
@@ -3293,12 +3295,24 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       // itself. One valve WC on a separate system (or typed on the drainage
       // layer only) used to re-curve every cold-water system in the project
       // (+76 % flow, one DN up). Empty set ⇒ the single [flushSystem].
-      final serviceFlush =
-          service == ServiceType.hotWater || flushValveNodeIds.isEmpty
-              ? serviceFlushDefault
-              : (component.any(flushValveNodeIds.contains)
-                  ? FlushSystem.flushValve
-                  : FlushSystem.flushTank);
+      //
+      // Backlog G-1 (2026-11-13) — refined from per COMPONENT to per PIPE:
+      // a pipe takes the flush-VALVE branch only when at least one
+      // flush-valve fixture is DOWNSTREAM of it (it serves one), else the
+      // flush-TANK branch ([pipeFlush] below; a lavatory branch beside a
+      // valve WC reads 1 UBAP on the tank curve, 0.0500 L/s, not 0.0883).
+      // [serviceFlush] is the component-level reading, kept for the ring
+      // share when no per-pipe reading applies.
+      final perPipeFlush =
+          service != ServiceType.hotWater && flushValveNodeIds.isNotEmpty;
+      final serviceFlush = !perPipeFlush
+          ? serviceFlushDefault
+          : (component.any(flushValveNodeIds.contains)
+              ? FlushSystem.flushValve
+              : FlushSystem.flushTank);
+      FlushSystem pipeFlush(bool servesFlushValve) => !perPipeFlush
+          ? serviceFlush
+          : (servesFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank);
 
       // Round 15 (root-metamorphic-rain-multi-downpipe) — a DRAINAGE or
       // RAINWATER component can discharge at SEVERAL outfalls: two downpipes
@@ -4100,7 +4114,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
                 totalUbap += ubap;
               }
             }
-            if (profile.demandCurveExceeded(totalUbap, system: serviceFlush)) {
+            // Backlog G-1 — the ring carries every ring-fed fixture, so its
+            // shared total takes the valve branch only when a flush valve
+            // is among them.
+            final ringFlush =
+                pipeFlush(nodeUbap.keys.any(flushValveNodeIds.contains));
+            if (profile.demandCurveExceeded(totalUbap, system: ringFlush)) {
               for (final e in componentEdges) {
                 demandExtrapolatedEdges.add(e.id);
               }
@@ -4109,7 +4128,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             noteHeater(root, nodeUbap);
             if (totalUbap > 0) {
               final totalFlow = profile
-                  .probableFlowForFixtureUnits(totalUbap, system: serviceFlush)
+                  .probableFlowForFixtureUnits(totalUbap, system: ringFlush)
                   .cubicMetersPerSecond;
               for (final entry in nodeUbap.entries) {
                 demandFlow[entry.key] = totalFlow * (entry.value / totalUbap);
@@ -4265,19 +4284,31 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // branches it under-sized every branch (8 UBAP sized for 0.245 L/s
           // instead of 0.400 L/s). Ring (2-edge-connected) edges keep the share.
           if (useUbap && nodeUbapForBridges.isNotEmpty) {
+            final bridgeEdges = [
+              for (final e in loopEdges) (id: e.id, from: e.fromId, to: e.toId),
+            ];
             final far = _bridgeFarSideSums(
-              edges: [
-                for (final e in loopEdges)
-                  (id: e.id, from: e.fromId, to: e.toId),
-              ],
+              edges: bridgeEdges,
               root: root,
               weight: nodeUbapForBridges,
             );
+            // Backlog G-1 — a bridge serves a flush valve only when one is
+            // on its FAR side.
+            final farValves = perPipeFlush
+                ? _bridgeFarSideSums(
+                    edges: bridgeEdges,
+                    root: root,
+                    weight: {
+                      for (final n in nodeUbapForBridges.keys)
+                        if (flushValveNodeIds.contains(n)) n: 1.0,
+                    },
+                  )
+                : const <String, double>{};
             for (final entry in far.entries) {
               if (entry.value <= 0) continue;
               allFlows[entry.key] = profile.probableFlowForFixtureUnits(
                 entry.value,
-                system: serviceFlush,
+                system: pipeFlush((farValves[entry.key] ?? 0) > 0),
               );
             }
           }
@@ -4696,14 +4727,43 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               }
             }
           }
+          // Backlog G-1 (2026-11-13) — the demand-curve branch per PIPE:
+          // the flush-VALVE branch only on a pipe with a flush-valve
+          // fixture DOWNSTREAM (accumulated on the same tree as the units,
+          // one pass, order-independent; a closing edge takes the larger
+          // reading of the edges it touches, as its units do). A mains
+          // feed into a root tank carries what the tank delivers, so it
+          // serves a flush valve when the tank's loaded outflow does.
+          final valvesBeyond = perPipeFlush
+              ? withClosing(accumulateFixtureUnits(
+                  net: net,
+                  service: service,
+                  rootId: root,
+                  terminalUnits: {
+                    for (final n in component)
+                      if (flushValveNodeIds.contains(n) &&
+                          (terminalUnits[n] ?? 0) > 0)
+                        n: 1.0,
+                  },
+                  deferredEdgeIds: deferred,
+                ))
+              : const <String, double>{};
+          final tankServesValve = mainsFeedFrom.isNotEmpty &&
+              valvesBeyond.entries.any((v) =>
+                  v.value > 0 &&
+                  edgeParents[v.key] == root &&
+                  (edgeUnits[v.key] ?? 0) > 0);
           fixtureUnitsOut?.addAll(edgeUnits);
           for (final entry in edgeUnits.entries) {
+            final edgeFlush = pipeFlush(mainsFeedFrom.containsKey(entry.key)
+                ? tankServesValve
+                : (valvesBeyond[entry.key] ?? 0) > 0);
             allFlows[entry.key] = profile.probableFlowForFixtureUnits(
               entry.value,
-              system: serviceFlush,
+              system: edgeFlush,
             );
             if (profile.demandCurveExceeded(entry.value,
-                system: serviceFlush)) {
+                system: edgeFlush)) {
               demandExtrapolatedEdges.add(entry.key);
             }
             // Supply flows AWAY from the source root, so it comes FROM the
@@ -7049,6 +7109,10 @@ class _StandbyLeg {
 /// system that holds one of [flushValveNodeIds] (hot water never serves a
 /// flush valve). The SAME per-system rule [autoSizeNetwork] applies, so a
 /// consumer re-diversifying a source's summed UBAP reads the sizer's curve.
+/// Backlog G-1: the sizer now picks the branch per PIPE (flush valve
+/// downstream); every node of a supply tree is downstream of its ROOT, so at
+/// the source this per-component reading equals the pipe the source flow
+/// leaves on.
 FlushSystem flushSystemForRoot(
   Network net,
   ServiceType service,

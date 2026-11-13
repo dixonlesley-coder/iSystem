@@ -573,6 +573,33 @@ void main() {
       check('e_cw_A_GR29', 648, valve(648), 100);
     });
 
+    test(
+        'backlog G-1: the curve per PIPE — branches without a flush valve '
+        'downstream read the tank curve', () {
+      // Tank curve below 10 UBAP: 0.05 L/s per UBAP. A WC branch (10 UBAP,
+      // a flush valve downstream) keeps the valve curve 0.88333 L/s DN25;
+      // the urinal (flush tank) 2 → 0.1000 L/s DN15 v 0.566 (was 0.17667);
+      // a gravity-floor lavatory 1 → 0.0500 L/s v 0.283 (was 0.08833); a
+      // boosted-floor lavatory's cold share 0.75 → 0.0375 L/s (was 0.06625).
+      for (var f = 0; f < kTowerFloors; f++) {
+        final lav = f >= 27 ? 0.75 : 1.0;
+        check('e_cw_T${f}_WCa$f', 10, 0.88333, 25, 1.800);
+        check('e_cw_T${f}_WCb$f', 10, 0.88333, 25, 1.800);
+        check('e_cw_T${f}_UR$f', 2, 0.1, 15, 0.566);
+        check('e_cw_T${f}_LAVa$f', lav, 0.05 * lav, 15);
+        check('e_cw_T${f}_LAVb$f', lav, 0.05 * lav, 15);
+        // The floor branch still serves both valve WCs: valve(24) (gravity)
+        // / valve(23.5) (boosted, 0.25 hot per lavatory left the cold side).
+        final floorU = f >= 27 ? 23.5 : 24.0;
+        check('e_cw_${towerRiserNode(f)}_T$f', floorU, valve(floorU), 32);
+      }
+      // The heater's cold make-up serves no flush valve: 6 x 0.75 = 4.5
+      // UBAP on the tank curve = 0.2250 L/s, DN15 at 0.225e-3 / (π/4 x
+      // 0.015²) = 1.273 m/s (was the valve curve's 0.3975 L/s on DN20) —
+      // the same draw its hot side reads (`e_hw_WH_HW29`).
+      check('e_cw_BR29_WH', 4.5, 0.225, 15, 1.273);
+    });
+
     test('every gravity riser edge carries the floors below it', () {
       int dnFor(double u) => u <= 24
           ? 32
