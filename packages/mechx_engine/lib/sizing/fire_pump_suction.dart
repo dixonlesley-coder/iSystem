@@ -251,13 +251,23 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     // to the first junction or terminal — and on through a DISCHARGE
     // HEADER (a junction where two or more pump legs merge, every pipe
     // into it coming from a mover) to the main it feeds.
-    // (node, past a discharge header?, is this node the header itself?)
-    final dstack = [(p, false, false)];
+    // (node, past a discharge header?, is this node the header itself?,
+    // on a BRANCH leaving the pump itself?)
+    final dstack = [(p, false, false, false)];
     final dseen = <String>{p};
     while (dstack.isNotEmpty) {
-      final (cur, pastHeader, atHeader) = dstack.removeLast();
+      final (cur, pastHeader, atHeader, onBranch) = dstack.removeLast();
       for (final e in adj[cur] ?? const <NetEdge>[]) {
         if (!outflowAt(e, cur)) continue;
+        // Reference office O1 — a pump with SEVERAL outlets is itself a
+        // junction: an outlet under half its rated flow beside one carrying
+        // the rated flow is a separate system's branch (the sprinkler feed
+        // beside the hydrant main). Its run from the pump stays discharge
+        // piping, but a riser met further along it is that system's own
+        // riser and keeps its class size (the Round-65 header rule, applied
+        // at the pump node). A riser leaving the pump directly is unchanged.
+        final branch = cur == p ? isBranchOffMain(e, p, p) : onBranch;
+        if (e.kind == EdgeKind.riser && branch && cur != p) continue;
         // Past a header the discharge piping ends where the standpipe /
         // sprinkler riser begins (the riser keeps its own class sizing);
         // a riser leaving the pump itself is its discharge pipe (and the
@@ -311,7 +321,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
           header = true;
           isHeader = true;
         }
-        if (dseen.add(next)) dstack.add((next, header, isHeader));
+        if (dseen.add(next)) dstack.add((next, header, isHeader, branch));
       }
     }
   }
