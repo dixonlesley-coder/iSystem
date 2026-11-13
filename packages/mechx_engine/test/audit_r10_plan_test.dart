@@ -73,7 +73,7 @@ List<String> _pdfTagLines(String pdf) => [
       for (final m in RegExp(r'(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) '
               r'(-?[\d.]+) (-?[\d.]+) Tm \((.*?)\) Tj')
           .allMatches(pdf))
-        m.group(7)!.replaceAll('·', '-').replaceAll('Ø', '%%c'),
+        m.group(7)!.replaceAll('·', '%%183').replaceAll('Ø', '%%c'),
     ];
 
 List<String> _dxfTagLines(String dxf) => [
@@ -133,7 +133,7 @@ void main() {
       final p = _pdfTagLines(pdf), d = _dxfTagLines(dxf);
       expect(d, p);
       // The unsized run carries its tag + take-off length in BOTH.
-      expect(d.join(' | '), contains('CW-F1 - 6.0 m'));
+      expect(d.join(' | '), contains('CW-F1 %%183 6.0 m'));
     });
 
     test('property: PDF == DXF tag lines with ~10% of runs unsized (seeded)',

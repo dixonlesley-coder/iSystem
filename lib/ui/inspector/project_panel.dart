@@ -2413,7 +2413,8 @@ Future<bool> writeSubmittalPackageToDir(
       : project.name.trim();
   // Round 21 (riser-drafting-2-2) — the issued PDF paginates a tall riser to
   // legible pages; drawing-review D6 — the DXF carries the same pages.
-  final riserPages = buildLiveRiserPages(ref, null);
+  final riserPages = buildLiveRiserPages(ref, null,
+      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser));
   await File(out('riser-sld.pdf')).writeAsBytes(
     riserPages.length == 1
         ? sldSheetToPdf(

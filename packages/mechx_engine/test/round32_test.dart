@@ -701,7 +701,11 @@ void main() {
         hotWaterRecirc: hn.edges.any((e) => e.service == ServiceType.hotWater),
       );
       expect(_longLeaderPipeCrossings(hs), lessThanOrEqualTo(9));
-      expect(_leaderPipeCrossings(hs, 0), lessThanOrEqualTo(43));
+      // Drawing-review D5 (2026-11-13): a tag with no legal slot is now a
+      // KEY circle hugging its element; where no crossing-free key slot
+      // exists its short (<= 6 label heights) leader may cross a pipe — 3 on
+      // this harness (43 -> 46), every far / fused text slot gone instead.
+      expect(_leaderPipeCrossings(hs, 0), lessThanOrEqualTo(46));
     });
   });
 

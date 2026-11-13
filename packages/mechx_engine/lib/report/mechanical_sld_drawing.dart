@@ -2280,6 +2280,7 @@ class _LabelPlacer {
     ]);
     (double, double)? best;
     var bestCost = double.infinity;
+    var bestSoft = 0;
     var bestFar = false;
     for (final (dx, dy, d) in cands) {
       final cx = anchorX + dx, cy = anchorY + dy;
@@ -2289,6 +2290,7 @@ class _LabelPlacer {
           cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
       final far = d - r > 6;
       var c = rectCost(q);
+      var soft = 0;
       if (far) {
         // Its leader must cross no other leader and no placed label.
         final ex = cx - dx / d * r, ey = cy - dy / d * r;
@@ -2300,13 +2302,27 @@ class _LabelPlacer {
         for (final p in _labels) {
           if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
         }
+        // … and preferably no pipe / glyph it does not name (a SOFT
+        // preference: it orders the clear slots, never blocks the key).
+        for (final p in _ink) {
+          final own = anchorX >= p.minX - 0.01 &&
+              anchorX <= p.maxX + 0.01 &&
+              anchorY >= p.minY - 0.01 &&
+              anchorY <= p.maxY + 0.01;
+          if (!own && _segmentHitsRect(anchorX, anchorY, ex, ey, p)) soft++;
+        }
       }
-      if (c < bestCost) {
+      final hardOk = c <= tol;
+      if (best == null ||
+          (hardOk && bestCost > tol) ||
+          (hardOk == (bestCost <= tol) &&
+              (hardOk ? soft < bestSoft : c < bestCost))) {
         bestCost = c;
+        bestSoft = soft;
         best = (cx, cy);
         bestFar = far;
       }
-      if (c <= tol) break;
+      if (hardOk && soft == 0) break;
     }
     // Last resort before the honest stamp: the circle ON its own element
     // (the element's own pipe may pass under its tag; nothing else may).

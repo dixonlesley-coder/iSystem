@@ -210,14 +210,20 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
 /// fewest floor-range pages that print as large as the sheet allows
 /// ([paginatedRiserSheets]; `LANJUT KE <floor>` match stubs at each break,
 /// the extras on the lowest-floor page). The DXF stays one sheet (CAD zooms).
-List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus) {
+///
+/// Drawing-review D4 — [diagramTitle] must be the title the issuing PDF
+/// stamps (the submittal uses the register title, which wraps to a taller
+/// title block): measured with a shorter one, a page passed the 7 pt check
+/// here and printed at 6.86 pt on the issued sheet.
+List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
+    {String? diagramTitle}) {
   final project = ref.read(projectControllerProvider);
   return paginatedRiserSheets(
     build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
     levelCount: project.building.levelCount,
     chrome: _riserChrome(ref, index: 1, total: 1),
     projectName: project.name.isEmpty ? 'Untitled project' : project.name,
-    diagramTitle: riserDiagramTitle(focus),
+    diagramTitle: diagramTitle ?? riserDiagramTitle(focus),
   );
 }
 

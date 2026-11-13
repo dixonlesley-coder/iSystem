@@ -837,6 +837,11 @@ const double kPlanLeaderHardMaxFactor = 16.0;
 /// goes into the sheet's KETERANGAN PIPA / PIPE KEY table. A drafting rule.
 const double kPlanKeyedLeaderMaxFactor = 4.0;
 
+/// Drawing-review D5 — the longest leader of a plan KEY TAG, × text size: its
+/// small circle is tried hugging the element first; 6 text heights is still a
+/// short local tie (≈ 19 mm at 9 pt).
+const double kPlanKeyTagLeaderMaxFactor = 6.0;
+
 /// Drawing-review D5 — the keyed texts of one plan sheet (text → key, in key
 /// order; identical typical texts share one key).
 class PlanKeyRegistry {
@@ -881,70 +886,92 @@ PlanKeyTable? placePlanKeyTable(
     ..sort((a, b) => a.value.compareTo(b.value));
   const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH / LEVEL'];
   final rows = [
-    for (final e in entries)
-      ['${e.value}', split(e.key).$1, split(e.key).$2],
+    for (final e in entries) ['${e.value}', split(e.key).$1, split(e.key).$2],
   ];
   final colW = [
     for (var c = 0; c < 3; c++)
-      [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) +
-          ts,
+      [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) + ts,
   ];
   final pitch = 1.5 * ts;
   final tableW = colW.fold(0.0, (a, b) => a + b);
-  final tableH = (rows.length + 2) * pitch + 0.5 * ts;
-  bool clear(double x0, double yTop) {
-    final b = (minX: x0, minY: yTop - tableH, maxX: x0 + tableW, maxY: yTop);
-    return !layout.hitsBox(b) &&
-        !layout.hitsRun(b, clearance: 0.25 * ts) &&
-        !layout.hitsGrid(b);
-  }
-
-  double? fx, fy;
-  final step = ts;
-  outer:
-  for (var yTop = bounds.maxY; yTop - tableH >= bounds.minY; yTop -= step) {
-    for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += step) {
-      if (clear(x0, yTop)) {
-        fx = x0;
-        fy = yTop;
-        break outer;
+  double blockH(int n) => (n + 2) * pitch + 0.5 * ts;
+  // Is the box [b] clear of every mark, run and grid line (and of the blocks
+  // already chosen)?
+  bool clear(LabelBox b) =>
+      !layout.hitsBox(b) &&
+      !layout.hitsRun(b, clearance: 0.25 * ts) &&
+      !layout.hitsGrid(b);
+  (double, double)? spot(double h) {
+    for (var yTop = bounds.maxY; yTop - h >= bounds.minY; yTop -= ts) {
+      for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += ts) {
+        if (clear((minX: x0, minY: yTop - h, maxX: x0 + tableW, maxY: yTop))) {
+          return (x0, yTop);
+        }
       }
     }
+    return null;
   }
-  if (fx == null || fy == null) {
-    fx = bounds.minX;
-    fy = bounds.minY - 2 * ts;
+
+  // One block when a clear spot holds it, else the rows split over 2..4
+  // blocks (each with its own heading row) in separate clear spots; none
+  // ⇒ one block below [bounds], counted unresolved (the honest stamp).
+  List<(double, double, int, int)>? plan;
+  for (var k = 1; k <= 4 && plan == null; k++) {
+    final per = (rows.length / k).ceil();
+    final chosen = <(double, double, int, int)>[];
+    final boxes = <LabelBox>[];
+    var ok = true;
+    for (var i = 0; i < rows.length; i += per) {
+      final n = math.min(per, rows.length - i);
+      final h = blockH(n);
+      final at = spot(h);
+      if (at == null) {
+        ok = false;
+        break;
+      }
+      final box =
+          (minX: at.$1, minY: at.$2 - h, maxX: at.$1 + tableW, maxY: at.$2);
+      layout.addBox(box);
+      boxes.add(box);
+      chosen.add((at.$1, at.$2, i, n));
+    }
+    for (final bx in boxes) {
+      layout.boxes.remove(bx);
+    }
+    if (ok) plan = chosen;
+  }
+  if (plan == null) {
     layout.markUnresolved();
+    plan = [(bounds.minX, bounds.minY - 2 * ts, 0, rows.length)];
   }
-  final x0 = fx, yTop = fy;
-  final texts = <PlacedLabelLine>[
-    (text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts),
-  ];
-  final gridTop = yTop - pitch - 0.3 * ts;
+  final texts = <PlacedLabelLine>[];
   final rules = <LabelSegment>[];
-  final gridBot = gridTop - (rows.length + 1) * pitch;
-  for (var r = 0; r <= rows.length + 1; r++) {
-    final y = gridTop - r * pitch;
-    if (r == 0 || r == 1 || r == rows.length + 1) {
+  for (final (x0, yTop, i0, n) in plan) {
+    texts.add((text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts));
+    final gridTop = yTop - pitch - 0.3 * ts;
+    final gridBot = gridTop - (n + 1) * pitch;
+    for (final r in [0, 1, n + 1]) {
+      final y = gridTop - r * pitch;
       rules.add((x1: x0, y1: y, x2: x0 + tableW, y2: y));
     }
-  }
-  var x = x0;
-  for (var c = 0; c <= 3; c++) {
-    rules.add((x1: x, y1: gridTop, x2: x, y2: gridBot));
-    if (c == 3) break;
-    texts.add((text: heads[c], x: x + 0.5 * ts, y: gridTop - pitch + 0.4 * ts));
-    for (var r = 0; r < rows.length; r++) {
-      texts.add((
-        text: rows[r][c],
-        x: x + 0.5 * ts,
-        y: gridTop - (r + 2) * pitch + 0.4 * ts
-      ));
+    var x = x0;
+    for (var c = 0; c <= 3; c++) {
+      rules.add((x1: x, y1: gridTop, x2: x, y2: gridBot));
+      if (c == 3) break;
+      texts.add(
+          (text: heads[c], x: x + 0.5 * ts, y: gridTop - pitch + 0.4 * ts));
+      for (var r = 0; r < n; r++) {
+        texts.add((
+          text: rows[i0 + r][c],
+          x: x + 0.5 * ts,
+          y: gridTop - (r + 2) * pitch + 0.4 * ts
+        ));
+      }
+      x += colW[c];
     }
-    x += colW[c];
+    layout.addBox(
+        (minX: x0, minY: yTop - blockH(n), maxX: x0 + tableW, maxY: yTop));
   }
-  layout.addBox(
-      (minX: x0, minY: yTop - tableH, maxX: x0 + tableW, maxY: yTop));
   return PlanKeyTable(texts, rules, ts);
 }
 
@@ -1021,8 +1048,15 @@ Map<String, List<LabelSegment>> planDuctOutlines(List<PlanDuctRun> runs) {
   }
 
   // The extended rectangle of a run: centre line p0 → p1, unit direction u.
-  final rect = <String, ({double x0, double y0, double ux, double uy,
-      double len, double half})>{};
+  final rect = <String,
+      ({
+    double x0,
+    double y0,
+    double ux,
+    double uy,
+    double len,
+    double half
+  })>{};
   for (final r in runs) {
     final dx = r.bx - r.ax, dy = r.by - r.ay;
     final l = math.sqrt(dx * dx + dy * dy);
@@ -1041,13 +1075,20 @@ Map<String, List<LabelSegment>> planDuctOutlines(List<PlanDuctRun> runs) {
 
   // Parameter interval (0..1) of segment (x1,y1)-(x2,y2) strictly inside a
   // rectangle (shrunk by [eps]), or null.
-  (double, double)? inside(LabelSegment s, ({double x0, double y0, double ux,
-      double uy, double len, double half}) q) {
+  (double, double)? inside(
+      LabelSegment s,
+      ({
+        double x0,
+        double y0,
+        double ux,
+        double uy,
+        double len,
+        double half
+      }) q) {
     const eps = 1e-6;
     // Local coordinates: along t, across n.
     double along(double x, double y) => (x - q.x0) * q.ux + (y - q.y0) * q.uy;
-    double across(double x, double y) =>
-        -(x - q.x0) * q.uy + (y - q.y0) * q.ux;
+    double across(double x, double y) => -(x - q.x0) * q.uy + (y - q.y0) * q.ux;
     final a1 = along(s.x1, s.y1), a2 = along(s.x2, s.y2);
     final c1 = across(s.x1, s.y1), c2 = across(s.x2, s.y2);
     var lo = 0.0, hi = 1.0;
@@ -1828,8 +1869,8 @@ class _Block {
 }
 
 /// Drawing-review D5 — the KEY TAG of a plan element: a numbered circle
-/// hugging [anchor] (the first clear slot of 16 directions × growing rings,
-/// a leader beyond the hugging ring of at most [kPlanKeyedLeaderMaxFactor]
+/// hugging [anchor] (the first clear slot of 32 directions × growing rings,
+/// a leader beyond the hugging ring of at most [kPlanKeyTagLeaderMaxFactor]
 /// text heights crossing nothing), its [text] registered in [keys]. No clear
 /// slot ⇒ the least-bad one, counted unresolved (the honest stamp).
 LeaderedLabelPlacement _placeKeyTag({
@@ -1844,14 +1885,27 @@ LeaderedLabelPlacement _placeKeyTag({
   final tw = n.length * ts * 0.55;
   final r = math.max(0.75 * ts, tw / 2 + 0.25 * ts);
   ({double x, double y, double cost, bool lead})? best;
-  for (final gap in [0.3, 0.8, 1.5, 2.3, 3.2, 4.0]) {
+  for (final gap in [
+    0.3,
+    0.8,
+    1.5,
+    2.3,
+    3.2,
+    4.0,
+    5.0,
+    kPlanKeyTagLeaderMaxFactor
+  ]) {
     final d = r + gap * ts;
     final lead = gap > 0.5;
-    for (var k = 0; k < 16; k++) {
-      final ux = math.sin(k * math.pi / 8), uy = math.cos(k * math.pi / 8);
+    for (var k = 0; k < 32; k++) {
+      final ux = math.sin(k * math.pi / 16), uy = math.cos(k * math.pi / 16);
       final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
-      final box = (minX: cx - 0.85 * r, minY: cy - 0.85 * r,
-          maxX: cx + 0.85 * r, maxY: cy + 0.85 * r);
+      final box = (
+        minX: cx - 0.85 * r,
+        minY: cy - 0.85 * r,
+        maxX: cx + 0.85 * r,
+        maxY: cy + 0.85 * r
+      );
       var cost = 0.0;
       if (layout.hitsBox(box)) cost += 1;
       for (final rr in layout._runs) {
@@ -1881,8 +1935,8 @@ LeaderedLabelPlacement _placeKeyTag({
   }
   final b = best!;
   if (b.cost > 0) layout._unresolved++;
-  layout._labels.add(_boxQuad(
-      (minX: b.x - r, minY: b.y - r, maxX: b.x + r, maxY: b.y + r)));
+  layout._labels.add(
+      _boxQuad((minX: b.x - r, minY: b.y - r, maxX: b.x + r, maxY: b.y + r)));
   ({double x, double y})? la, le;
   if (b.lead) {
     final dx = b.x - anchor.x, dy = b.y - anchor.y;
