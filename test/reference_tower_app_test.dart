@@ -802,7 +802,8 @@ void _dumpElectrical(ProviderContainer c) {
         '${r.cable.appliedRule}, vdDriven ${r.cable.vdDriven}'
         '${r.cableRaisedForAds ? ', raised-for-ads' : ''}'
         '${r.cableRaisedForDownstreamVd ? ', raised-for-downstream-vd' : ''}'
-        '${r.cableRaisedForSelectivity ? ', raised-for-selectivity' : ''}) | '
+        '${r.cableRaisedForSelectivity ? ', raised-for-selectivity' : ''}'
+        '${r.cableRaisedForCumulativeVd ? ', raised-for-cumulative-vd' : ''}) | '
         '${_f(r.voltageDrop.dropPercent)} (${_f(r.voltageDrop.dropV)} V) / '
         '${r.voltageDrop.limitPercent} | ${_f(r.cumulativeDropPercent)} | '
         '${r.rcd.required ? '${r.rcd.ratingMa} mA ${r.rcd.type?.name}' : 'none (${r.rcd.reason})'} | '
@@ -1682,15 +1683,27 @@ void main() {
       for (var f = 0; f < kTowerFloors; f++) {
         final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
         final runs = fd.cable.runsPerPhase ?? 1;
+        // The way closest to its own limit (cumulative / limit).
         var worst = 0.0;
+        var worstLim = 0.0;
+        var worstName = '';
+        var raisedWays = 0;
         for (final w in sys.panels[towerFloorPanelId(f)]!.circuits) {
-          if (w.cumulativeDropPercent > worst) worst = w.cumulativeDropPercent;
+          if (w.cableRaisedForCumulativeVd) raisedWays++;
+          if (worstLim == 0 ||
+              w.cumulativeDropPercent / w.voltageDrop.limitPercent >
+                  worst / worstLim) {
+            worst = w.cumulativeDropPercent;
+            worstLim = w.voltageDrop.limitPercent;
+            worstName = '${w.name} ${w.cable.csaMm2} mm2';
+          }
         }
         // ignore: avoid_print
         print('FEEDERS | ${f + 1} | ${runs > 1 ? '${runs}x' : ''}'
             '${fd.cable.csaMm2} (${fd.grounding.cableSpec}) | '
             '${fd.breaker.deviceClass.code} ${fd.breaker.ratingA.amperes} | '
-            '${fd.voltageDrop.dropPercent} | ${_f(worst, 2)}');
+            '${fd.voltageDrop.dropPercent} | ${_f(worst, 2)} / $worstLim '
+            '($worstName; $raisedWays ways raised)');
       }
       // Copper: Σ mm² x m x loaded cores (phase + neutral) x runs.
       var cu = 0.0;
@@ -1718,11 +1731,32 @@ void main() {
         final p = c.read(electricalResultProvider).panels[pid]!;
         String id(String b) => 'c_${b}_lt${f + 1}';
         // Lighting 1500 / (230 x 0.9 x ...) = 7.215 A, MCB 10 B, 3x1.5.
+        // Backlog B-2: the least-copper cumulative-drop cure raises Lampu A
+        // itself on Lt18..21 (16 mm² feeders): 2 x 7.215 x 20 x (8.87 x 0.9
+        // + 0.08 x 0.4359) / 1000 = 2.314 V / 231 = 1.00 % on 3 x 2.5.
         final l = way(c, pid, id('lampu_a'));
+        final aRaised = f >= 17 && f <= 20;
         expect(l.designCurrentExactA, closeTo(7.215, 5e-4));
         expect(l.breaker.ratingA.amperes, 10);
-        expect(l.cable.csaMm2, 1.5);
-        expect(l.voltageDrop.dropPercent, closeTo(1.63, 1e-9));
+        expect(l.cable.csaMm2, aRaised ? 2.5 : 1.5, reason: 'Lt${f + 1}');
+        expect(l.cableRaisedForCumulativeVd, aRaised, reason: 'Lt${f + 1}');
+        expect(l.voltageDrop.dropPercent, closeTo(aRaised ? 1.00 : 1.63, 1e-9));
+        // Lampu B (25 m) is raised to 2.5 on Lt12..30; Lampu C (30 m) to 2.5
+        // on Lt6..30 and on to 4 mm² on Lt20 / Lt21, where the 16 mm²
+        // feeder's 1.52 / 1.59 % leaves 2.5 mm² at 3.02 / 3.09 %: one more
+        // rung on the 30 m way (1.5 x 30 x 2 = 90 mm²·m) saves 1.50 x (1 -
+        // 5.003 / 8.018) = 0.56 %, far more per copper than 25 mm² on the
+        // ~95 m feeder (9 x 95 x 4 = 3420 mm²·m for 0.54 %) (B-2).
+        expect(way(c, pid, id('lampu_b')).cable.csaMm2, f >= 11 ? 2.5 : 1.5,
+            reason: 'Lt${f + 1}');
+        expect(way(c, pid, id('lampu_c')).cable.csaMm2,
+            f == 19 || f == 20 ? 4.0 : (f >= 5 ? 2.5 : 1.5),
+            reason: 'Lt${f + 1}');
+        for (final w in p.circuits) {
+          expect(w.cumulativeDropPercent,
+              lessThanOrEqualTo(w.voltageDrop.limitPercent + 1e-9),
+              reason: w.circuitId);
+        }
         // Socket 2500 W: run 12.025 A (undiversified), design 8.418 A (DF
         // 0.7), MCB 16 C, 3x2.5.
         final s = way(c, pid, id('kk_a'));
@@ -1764,17 +1798,20 @@ void main() {
         kTowerMainPanelId,
         towerFloorFeederId(kTowerFloors - 1),
       );
-      expect(lt30.cable.csaMm2, 95);
-      expect(lt30.grounding.peCsaMm2, 50);
-      expect(lt30.voltageDrop.dropPercent, closeTo(0.42, 1e-9));
-      // Backlog B-1: the 63 A device is now the selectivity floor's, and the
-      // selectivity growth itself steps the cable until that device
-      // disconnects in time, so no separate ADS floor is recorded; the final
-      // 95 mm² is the downstream-VD floor (it already carries the 63 A rung,
-      // so no selectivity raise is flagged on it). The section is unchanged.
+      // Backlog B-1 + B-2: the 63 A device is the selectivity floor's; the
+      // selectivity growth steps the 131 m cable until it disconnects in
+      // time — 16 mm² loop (1.38 + 1.38) x 0.131 x 1.28 = 0.463 Ω, 25 mm²
+      // (0.87 + 1.38) x ... = 0.377 Ω, 35 mm² (PE 16) 0.338 Ω ≤ 0.347 ⇒
+      // 35 mm². The cumulative drop is now cured on the lighting ways (B-2:
+      // far cheaper per % than the 131 m feeder), so no VD floor is set:
+      // √3 x 30.919 x 131 x (0.627 x 0.8753 + 0.08 x 0.4836) / 1000 =
+      // 4.12 V = 1.03 % (was 95 mm², 0.42 %).
+      expect(lt30.cable.csaMm2, 35);
+      expect(lt30.grounding.peCsaMm2, 16);
+      expect(lt30.voltageDrop.dropPercent, closeTo(1.03, 1e-9));
       expect(lt30.cableRaisedForAds, isFalse);
-      expect(lt30.cableRaisedForSelectivity, isFalse);
-      expect(lt30.cableRaisedForDownstreamVd, isTrue);
+      expect(lt30.cableRaisedForSelectivity, isTrue);
+      expect(lt30.cableRaisedForDownstreamVd, isFalse);
     });
 
     test('PP-E, MEP, LVMDP, transformer, genset, capacitor bank', () {

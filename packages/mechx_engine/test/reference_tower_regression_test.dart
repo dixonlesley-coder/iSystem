@@ -275,7 +275,15 @@ void main() {
       expect(feeder(r.sys, 0).cableRaisedForDownstreamVd, isFalse);
       final top = feeder(r.sys, kTowerFloors - 1);
       expect(top.cable.csaMm2, greaterThan(10));
-      expect(top.cableRaisedForDownstreamVd || top.cableRaisedForAds, isTrue);
+      // Backlog B-1 / B-2: its 63 A selectivity device is held for ADS by the
+      // selectivity growth (35 mm²), and the cumulative drop is cured on the
+      // far floors' lighting ways (B-2), not by growing this 131 m feeder.
+      expect(top.cableRaisedForSelectivity, isTrue);
+      expect(
+          r.sys.panels[towerFloorPanelId(kTowerFloors - 1)]!
+              .circuits
+              .any((w) => w.cableRaisedForCumulativeVd),
+          isTrue);
       // Every final way of every floor board meets its cumulative limit.
       for (var f = 0; f < kTowerFloors; f++) {
         for (final w in r.sys.panels[towerFloorPanelId(f)]!.circuits) {

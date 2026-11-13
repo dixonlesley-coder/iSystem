@@ -173,6 +173,17 @@ class ElectricalCircuitResult {
   /// ENGINE raise (`raised-for-selectivity`), never the engineer's override.
   final bool cableRaisedForSelectivity;
 
+  /// Backlog B-2 (2026-11-13) — true when this FINAL way's conductor was
+  /// stepped up the section ladder by `computeSystem` so its own cumulative
+  /// (origin → load) voltage drop meets its limit: the least-copper cure
+  /// chose this way over the feeders above it (`raised-for-cumulative-vd`).
+  final bool cableRaisedForCumulativeVd;
+
+  /// Backlog B-2 — the cos φ the way's voltage drop was computed at (the fed
+  /// board's real pf for a feeder), so `computeSystem` can rank the drop a
+  /// larger section saves without re-solving. Null on a legacy result.
+  final double? vdCosPhi;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -198,6 +209,8 @@ class ElectricalCircuitResult {
     this.cableRaisedForAds = false,
     this.cableRaisedForDownstreamVd = false,
     this.cableRaisedForSelectivity = false,
+    this.cableRaisedForCumulativeVd = false,
+    this.vdCosPhi,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -232,6 +245,8 @@ class ElectricalCircuitResult {
         cableRaisedForAds: cableRaisedForAds,
         cableRaisedForDownstreamVd: cableRaisedForDownstreamVd,
         cableRaisedForSelectivity: cableRaisedForSelectivity,
+        cableRaisedForCumulativeVd: cableRaisedForCumulativeVd,
+        vdCosPhi: vdCosPhi,
       );
 }
 

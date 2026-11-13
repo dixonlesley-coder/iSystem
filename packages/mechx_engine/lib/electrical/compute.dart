@@ -1153,6 +1153,8 @@ class ComputePanelOptions {
   /// `computeSystem` sets so the auto-sized ways of the board(s) the feeder
   /// supplies meet their cumulative voltage-drop limit. Applied like a cable
   /// minimum, flagged [ElectricalCircuitResult.cableRaisedForDownstreamVd].
+  /// Backlog B-2 — also keyed by a FINAL way id when the least-copper cure
+  /// raised the way itself ([ElectricalCircuitResult.cableRaisedForCumulativeVd]).
   /// Empty ⇒ byte-identical.
   final Map<String, double> feederVdCsaFloorMm2;
 
@@ -2589,8 +2591,11 @@ _CircuitComputation _computeCircuit(
     motorLeadsPeCsaMm2: motorLeadsPe,
     cableRaisedForAds: adsFloor > userMinSection + 1e-9,
     cableRaisedForDownstreamVd:
-        vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
+        isFeeder && vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
     cableRaisedForSelectivity: raisedForSelectivity,
+    cableRaisedForCumulativeVd:
+        !isFeeder && vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
+    vdCosPhi: cosPhi,
   );
   if (result.cableRaisedForAds) {
     warnings.add(ElectricalWarning(
@@ -5285,6 +5290,45 @@ ElectricalSystemResult computeSystem(
       return g.circuits[id]?.adsOk == false;
     }
 
+    ElectricalCircuitResult? anyResultOf(
+            ElectricalSystemResult r, String id) =>
+        r.panels[circuitPanel[id]]?.circuits
+            .where((x) => x.circuitId == id)
+            .firstOrNull;
+    // Backlog B-2 — the next-section step of an auto-sized single-run cable
+    // (feeder or final way): the drop it saves and the copper it adds,
+    // scored Δ%VD / (Δmm² × m × loaded cores). The saving scales the solved
+    // drop by z(next) / z(now), z = R(csa)·cos φ + X·sin φ (the
+    // [voltageDrop] formula at the same current and length). Null when the
+    // cable is user-fixed, in parallel runs, a star-delta lead pair or at the
+    // ladder top.
+    ({double next, double score})? vdStep(
+        ElectricalSystemResult r, String id) {
+      final m = circuitModelById[id];
+      final w = anyResultOf(r, id);
+      if (m == null || w == null) return null;
+      if (m.cableOverrideMm2 != null) return null;
+      if ((w.cable.runsPerPhase ?? 1) > 1 || w.motorLeads != null) return null;
+      final now = w.cable.csaMm2;
+      final next = sections.where((x) => x > now + 1e-9).firstOrNull;
+      if (next == null) return null;
+      final cos = (w.vdCosPhi ?? m.cosPhi).clamp(0.0, 1.0);
+      final sin = math.sqrt(math.max(0, 1 - cos * cos));
+      final material =
+          byId[circuitPanel[id]]?.material ?? ConductorMaterial.copper;
+      final x = profile.conductorReactanceOhmPerKm;
+      double z(double csa) =>
+          profile.conductorResistanceOhmPerKm(csa, material: material) * cos +
+          x * sin;
+      final zNow = z(now);
+      if (zNow <= 0) return null;
+      final saved = w.voltageDrop.dropPercent * (1 - z(next) / zNow);
+      final loaded = math.max(1, w.grounding.cores - 1);
+      final copper = (next - now) * w.lengthM * loaded;
+      if (saved <= 0 || copper <= 0) return null;
+      return (next: next, score: saved / copper);
+    }
+
     // Two passes (T4): the utility pass (Round 56 / T3), then the same
     // growth judged on BOTH sources. A way / feeder the genset pass cannot
     // bring to compliance goes back to its UTILITY-pass cable (its
@@ -5316,6 +5360,8 @@ ElectricalSystemResult computeSystem(
       final adsFeeders = <String>{};
       final vdFeeders = <String>{};
       final grownFinals = <String>{};
+      // Backlog B-2 — the failing ways each VD-grown cable was picked for.
+      final vdGrownFor = <String, Set<String>>{};
       for (var iter = 0; iter < 4 * sections.length; iter++) {
         final st = studies(result, withGenset: withGenset);
         final wantAds = <String>{};
@@ -5325,6 +5371,15 @@ ElectricalSystemResult computeSystem(
             wantAds.add(id);
           }
         }
+        // Backlog B-2 (2026-11-13) — the LEAST-COPPER cure of a cumulative
+        // drop. Every auto-sized final way over its cumulative limit (its own
+        // drop within it) picks, among the auto-sized cables on its chain —
+        // itself and each feeder above it — the one whose next section saves
+        // the most drop per added copper: Δ%VD / (Δmm² × length × loaded
+        // cores). A feeder's saving is summed over every failing way below
+        // it. Ties go to the final way (then the nearer feeder). Every pick is
+        // applied at once, so the result is order-independent.
+        final failing = <String>[];
         for (final pid in (result.panels.keys.toList()..sort())) {
           final pr = result.panels[pid]!;
           for (final w in pr.circuits) {
@@ -5339,25 +5394,45 @@ ElectricalSystemResult computeSystem(
             final lim = w.voltageDrop.limitPercent;
             if (w.cumulativeDropPercent <= lim + 1e-9) continue;
             if (w.voltageDrop.dropPercent > lim + 1e-9) continue;
-            // The nearest growable feeder up the chain.
-            var at = pid;
-            final seen = <String>{};
-            while (seen.add(at)) {
-              final fid = feederOfPanel[at];
-              if (fid == null) break;
-              if (growable(result, fid)) {
-                wantVd.add(fid);
-                break;
-              }
-              final up = feederParentPanel[fid];
-              if (up == null) break;
-              at = up;
+            failing.add(w.circuitId);
+          }
+        }
+        // The chain of feeders above each failing way (nearest first).
+        final chainOf = <String, List<String>>{};
+        final failingBelow = <String, int>{};
+        for (final id in failing) {
+          final chain = <String>[];
+          var at = circuitPanel[id]!;
+          final seen = <String>{};
+          while (seen.add(at)) {
+            final fid = feederOfPanel[at];
+            if (fid == null) break;
+            chain.add(fid);
+            failingBelow[fid] = (failingBelow[fid] ?? 0) + 1;
+            final up = feederParentPanel[fid];
+            if (up == null) break;
+            at = up;
+          }
+          chainOf[id] = chain;
+        }
+        for (final id in failing) {
+          final own = vdStep(result, id);
+          var best = own == null ? null : (id: id, score: own.score);
+          for (final fid in chainOf[id]!) {
+            final step = vdStep(result, fid);
+            if (step == null) continue;
+            final score = step.score * (failingBelow[fid] ?? 1);
+            if (best == null || score > best.score * (1 + 1e-9) + 1e-15) {
+              best = (id: fid, score: score);
             }
           }
+          if (best == null) continue;
+          wantVd.add(best.id);
+          (vdGrownFor[best.id] ??= <String>{}).add(id);
         }
         if (wantAds.isEmpty && wantVd.isEmpty) break;
         for (final id in {...wantAds, ...wantVd}) {
-          final now = resultOf(result, id)!.cable.csaMm2;
+          final now = anyResultOf(result, id)!.cable.csaMm2;
           final next = sections.firstWhere((x) => x > now + 1e-9);
           if (wantAds.contains(id)) {
             adsCsaFloors[id] = next;
@@ -5380,34 +5455,30 @@ ElectricalSystemResult computeSystem(
             reverted = true;
           }
         }
-        for (final id in vdFeeders) {
-          final child = circuitModelById[id]?.feedsPanelId;
-          var stillOver = false;
-          final stack = [if (child != null) child];
-          final seen = <String>{};
-          while (stack.isNotEmpty) {
-            final pid = stack.removeLast();
-            if (!seen.add(pid)) continue;
-            for (final w in result.panels[pid]?.circuits ??
-                const <ElectricalCircuitResult>[]) {
-              final m = circuitModelById[w.circuitId];
-              if (m?.feedsPanelId != null) {
-                stack.add(m!.feedsPanelId!);
-                continue;
-              }
-              if (m == null ||
-                  m.loadKind == LoadKind.spare ||
-                  m.cableOverrideMm2 != null) {
-                continue;
-              }
-              final lim = w.voltageDrop.limitPercent;
-              if (w.voltageDrop.dropPercent <= lim + 1e-9 &&
-                  w.cumulativeDropPercent > lim + 1e-9) {
-                stillOver = true;
-              }
+        // Backlog B-2 — a VD-grown cable (feeder or final way) whose every
+        // failing way is STILL over its limit at the end bought nothing: it
+        // returns to its earlier floor (never copper grown for nothing).
+        final stillFailing = <String>{};
+        for (final pr in result.panels.values) {
+          for (final w in pr.circuits) {
+            final m = circuitModelById[w.circuitId];
+            if (m == null ||
+                m.feedsPanelId != null ||
+                m.loadKind == LoadKind.feeder ||
+                m.loadKind == LoadKind.spare ||
+                m.cableOverrideMm2 != null) {
+              continue;
+            }
+            final lim = w.voltageDrop.limitPercent;
+            if (w.voltageDrop.dropPercent <= lim + 1e-9 &&
+                w.cumulativeDropPercent > lim + 1e-9) {
+              stillFailing.add(w.circuitId);
             }
           }
-          if (stillOver && !growable(result, id)) {
+        }
+        for (final id in (vdFeeders.toList()..sort())) {
+          final forWays = vdGrownFor[id] ?? const <String>{};
+          if (forWays.isNotEmpty && stillFailing.containsAll(forWays)) {
             restoreVd(id);
             reverted = true;
           }

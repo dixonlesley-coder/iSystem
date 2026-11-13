@@ -51,12 +51,28 @@ void main() {
     // Copper grows for voltage drop, never for discrimination; the device
     // floor then follows the larger Iz 89 A to the 1.6 x 25 = 40 A target, so
     // the sample's one residual `non-selective` pair is gone.
+    // Backlog B-1 + B-2 (2026-11-13): the 1φ feeder (22 m, 22.5 A) grows for
+    // its 1.6 x 25 = 40 A floor to 10 mm² (Iz 50): 2 x 22.5 x 22 x (2.19 x
+    // 0.9 + 0.08 x 0.4359) / 1000 = 1.99 V = 0.90 %. That leaves the two
+    // lighting ways (2.5 mm², 2.32 / 2.47 %) at 3.22 / 3.37 %; the least-copper
+    // cure raises the WAYS: 2.5 → 4 on the 35 m way saves 2.32 x (1 - 5.003 /
+    // 8.018) = 0.87 % for 1.5 x 35 x 2 = 105 mm²·m (0.0083 %/mm²·m) against
+    // the feeder 10 → 16 saving 0.90 x (1 - 1.277 / 2.006) = 0.33 % on both
+    // ways for 6 x 22 x 2 = 264 (0.0025). Lighting on 4 mm²: 1.45 / 1.54 %,
+    // cumulative 2.35 / 2.44 %. Copper 25 x 22 x 2 = 1100 → 440 + 231 = 671.
     final feeder = result.panels['mdp']!.circuits
         .firstWhere((c) => c.circuitId == 'mdp-f1');
-    expect(feeder.cable.csaMm2, 25);
-    expect(feeder.cableRaisedForDownstreamVd, isTrue);
-    expect(feeder.voltageDrop.dropPercent, 0.37);
+    expect(feeder.cable.csaMm2, 10);
+    expect(feeder.cableRaisedForSelectivity, isTrue);
+    expect(feeder.cableRaisedForDownstreamVd, isFalse);
+    expect(feeder.voltageDrop.dropPercent, 0.90);
     expect(feeder.breaker.ratingA.amperes, 40);
+    for (final id in ['lp1-c1', 'lp1-c2']) {
+      final w = result.panels['lp1']!.circuits
+          .firstWhere((c) => c.circuitId == id);
+      expect(w.cable.csaMm2, 4, reason: id);
+      expect(w.cableRaisedForCumulativeVd, isTrue, reason: id);
+    }
     for (final c in result.panels['lp1']!.circuits) {
       expect(c.cumulativeDropPercent,
           lessThanOrEqualTo(c.voltageDrop.limitPercent),
