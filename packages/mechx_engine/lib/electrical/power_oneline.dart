@@ -167,8 +167,8 @@ PowerOneLine buildPowerOneLine(
   int lvSections = 1,
   // Fix round F7 (2026-11-13) — the declared SOURCE ARRANGEMENT the building
   // single-line's source spine draws (`serviceArrangementOf`, ONE source):
-  // on a PLN, non-sectioned MV service [transformerLabel] inserts the MV main
-  // + the rated transformer between the utility and the LV bus; [capacitor]
+  // on a PLN, non-sectioned MV service [transformerLabel] inserts the rated
+  // transformer (the head reads 'MV supply + MV main') between the utility and the LV bus; [capacitor]
   // hangs the LV-bus bank off the bus. Both null ⇒ byte-identical.
   String? transformerLabel,
   ({String head, String sub})? capacitor,
@@ -254,25 +254,20 @@ PowerOneLine buildPowerOneLine(
         id: 'utility',
         kind: PowerNodeKind.utility,
         label: 'PLN utility',
+        // The MV main rides on the head's sub-label (one tier, not two: the
+        // sheet must still plot at the 7 pt floor on A3).
         sub: mvChain
-            ? 'MV supply'
+            ? 'MV supply + MV main'
             : (utilitySub ?? '${_fmt(voltage.volts)} V LV'),
       ));
       if (mvChain) {
-        nodes.add(const PowerNode(
-          id: 'mv-main',
-          kind: PowerNodeKind.bus,
-          label: 'PANEL UTAMA TEGANGAN MENENGAH',
-          sub: 'MV main',
-        ));
         nodes.add(PowerNode(
           id: 'tx',
           kind: PowerNodeKind.transformer,
           label: transformerLabel,
           sub: '${_fmt(voltage.volts)} V LV',
         ));
-        edge('utility', 'mv-main');
-        edge('mv-main', 'tx');
+        edge('utility', 'tx');
       }
     case SupplyKind.generator:
       final dip = (plantStart != null && !plantStart.acceptable)

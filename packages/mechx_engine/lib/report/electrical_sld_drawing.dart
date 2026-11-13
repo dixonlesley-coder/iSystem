@@ -4815,12 +4815,15 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
   // Round 65 r2 — a bus COUPLER edge ([kPowerCouplerLabel]) is not a feed: it
   // takes no part in the tiering and pulls both sections onto one row.
   bool isCoupler(PowerEdge e) => e.label == kPowerCouplerLabel;
+  // Fix round F7 — the LV-bus capacitor bank sits BESIDE its bus (same row,
+  // a horizontal tie), so the bank never adds a column to a crowded tier.
+  bool isSideTie(PowerEdge e) => byId[e.to]?.kind == PowerNodeKind.capacitor;
   for (var round = 0; round < 2; round++) {
     for (var pass = 0; pass < nodes.length; pass++) {
       var changed = false;
       for (final e in oneLine.edges) {
         if (!byId.containsKey(e.from) || !byId.containsKey(e.to)) continue;
-        if (isCoupler(e)) {
+        if (isCoupler(e) || isSideTie(e)) {
           final t = math.max(tier[e.from]!, tier[e.to]!);
           if (tier[e.from] != t || tier[e.to] != t) {
             tier[e.from] = t;
@@ -4930,6 +4933,14 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       final right = a.x < z.x ? z : a;
       _emitOpenCoupler(
           prims, left.x + _polW, right.x, left.y + _polH / 2, SldRole.source);
+      continue;
+    }
+    if (isSideTie(e) && a.y == z.y) {
+      final left = a.x < z.x ? a : z;
+      final right = a.x < z.x ? z : a;
+      prims.add(SldLine(
+          left.x + _polW, left.y + _polH / 2, right.x, right.y + _polH / 2,
+          weight: SldWeight.medium, role: SldRole.source));
       continue;
     }
     final role = byId[e.to]!.kind == PowerNodeKind.mainPanel

@@ -935,8 +935,9 @@ PlanKeyTable? placePlanKeyTable(
   // blocks (each with its own heading row) in separate clear spots; none
   // ⇒ one block below [bounds], counted unresolved (the honest stamp).
   List<(double, double, int, int)>? plan;
-  for (var pass = 0; pass < 2 && plan == null; pass++) {
-    if (pass == 1) margin = 0;
+  for (var pass = 0; pass < 3 && plan == null; pass++) {
+    // A tighter (0.6 text height) margin before the margin-free resort.
+    if (pass > 0) margin = pass == 1 ? 0.6 * ts : 0;
     for (var k = 1; k <= 4 && plan == null; k++) {
       final per = (rows.length / k).ceil();
       final chosen = <(double, double, int, int)>[];

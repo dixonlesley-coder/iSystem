@@ -9,6 +9,7 @@ import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
+import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
@@ -314,12 +315,11 @@ void main() {
       expect(ol.nodeOfKind(PowerNodeKind.capacitor)!.sub, arr.capacitor!.sub);
       expect(ol.nodeOfKind(PowerNodeKind.ats), isNotNull);
       expect(ol.nodeOfKind(PowerNodeKind.generator), isNotNull);
-      // The chain utility -> MV main -> TX -> (ATS / LV bus).
-      expect(ol.edges.any((e) => e.from == 'utility' && e.to == 'mv-main'),
-          isTrue);
-      expect(ol.edges.any((e) => e.from == 'mv-main' && e.to == 'tx'), isTrue);
+      // The chain utility (MV supply + MV main) -> TX -> (ATS / LV bus).
+      expect(ol.nodeOfKind(PowerNodeKind.utility)!.sub, contains('MV main'));
+      expect(ol.edges.any((e) => e.from == 'utility' && e.to == 'tx'), isTrue);
       expect(ol.edges.any((e) => e.from == 'tx'), isTrue);
-      expect(ol.edges.any((e) => e.from == 'utility' && e.to != 'mv-main'),
+      expect(ol.edges.any((e) => e.from == 'utility' && e.to != 'tx'),
           isFalse);
       expect(ol.edges.any((e) => e.from == 'bus' && e.to == 'cap'), isTrue);
     });
@@ -335,6 +335,9 @@ void main() {
         expect(e301.any((x) => x.contains(t)), isTrue,
             reason: 'E-301 spine lacks "$t"');
       }
+      // The fuller chain still plots at the 7 pt floor on one A3 sheet.
+      expect(sldSinglePageMinLabelPt(buildPowerOneLineSheet(adv.powerOneLine!)),
+          greaterThanOrEqualTo(6.995));
     });
   });
 }

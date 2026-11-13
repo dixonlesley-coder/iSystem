@@ -999,14 +999,30 @@ Uint8List electricalPlanToPdf({
       ),
   ];
   {
+    // One box per note ROW (its own text width), so a short row leaves the
+    // paper beside it to the drawing's tags.
     var cx = margin + 4;
+    var first = true;
     for (final c in noteCols) {
-      keepOut.add((
-        minX: cx - 2,
-        minY: notesTop - overlapLine - c.length * noteLine - 3,
-        maxX: cx + colW(c),
-        maxY: notesTop + 10,
-      ));
+      for (var r = 0; r < c.length; r++) {
+        final size = first ? 8.0 : 7.0;
+        first = false;
+        final top = notesTop - overlapLine - r * noteLine;
+        keepOut.add((
+          minX: cx - 2,
+          minY: top - 0.25 * size - 1,
+          maxX: cx + c[r].length * size * 0.55 + 2,
+          maxY: top + size + 1,
+        ));
+        // The baseline without the overlap line (the list moves up when
+        // the sheet stamps no warning).
+        keepOut.add((
+          minX: cx - 2,
+          minY: top + overlapLine - 0.25 * size - 1,
+          maxX: cx + c[r].length * size * 0.55 + 2,
+          maxY: top + overlapLine + size + 1,
+        ));
+      }
       cx += colW(c);
     }
     keepOut.add((
