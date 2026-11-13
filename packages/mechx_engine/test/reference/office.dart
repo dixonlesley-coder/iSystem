@@ -8,7 +8,7 @@
 // box per floor and a sprinkler riser with six heads on Lantai 4. HVAC on
 // Lantai 2: one office room with a ducted FCU, four supply diffusers in one
 // line and a return grille. Electrical: a 3-phase service board `LVMDP`
-// (declared 82 500 VA PLN) feeding four 3-phase floor sub-boards PP-L1..L4.
+// (declared 164 000 VA PLN) feeding four 3-phase floor sub-boards PP-L1..L4.
 // Pure Dart (no Flutter import): the engine suite and the app suite
 // (relative import) build exactly this.
 //
@@ -151,6 +151,13 @@ RoomAirResult officeRoomAir() {
 /// The room's sized supply airflow (supply = return), stamped on the network.
 final FlowRate kOfficeRoomAirflow = officeRoomAir().airflow;
 
+/// Pass 2 — the stamped terminal faces (mm): each diffuser 450 x 300
+/// (231.25 L/s over 0.135 m² x 0.8 free = 2.14 m/s <= 3.0; 300 x 300 would
+/// be 3.21), the return grille 600 x 600 (925 L/s over 0.36 x 0.8 = 3.21 m/s
+/// <= 4.0).
+const (double, double) kOfficeDiffuserFaceMm = (450, 300);
+const (double, double) kOfficeReturnFaceMm = (600, 600);
+
 /// The point at distance [ra] px from [a] AND [rb] px from [b] nearest
 /// [near] (two circles' intersection).
 (double, double) _onCircles((double, double) a, double ra, (double, double) b,
@@ -216,6 +223,7 @@ Network buildOfficeNetwork() {
     PlumbingFixture? fixture,
     double? roofAreaM2,
     FlowRate? airflow,
+    (double, double)? faceMm,
   }) =>
       NetNode(
         id: id,
@@ -228,6 +236,8 @@ Network buildOfficeNetwork() {
         fixture: fixture,
         roofAreaM2: roofAreaM2,
         airflow: airflow,
+        faceWidthMm: faceMm?.$1,
+        faceHeightMm: faceMm?.$2,
       );
 
   final quarter = FlowRate(kOfficeRoomAirflow.cubicMetersPerSecond / 4);
@@ -269,11 +279,15 @@ Network buildOfficeNetwork() {
     node(kOfficeFcuId, (1350, 250), floor: 1, component: NodeComponent.fcu),
     for (var i = 1; i <= 4; i++)
       node('SD$i', (1350, 250 + 150.0 * i),
-          floor: 1, component: NodeComponent.supplyDiffuser, airflow: quarter),
+          floor: 1,
+          component: NodeComponent.supplyDiffuser,
+          airflow: quarter,
+          faceMm: kOfficeDiffuserFaceMm),
     node(kOfficeReturnGrilleId, (1450, 250),
         floor: 1,
         component: NodeComponent.returnGrille,
-        airflow: kOfficeRoomAirflow),
+        airflow: kOfficeRoomAirflow,
+        faceMm: kOfficeReturnFaceMm),
   ];
 
   const cw = ServiceType.coldWater;
@@ -399,14 +413,14 @@ ElectricalPanel _mainBoard() {
 }
 
 /// The office's electrical project: LVMDP feeding the four floor sub-boards,
-/// default (TN-C-S) earthing, a declared 82 500 VA PLN connection, nothing
+/// default (TN-C-S) earthing, a declared 164 000 VA PLN connection, nothing
 /// placed. No way for P1, FP or FCU1 is added by hand (the app's MEP sync
 /// mints them).
 ElectricalProject buildOfficeElectrical() => ElectricalProject(
       id: 'ref_office',
       name: 'Kantor 4 lantai',
       supplyKind: SupplyKind.pln,
-      supplyCapacityVa: const ApparentPower(82500),
+      supplyCapacityVa: const ApparentPower(164000),
       panels: [_mainBoard(), for (final t in kOfficeFloorTags) _board(t)],
     );
 
