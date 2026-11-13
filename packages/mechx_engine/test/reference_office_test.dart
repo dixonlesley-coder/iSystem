@@ -662,6 +662,13 @@ void main() {
       // √(4 x 0.925 / (5π)) = 485 mm → 500, v = 4.711.
       expect(r.supplyDuctDiameter.inMillimeters, 500);
       expect(r.supplyDuctVelocity.metersPerSecond, closeTo(4.711, 5e-4));
+      // Backlog F-1 — the FCU estimate reads the PU (0.03 mm) trunk friction
+      // the drawn supply duct reads: Swamee–Jain at Re 157 033, ε/D 6e-5,
+      // f = 0.016754 ⇒ 0.016754 / 0.5 x 1.2 x 4.711² / 2 = 0.44620 Pa/m;
+      // 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (galvanised 0.46829
+      // Pa/m read 109.13 Pa).
+      expect(r.supplyDuctRound!.frictionPerMetrePa, closeTo(0.44620, 5e-6));
+      expect(r.equipment.totalStaticPressure.pascals, closeTo(108.70, 5e-3));
     });
   });
 

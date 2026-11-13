@@ -65,6 +65,21 @@ DuctProduct defaultDuctProductForService(ServiceType service) =>
 DuctProduct effectiveDuctProductFor(NetEdge edge) =>
     edge.ductProduct ?? defaultDuctProductForService(edge.service);
 
+/// Backlog F-1 — the Darcy wall roughness ε of a duct of [service] when no
+/// product is chosen: the roughness of [defaultDuctProductForService] (PU
+/// 0.03 mm for AC supply / return air, BJLS 0.09 mm for exhaust). The ONE
+/// basis the room-air equipment estimate (`sizeRoomAir`) and an unset drawn
+/// duct ([effectiveDuctRoughnessFor], `duct_static`) both read, so the two
+/// statics never differ by material.
+Roughness defaultDuctRoughnessForService(ServiceType service) =>
+    ductRoughnessFor(defaultDuctProductForService(service));
+
+/// Backlog F-1 — the Darcy wall roughness ε of a drawn duct [edge]: its
+/// [effectiveDuctProductFor] product's roughness (the service default when
+/// unset — [defaultDuctRoughnessForService]). Call only for air edges.
+Roughness effectiveDuctRoughnessFor(NetEdge edge) =>
+    ductRoughnessFor(effectiveDuctProductFor(edge));
+
 /// A horizontal [run] (length from the sheet's calibrated scale) or a vertical
 /// [riser] (length from a true-elevation delta — never from a PDF, §10). A
 /// riser also covers a "drop" between a ceiling main and a fixture or the

@@ -121,13 +121,13 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(a) Duct friction basis.** The room-air equipment estimate uses galvanised duct roughness (0.09 mm), while the drawn network uses the PU product (0.03 mm): 109.13 Pa vs 121.25 Pa for one FCU.
 - **(c) Urinal type.** There is no flush-valve urinal type.
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
 - **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
 
 ### Backlog closed (2026-11-13)
 
+- **(a) Duct friction basis — backlog F-1.** The room-air equipment estimate now reads the same PU (0.03 mm) roughness the drawn supply duct reads (`defaultDuctRoughnessForService`): Ø500 at 0.925 m³/s, 0.46829 → 0.44620 Pa/m, so the FCU estimate is 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (was 109.13). It remains an estimate (15 m assumed run); the drawn-duct fan duty is 121.25 Pa.
 - **(g) Branch run prints the pump's flow (O1) — backlog A-5.** FP→S0 keeps DN125 but carries the sprinkler's own 4.714 L/s (v 0.384 m/s): sprinkler index friction 37.414 → 36.947 m, sprinkler point 58.211 → 57.744 m; the pump stays on the standpipe point 98.536 m.
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
@@ -214,7 +214,7 @@ _(empty)_
 - **(d) No MV-side device sizing.** The MV panel (incomer, metering, transformer feeder) is named in the note and drawn as a box, never rated.
 - **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
 - **(f) Room return-bank face velocity.** The room's own return bank uses min(application 3.0, 4.0) = 3.0 m/s (five grilles), while the air-velocity checker accepts 4.0 m/s (four grilles at 3.21 m/s).
-- **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 304.10 Pa; the drawn-duct fan duty gives 326.44 Pa (office backlog a).
+- **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 303.93 Pa (304.10 before backlog F-1 put it on the PU roughness); the drawn-duct fan duty gives 326.44 Pa.
 - **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
 - **(i) Downstream-VD raise always enlarges the feeder.** The T3 raise for a board's cumulative drop always grows the FEEDER (PP-Lt30 ends at 95 mm² over 131 m), even where raising the short final way that owns most of the drop would cost far less. No least-cost split between feeder and final way is attempted.
 
