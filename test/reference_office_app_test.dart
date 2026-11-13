@@ -944,14 +944,18 @@ void main() {
       expect(mep.incomer.breaker.ratingA.amperes, 125);
       expect(mep.incomer.poles, 4);
       // MEP feeder: Ib 110.0 A, FRC (O4) sized on the XLPE table: 1.25 x
-      // 110 = 137.5 <= 144 A at 35 mm² ⇒ the selectivity floor 1.6 x 125 is
-      // capped at the largest rung Iz 144 protects: MCCB 125 A.
+      // 110 = 137.5 <= 144 A at 35 mm² (load-sized MCCB 125 A). Backlog B-1:
+      // the selectivity floor 1.6 x 125 = 200 A needs Iz ≥ 200 on the FRC
+      // (XLPE B1) table: 35 mm² 144 ✗, 50 mm² 175 ✗, 70 mm² 222 ✓ ⇒ FRC
+      // 70 mm², MCCB 200 A (was 35 mm² / 125 A, non-selective).
       final lv = sys.panels[kOfficeMainPanelId]!;
       final f = lv.circuits.firstWhere((x) => x.circuitId == 'mep-equipment-feeder');
       expect(f.designCurrent.amperes, 110.0);
       expect(f.grounding.cableType, 'FRC');
-      expect(f.cable.csaMm2, 35);
-      expect(f.breaker.ratingA.amperes, 125);
+      expect(f.cable.csaMm2, 70);
+      expect(f.cable.deratedIz.amperes, 222);
+      expect(f.cableRaisedForSelectivity, isTrue);
+      expect(f.breaker.ratingA.amperes, 200);
       // LVMDP: 4 x 16 050 + 63 967 = 128 167 W; lines 216.2 / 216.2 / 212.6;
       // incomer on the service floor 164 000 / (√3 x 400) = 236.7 A → 250 A
       // 4P; recommended daya 164 000 VA.
@@ -971,7 +975,9 @@ void main() {
       final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
       int count(String k) => kinds.where((x) => x == k).length;
       expect(count('electrical:life-safety-not-essential'), 1);
-      expect(count('electrical:non-selective'), 5);
+      // Backlog B-1: the four floor feeders (16 mm², 63 A) and the MEP
+      // feeder (FRC 70 mm², 200 A) reach the 1.6× floor (was 5).
+      expect(count('electrical:non-selective'), 0);
       // Backlog A-3 — churn 1353.3 kPa sets PN16, no zone-split warning.
       expect(count('fire-system-over-pressure:FP'), 0);
       // Backlog A-2 — FT has no capacity: the reserve 31.5451 L/s x 1800 s
@@ -984,7 +990,15 @@ void main() {
           isEmpty);
       expect(count('electrical:fire-pump-protection'), 1);
       // Consequence of the 164 kVA service floor (incomer 250 A): recorded.
-      expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
+      // Backlog B-1: the floor feeders' 63 A and the MEP feeder's 200 A
+      // devices run at a lower (Ib / In)² share of their rated loss and the
+      // MCCB way widens the cubicle (750 x 350 x 200 mm), so the LVMDP
+      // estimate falls to 26.1 K ≤ 35 K and the warning clears (was 1).
+      expect(count('electrical:enclosure-temp-rise-exceeded'), 0);
+      expect(
+          c.read(electricalAdvancedProvider).enclosure[kOfficeMainPanelId]!
+              .tempRiseK,
+          closeTo(26.1, 1e-9));
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('electrical:life-safety-feeder-cable')));
       expect(kinds.where((k) => k.startsWith('air-terminal-unsized')), isEmpty);

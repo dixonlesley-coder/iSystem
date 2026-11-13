@@ -22,6 +22,14 @@
 ///   (d) an explicit `breakerOverrideA` wins outright — never floored, never
 ///       suppressed.
 ///
+/// SUPERSEDED 2026-11-13 by backlog B-1 for an AUTO-sized feeder cable: the
+/// app used to warn `non-selective` against its own pick. An auto-sized
+/// feeder cable (no cable override, one run per phase) now steps up the
+/// section ladder until its Iz carries the floor's rung (In ≤ Iz kept,
+/// `cableRaisedForSelectivity`); (a)/(b) above still hold for a USER-FIXED
+/// cable and for one that would need parallel runs. Group (2) pins the cap on
+/// a fixed cable; group (6) re-derives the W-SIM office.
+///
 /// Every expected value is hand-derived from the `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
 ///     400 500 630 800 1000 1250 1600 A;
@@ -65,6 +73,7 @@ ElectricalProject _twoBoard({
   required double feederLengthM,
   Current? feederOverrideA,
   Current? loadFlaA,
+  double? feederCableMm2,
 }) =>
     ElectricalProject(
       id: 'pr',
@@ -84,6 +93,7 @@ ElectricalProject _twoBoard({
               length: Length(feederLengthM),
               feedsPanelId: 'SP',
               breakerOverrideA: feederOverrideA,
+              cableOverrideMm2: feederCableMm2,
             ),
           ],
         ),
@@ -297,13 +307,16 @@ void main() {
     //   10 mm² (60 A) is short, 16 mm² (80 A) carries it ⇒ 16 mm², Iz 80.0 A.
     // FLOOR = 1.6 × 63 = 100.8 ⇒ would be 125 A.
     // CAP   = Iz 80 A ⇒ the largest rung ≤ 80 is 80 A — BELOW the target, so
-    //   the device lifts 63 → 80 A and stops there. Under the OLD policy the
-    //   cable chased the 125 A device up to 35 mm²; it now stays at 16 mm².
+    //   the device lifts 63 → 80 A and stops there. Backlog B-1: only a
+    //   USER-FIXED cable is capped like this, so the fixture fixes 16 mm²
+    //   (an auto-sized cable grows to 35 mm² / 125 A — see
+    //   electrical_feeder_selectivity_test.dart group (1)).
     final project = _twoBoard(
       loadW: 35000,
       loadCosPhi: 1.0,
       feederCosPhi: 1.0,
       feederLengthM: 25,
+      feederCableMm2: 16,
     );
     final sys = computeSystem(p, project);
     final feeder = _way(sys.panels['MDP']!, 'f1');
@@ -311,7 +324,8 @@ void main() {
     test('the device stops at the rung the conductor protects', () {
       expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 63);
       expect(feeder.breaker.ratingA.amperes, 80);
-      expect(feeder.cable.csaMm2, 16.0); // was 35 mm² under the old policy
+      expect(feeder.cable.csaMm2, 16.0); // the user-fixed section
+      expect(feeder.cableRaisedForSelectivity, isFalse);
       expect(feeder.cable.deratedIz.amperes, closeTo(80.0, 1e-9));
       expect(feeder.breaker.ratingA.amperes,
           lessThanOrEqualTo(feeder.cable.deratedIz.amperes));
@@ -411,15 +425,16 @@ void main() {
   });
 
   // ── (6) the W-SIM outrage cases, re-checked on the real design ─────────────
-  group('(6) the W-SIM office: copper is back at the load size', () {
+  group('(6) the W-SIM office: B-1 grows every auto-sized feeder to its floor',
+      () {
     final project = buildOfficeProject();
     // The fault level drives FOLD-1 busbar withstand only, never a circuit's
     // device/cable, so the plain solve is the right one to size-check.
     final sys = computeSystem(p, project);
     final mdp = sys.panels['MDP'] ?? sys.panels['mdp']!;
 
-    test('PP-1: a board drawing 49.4 A on its worst line takes 50 mm2, '
-        'never 150 mm2', () {
+    test('PP-1: a board drawing 49.4 A on its worst line: 50 mm2 load-sized, '
+        '240 mm2 for its 160 A selectivity floor (B-1)', () {
       // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand counts
       // each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
       //   connected = 6000×0.7 + 4500 + 4500 + 11 000/0.88 + 5500/0.88
@@ -440,24 +455,22 @@ void main() {
       //   50 mm² → 134 × 0.5358 = 71.8 A ✓ ⇒ 50 mm², Iz 71.8 A.
       final f = _way(mdp, 'mdp-f-pp1');
       expect(f.designCurrent.amperes, 49.4);
-      expect(f.cable.csaMm2, 50.0);
-      expect(f.cable.deratedIz.amperes, closeTo(71.8, 0.05));
-      // The conductor is proportionate: 71.8/49.4 = 1.45 — one section step
-      // over the 1.25 continuous margin.
-      expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
-          lessThan(1.6));
-
       // DEVICE: PP-1's incomer is 80 A (58.0 A worst phase × 1.25 headroom ⇒
       // 72.5 ⇒ rung 80), so the floor target is 1.6 × 80 = 128 ⇒ rung 160 A.
-      // The cap is Iz 71.8 ⇒ the largest rung ≤ 71.8 is 63 A: the floor lifts
-      // the device 50 → 63 A but is CAP-limited ⇒ not listed.
+      // Backlog B-1: the load-sized 50 mm² (Iz 71.8) cannot carry it, so the
+      // auto-sized cable grows to Iz ≥ 160 at derating 0.5358: 185 mm² 296 ×
+      // 0.5358 = 158.6 ✗; 240 mm² 346 × 0.5358 = 185.4 ✓ ⇒ 240 mm², 160 A,
+      // the floor reached (applied). (Was 50 mm² / 63 A, non-selective.)
       expect(sys.panels['pp1']!.incomer.breaker.ratingA.amperes, 80);
-      expect(f.breaker.ratingA.amperes, 63);
-      expect(sys.feederFloorsApplied, isNot(contains('mdp-f-pp1')));
+      expect(f.cable.csaMm2, 240.0);
+      expect(f.cable.deratedIz.amperes, closeTo(185.4, 0.05));
+      expect(f.cableRaisedForSelectivity, isTrue);
+      expect(f.breaker.ratingA.amperes, 160);
+      expect(sys.feederFloorsApplied, contains('mdp-f-pp1'));
     });
 
-    test('LP-3: the small 1-phase board takes 50 mm2 only for its downstream '
-        'voltage drop (T3), never for discrimination', () {
+    test('LP-3: the small 1-phase board takes 70 mm2 for its 80 A selectivity '
+        'floor (B-1), which also cures its downstream drop', () {
       // LP-3 connected 1400 + 1000 + 2600×0.7 + 2000×0.7 = 5620 W, diversity
       // 0.9 ⇒ demand 5058 W. Its feeder follows the FED board — 1φ at 220 V
       // (E8a) — and (Round-7 elec-props-2) LP-3's REAL power factor: every way
@@ -472,20 +485,22 @@ void main() {
       // its own drop within the limit, so the auto-sized feeder is raised
       // for that downstream drop: 25 ⇒ 35 mm² (0.50 %, 3.02 % still over) ⇒
       // 50 mm² (0.38 %, 2.90 %), Iz 134 × 0.5358 = 71.8 A.
+      // DEVICE: LP-3's incomer is 40 A (28.5 A × 1.20 headroom = 34.2 ⇒ 40), so
+      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. Backlog B-1: the auto-sized
+      // cable grows in the selectivity pass to Iz ≥ 80: 50 mm² 71.8 ✗; 70 mm²
+      // 171 × 0.5358 = 91.6 ✓ ⇒ 70 mm², device 80 A (applied). The 70 mm²
+      // feeder (0.27 %) already holds the lighting's cumulative drop, so the
+      // T3 VD raise is no longer needed (was 50 mm² / 63 A, non-selective).
       final f = _way(mdp, 'mdp-f-lp3');
       expect(f.threePhase, isFalse);
       expect(f.designCurrent.amperes, 25.5);
-      expect(f.cable.csaMm2, 50.0);
-      expect(f.cableRaisedForDownstreamVd, isTrue);
-      expect(f.cable.deratedIz.amperes, closeTo(71.8, 0.05));
-
-      // DEVICE: LP-3's incomer is 40 A (28.5 A × 1.20 headroom = 34.2 ⇒ 40), so
-      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 71.8 ⇒ the
-      // largest rung ≤ 71.8 is 63 A: the device follows the bigger cable to
-      // 63 A, still short of the target (not listed as floored).
+      expect(f.cable.csaMm2, 70.0);
+      expect(f.cableRaisedForSelectivity, isTrue);
+      expect(f.cableRaisedForDownstreamVd, isFalse);
+      expect(f.cable.deratedIz.amperes, closeTo(91.6, 0.05));
       expect(sys.panels['lp3']!.incomer.breaker.ratingA.amperes, 40);
-      expect(f.breaker.ratingA.amperes, 63);
-      expect(sys.feederFloorsApplied, isNot(contains('mdp-f-lp3')));
+      expect(f.breaker.ratingA.amperes, 80);
+      expect(sys.feederFloorsApplied, contains('mdp-f-lp3'));
     });
 
     test('no MDP feeder carries more than 1.6x the ampacity its load needs', () {
@@ -501,6 +516,13 @@ void main() {
         // Reference tower T3 — raised for downstream VOLTAGE DROP (LP-3), not
         // inflated for discrimination: outside this guard.
         if (c.cableRaisedForDownstreamVd) continue;
+        // Backlog B-1 — raised for SELECTIVITY: its need is the floor rung.
+        if (c.cableRaisedForSelectivity) {
+          expect(c.cable.izRequired!.amperes,
+              closeTo(c.breaker.ratingA.amperes, 1e-9),
+              reason: c.name);
+          continue;
+        }
         final need = c.cable.izRequired!.amperes;
         expect(c.cable.deratedIz.amperes / need, lessThan(1.6),
             reason: '${c.name}: Iz ${c.cable.deratedIz.amperes} A for '

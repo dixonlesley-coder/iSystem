@@ -801,7 +801,8 @@ void _dumpElectrical(ProviderContainer c) {
         '${r.cable.deratingFactor}, ${r.cable.izRequired?.amperes}, '
         '${r.cable.appliedRule}, vdDriven ${r.cable.vdDriven}'
         '${r.cableRaisedForAds ? ', raised-for-ads' : ''}'
-        '${r.cableRaisedForDownstreamVd ? ', raised-for-downstream-vd' : ''}) | '
+        '${r.cableRaisedForDownstreamVd ? ', raised-for-downstream-vd' : ''}'
+        '${r.cableRaisedForSelectivity ? ', raised-for-selectivity' : ''}) | '
         '${_f(r.voltageDrop.dropPercent)} (${_f(r.voltageDrop.dropV)} V) / '
         '${r.voltageDrop.limitPercent} | ${_f(r.cumulativeDropPercent)} | '
         '${r.rcd.required ? '${r.rcd.ratingMa} mA ${r.rcd.type?.name}' : 'none (${r.rcd.reason})'} | '
@@ -1672,6 +1673,44 @@ void main() {
       }
     });
 
+    test('(REF_DUMP) feeder chain summary and copper total', () {
+      // Backlog B-1 / B-2: the before / after tables in the §15 log.
+      if (!_dump) return;
+      final sys = c.read(electricalResultProvider);
+      // ignore: avoid_print
+      print('FEEDERS | floor | cable | device | feeder VD % | worst way cum %');
+      for (var f = 0; f < kTowerFloors; f++) {
+        final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
+        final runs = fd.cable.runsPerPhase ?? 1;
+        var worst = 0.0;
+        for (final w in sys.panels[towerFloorPanelId(f)]!.circuits) {
+          if (w.cumulativeDropPercent > worst) worst = w.cumulativeDropPercent;
+        }
+        // ignore: avoid_print
+        print('FEEDERS | ${f + 1} | ${runs > 1 ? '${runs}x' : ''}'
+            '${fd.cable.csaMm2} (${fd.grounding.cableSpec}) | '
+            '${fd.breaker.deviceClass.code} ${fd.breaker.ratingA.amperes} | '
+            '${fd.voltageDrop.dropPercent} | ${_f(worst, 2)}');
+      }
+      // Copper: Σ mm² x m x loaded cores (phase + neutral) x runs.
+      var cu = 0.0;
+      for (final pr in sys.panels.values) {
+        for (final w in pr.circuits) {
+          final loaded = w.grounding.cores - 1;
+          cu += w.cable.csaMm2 *
+              w.lengthM *
+              loaded *
+              (w.cable.runsPerPhase ?? 1);
+          final ml = w.motorLeads;
+          if (ml != null) {
+            cu += 2 * 3 * ml.csaMm2 * w.lengthM * (ml.runsPerPhase ?? 1);
+          }
+        }
+      }
+      // ignore: avoid_print
+      print('COPPER total ${cu.toStringAsFixed(0)} mm2.m');
+    });
+
     test('every floor board: 18 750 W / 21 422 VA, 30.9 A per line, MCB '
         '32 A 4P', () {
       for (var f = 0; f < kTowerFloors; f++) {
@@ -1708,10 +1747,16 @@ void main() {
         final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
         expect(fd.designCurrentExactA, closeTo(30.919, 1e-3));
       }
+      // Backlog B-1 (2026-11-13): Lt1 (15 m) was load-sized 10 mm² / 50 A
+      // (non-selective over the 32 A incomer). The floor 1.6 x 32 = 51.2 ⇒
+      // 63 A needs Iz ≥ 63: 10 mm² 50 ✗, 16 mm² 68 ✓ ⇒ MCCB 63 A on 5 x 16;
+      // pf 0.8753 (sin 0.4836): √3 x 30.919 x 15 x (1.38 x 0.8753 + 0.08 x
+      // 0.4836) / 1000 = 1.001 V = 0.25 % (was 0.39 %).
       final lt1 = way(c, kTowerMainPanelId, towerFloorFeederId(0));
-      expect(lt1.cable.csaMm2, 10);
-      expect(lt1.breaker.ratingA.amperes, 50);
-      expect(lt1.voltageDrop.dropPercent, closeTo(0.39, 1e-9));
+      expect(lt1.cable.csaMm2, 16);
+      expect(lt1.breaker.ratingA.amperes, 63);
+      expect(lt1.voltageDrop.dropPercent, closeTo(0.25, 1e-9));
+      expect(lt1.cableRaisedForSelectivity, isTrue);
       expect(lt1.cableRaisedForAds, isFalse);
       expect(lt1.cableRaisedForDownstreamVd, isFalse);
       final lt30 = way(
@@ -1722,7 +1767,13 @@ void main() {
       expect(lt30.cable.csaMm2, 95);
       expect(lt30.grounding.peCsaMm2, 50);
       expect(lt30.voltageDrop.dropPercent, closeTo(0.42, 1e-9));
-      expect(lt30.cableRaisedForAds, isTrue);
+      // Backlog B-1: the 63 A device is now the selectivity floor's, and the
+      // selectivity growth itself steps the cable until that device
+      // disconnects in time, so no separate ADS floor is recorded; the final
+      // 95 mm² is the downstream-VD floor (it already carries the 63 A rung,
+      // so no selectivity raise is flagged on it). The section is unchanged.
+      expect(lt30.cableRaisedForAds, isFalse);
+      expect(lt30.cableRaisedForSelectivity, isFalse);
       expect(lt30.cableRaisedForDownstreamVd, isTrue);
     });
 
@@ -1784,7 +1835,12 @@ void main() {
     test('Review: deliberate findings present, the rest absent', () {
       final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
       int n(String k) => kinds.where((x) => x == k).length;
-      expect(n('electrical:non-selective'), 4);
+      // Backlog B-1: PP-Lt1 / PP-Lt2 now reach 63 A on 16 mm² (was 4). The
+      // two left are at the ladder top: Feeder PP-E is already 2 parallel
+      // runs of 185 mm² FRC (no single run carries the 1.6 x 630 = 1008 ⇒
+      // 1250 A rung), Feeder to MEP is 300 mm² FRC, the largest section
+      // (Iz 553 < the 1.6 x 500 = 800 A rung).
+      expect(n('electrical:non-selective'), 2);
       expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
@@ -1815,7 +1871,9 @@ void main() {
       expect(r.maxKpa, closeTo(9.81 * (294.961 - 1.2), 0.1));
       expect(r.minKpa, closeTo(9.81 * (294.961 - 4 * 29 - 1.2), 0.1));
       expect(c.read(prvHoseValvesProvider), hasLength(60));
-      expect(n('electrical:cable-raised-for-ads'), 6);
+      // Backlog B-1: the three lifts (feeders PP-Lt28..30 now carry the
+      // raised-for-selectivity reason, see above; was 6).
+      expect(n('electrical:cable-raised-for-ads'), 3);
       expect(n('electrical:fire-pump-protection'), 3);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
       expect(n('downfeed-below-target'), 1);

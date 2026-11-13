@@ -1156,6 +1156,19 @@ class ComputePanelOptions {
   /// Empty ⇒ byte-identical.
   final Map<String, double> feederVdCsaFloorMm2;
 
+  /// Backlog B-1 (2026-11-13) — per FEEDER way id, the smallest section (mm²)
+  /// the selectivity cable growth may start from. `computeSystem` raises it
+  /// one rung at a time when a feeder whose cable was grown for selectivity
+  /// fails automatic disconnection at the floored device (a larger cable
+  /// lowers the loop impedance). Empty ⇒ the growth starts at the load-sized
+  /// section ⇒ byte-identical.
+  final Map<String, double> selectivityCsaMinMm2;
+
+  /// Backlog B-1 — FEEDER way ids whose selectivity cable growth is REFUSED
+  /// (the ladder top could not hold ADS at the floored device): the load-sized
+  /// cable is kept and the Round-40 device cap applies as before.
+  final Set<String> selectivityRaiseRefusedIds;
+
   /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
   /// (root) panel — the line current of the declared connection capacity
   /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
@@ -1259,6 +1272,8 @@ class ComputePanelOptions {
     this.mccbFrameRaiseRefusedIds = const {},
     this.adsCsaFloorMm2 = const {},
     this.feederVdCsaFloorMm2 = const {},
+    this.selectivityCsaMinMm2 = const {},
+    this.selectivityRaiseRefusedIds = const {},
     this.serviceMinCurrentA,
     this.feederPowerFactor = const {},
   });
@@ -2039,6 +2054,67 @@ _CircuitComputation _computeCircuit(
     ),
   );
 
+  // Backlog B-1 (2026-11-13) — FEEDER DISCRIMINATION ON AN AUTO-SIZED
+  // CABLE. The selectivity floor below moves the device only as far as the
+  // cable's Iz protects (In ≤ Iz is inviolable). On an AUTO-sized feeder
+  // cable (no cable override, one run per phase) that cap would leave the
+  // app warning `non-selective` against its own pick, so the cable instead
+  // steps up the section ladder to the smallest section whose derated Iz
+  // carries the floor's rung (sized exactly as the load-sized cable, with the
+  // floor rung as its protective device), bounded at the ladder top. A
+  // user-fixed cable never grows; no single-run section reaching the rung ⇒
+  // the load-sized cable is kept and the warning stands. The ADS half is
+  // judged by `computeSystem` (see [ComputePanelOptions.selectivityCsaMinMm2]).
+  var raisedForSelectivity = false;
+  {
+    final selFloorA =
+        c.breakerOverrideA != null ? null : opts.feederBreakerFloorA[c.id];
+    if (selFloorA != null &&
+        isFeeder &&
+        c.cableOverrideMm2 == null &&
+        !opts.selectivityRaiseRefusedIds.contains(c.id) &&
+        (cable.runsPerPhase ?? 1) <= 1) {
+      final rung = selectBreaker(
+        profile,
+        designCurrent: sizingCurrent,
+        loadKind: c.loadKind,
+        minRatingA: selFloorA,
+        starterType: wayStarter,
+      ).ratingA;
+      final startMin =
+          math.max(minSection, opts.selectivityCsaMinMm2[c.id] ?? 0);
+      if (rung.amperes > cable.deratedIz.amperes + 1e-9 ||
+          startMin > cable.csaMm2 + 1e-9) {
+        final candidate = sizeCable(
+          profile,
+          designCurrent: sizingCurrent,
+          breakerRating: rung,
+          deratingFactor: df,
+          minSectionMm2: startMin,
+          insulation: cableInsulation,
+          material: panel.material,
+          method: installMethod,
+          threePhase: threePhase,
+          groupingCount: c.groupingCountOverride ?? panel.groupingCount,
+          vd: CableVoltageDropConstraint(
+            length: supplyLength,
+            cosPhi: cosPhi,
+            threePhase: threePhase,
+            voltage: Voltage(useVoltageV),
+            isLighting: c.isLighting,
+          ),
+        );
+        if ((candidate.runsPerPhase ?? 1) <= 1 &&
+            candidate.ampacityReached &&
+            candidate.deratedIz.amperes + 1e-9 >= rung.amperes &&
+            candidate.csaMm2 > cable.csaMm2 + 1e-9) {
+          cable = candidate;
+          raisedForSelectivity = true;
+        }
+      }
+    }
+  }
+
   // Round 37 (electrical-sim-4-feeder-neutral-ignores-fed-board-triplen-
   // oversize) — a 3φ feeder to a board whose 1φ non-linear load raises the
   // neutral current to `factor ×` phase carries that current in its OWN
@@ -2514,6 +2590,7 @@ _CircuitComputation _computeCircuit(
     cableRaisedForAds: adsFloor > userMinSection + 1e-9,
     cableRaisedForDownstreamVd:
         vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
+    cableRaisedForSelectivity: raisedForSelectivity,
   );
   if (result.cableRaisedForAds) {
     warnings.add(ElectricalWarning(
@@ -4236,6 +4313,10 @@ ElectricalSystemResult computeSystem(
   // board (filled after the first full solve, see the end); FOLD 1 sizes the
   // bar on max(utility, this). Empty ⇒ byte-identical.
   final gensetWithstandA = <String, double>{};
+  // Backlog B-1 — the selectivity cable-growth start sections and refusals of
+  // the CURRENT `solveAll` (reset at its start; see the Round-40 loop).
+  final selectivityCsaMin = <String, double>{};
+  final selectivityRefused = <String>{};
 
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
       [Map<String, double> feederBreakerCapA = const {},
@@ -4341,6 +4422,8 @@ ElectricalSystemResult computeSystem(
           mccbFrameRaiseRefusedIds: mccbFrameRaiseRefusedIds,
           adsCsaFloorMm2: Map.of(adsCsaFloors),
           feederVdCsaFloorMm2: Map.of(feederVdFloors),
+          selectivityCsaMinMm2: Map.of(selectivityCsaMin),
+          selectivityRaiseRefusedIds: Set.of(selectivityRefused),
           feederLineCurrentsA: feederLinesByPanel,
           feederNeutralLoad: feederNeutralByPanel,
           feederLargestRunA: largestRunByPanel,
@@ -4882,6 +4965,8 @@ ElectricalSystemResult computeSystem(
   // device / coordination pipeline below, as one function of the current
   // [adsCsaFloors].
   ElectricalSystemResult solveAll() {
+    selectivityCsaMin.clear();
+    selectivityRefused.clear();
     // PASS 1 — size the system with no coordination floor (exactly the historic
     // single-pass behaviour).
     final pass1 = sizeAll(const {});
@@ -5024,23 +5109,65 @@ ElectricalSystemResult computeSystem(
         serviceFaultEstimateFor(project, pass2) ??
         const Current(defaultLvUtilityFaultKa * 1000);
     final ladder = profile.standardBreakerRatingsA;
+    final selSections = profile.standardSectionsMm2;
     final caps = <String, double>{};
     var current = pass2;
-    for (var iter = 0; iter < ladder.length; iter++) {
+    for (var iter = 0; iter < ladder.length + selSections.length + 1; iter++) {
       final f =
           faultStudy(current, project, profile, originFaultLevel: faultOrigin);
+      // Backlog B-1 — a selectivity-grown feeder must hold ADS on EVERY
+      // source that can feed it (reference tower T4): on a genset-backed
+      // board it is judged on the alternator's fault too.
+      final gBasis = gensetFaultBasis(project, current);
+      final fg = gBasis == null
+          ? null
+          : faultStudy(current, project, profile,
+              originFaultLevel: Current(gBasis.iscA));
       var changed = false;
-      for (final id in feederFloors.keys) {
+      for (final id in (feederFloors.keys.toList()..sort())) {
         final now = f.circuits[id];
-        if (now == null || now.adsOk != false) continue;
+        if (now == null) continue;
         final parentId = feederParentOf[id];
         final rNow = current.panels[parentId]?.circuits
             .where((x) => x.circuitId == id)
             .firstOrNull;
+        // Eligible for the B-1 cable growth: an AUTO-sized single-run cable
+        // whose growth was not refused (the floored device is the engine's).
+        final model =
+            byId[parentId]?.circuits.where((x) => x.id == id).firstOrNull;
+        final selGrown = model != null &&
+            model.cableOverrideMm2 == null &&
+            !selectivityRefused.contains(id) &&
+            (rNow?.cable.runsPerPhase ?? 1) <= 1;
+        final failsGenset = selGrown &&
+            fg != null &&
+            gBasis!.backed.contains(parentId) &&
+            fg.circuits[id]?.adsOk == false;
+        if (now.adsOk != false && !failsGenset) continue;
         final rLoad = pass1.panels[parentId]?.circuits
             .where((x) => x.circuitId == id)
             .firstOrNull;
         if (rNow == null || rLoad == null) continue;
+        // Backlog B-1 — an AUTO-sized single-run feeder that fails ADS at
+        // its floored device grows one more section (a lower loop
+        // impedance) before its device is capped; at the ladder top the
+        // growth is refused — the load-sized cable and the Round-40 device
+        // cap below take over (never copper grown for nothing).
+        if (selGrown &&
+            rNow.breaker.ratingA.amperes >
+                rLoad.breaker.ratingA.amperes + 1e-9) {
+          final next = selSections
+              .where((x) => x > rNow.cable.csaMm2 + 1e-9)
+              .firstOrNull;
+          if (next != null) {
+            selectivityCsaMin[id] = next;
+          } else {
+            selectivityCsaMin.remove(id);
+            selectivityRefused.add(id);
+          }
+          changed = true;
+          continue;
+        }
         final ratingNow = rNow.breaker.ratingA.amperes;
         final loadRating = rLoad.breaker.ratingA.amperes;
         if (ratingNow <= loadRating + 1e-9) continue;

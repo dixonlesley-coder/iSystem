@@ -699,7 +699,12 @@ void main() {
         'ac_2': (run: 17.8, mcb: 20, curve: 'c', csa: 4.0, vd: 1.32),
         'ac_3': (run: 17.8, mcb: 20, curve: 'c', csa: 4.0, vd: 1.53),
       };
-      const feederVd = [0.40, 0.56, 0.72, 0.88];
+      // Backlog B-1 (2026-11-13): the feeders (10 / 14 / 18 / 22 m) grow
+      // from 6 mm² to 16 mm² for their selectivity floor (below). Board pf
+      // 16 050 / 18 451 = 0.86986 (sin 0.49327): √3 × 28.5 × (1.38 ×
+      // 0.86986 + 0.08 × 0.49327) / 1000 / 400 × 100 = 0.015301 %/m ⇒
+      // 0.15 / 0.21 / 0.28 / 0.34 % (was 0.40 / 0.56 / 0.72 / 0.88 on 6 mm²).
+      const feederVd = [0.15, 0.21, 0.28, 0.34];
       final lvmdp = sys.panels[kOfficeMainPanelId]!;
       for (var i = 0; i < 4; i++) {
         final t = kOfficeFloorTags[i];
@@ -729,14 +734,18 @@ void main() {
         expect(lines, [22.8, 28.5, 28.5]);
         expect(p.incomer.breaker.ratingA.amperes, 32);
         expect(p.incomer.poles, 4);
-        // Feeder: Ib = the worst line 28.5 A; MCB 32 A C (the 1.6 x 32 =
-        // 51.2 A selectivity floor is capped by Iz 36 of 6 mm²), NYY 5 x 6.
+        // Feeder: Ib = the worst line 28.5 A; load-sized MCB 32 A on 6 mm²
+        // (Iz 36). Backlog B-1: the 1.6 x 32 = 51.2 A floor ⇒ rung 63 A; the
+        // auto-sized cable grows to Iz ≥ 63: 10 mm² 50 ✗, 16 mm² 68 ✓ ⇒
+        // MCB 63 A C, NYY 5 x 16.
         final fd = lvmdp.circuits
             .firstWhere((c) => c.circuitId == officeFeederId(t));
         expect(fd.designCurrent.amperes, 28.5);
-        expect(fd.breaker.ratingA.amperes, 32);
+        expect(fd.breaker.ratingA.amperes, 63);
         expect(fd.breaker.curve.name, 'c');
-        expect(fd.cable.csaMm2, 6);
+        expect(fd.cable.csaMm2, 16);
+        expect(fd.cable.deratedIz.amperes, 68);
+        expect(fd.cableRaisedForSelectivity, isTrue);
         expect(fd.grounding.cores, 5);
         expect(fd.voltageDrop.dropPercent, closeTo(feederVd[i], 1e-9));
       }

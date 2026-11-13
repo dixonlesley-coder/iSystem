@@ -172,14 +172,17 @@ void main() {
       expect(kinds.where((k) => k.contains('life-safety-feeder-cable')),
           isEmpty);
       // Sized on the FRC (XLPE 90 °C) table: 110 A x 1.25 = 137.5 <= 144 A
-      // at 35 mm² (the PVC table would need 70 mm², Iz 171).
+      // at 35 mm² (the PVC table would need 70 mm², Iz 171). Backlog B-1:
+      // the auto-sized cable then grows for the 1.6 x 125 = 200 A
+      // selectivity floor, still on the FRC table: 50 mm² 175 ✗, 70 mm² 222
+      // ✓ (the PVC table would need 95 mm², Iz 207).
       final r = c
           .read(electricalResultProvider)
           .panels[kOfficeMainPanelId]!
           .circuits
           .firstWhere((x) => x.circuitId == kMepEquipmentFeederId);
-      expect(r.cable.csaMm2, 35);
-      expect(r.cable.deratedIz.amperes, 144);
+      expect(r.cable.csaMm2, 70);
+      expect(r.cable.deratedIz.amperes, 222);
     });
 
     test('the FRC the sync set is cleared when the fire pump goes; a '

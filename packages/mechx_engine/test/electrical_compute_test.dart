@@ -224,8 +224,8 @@ void main() {
       // Round 38 (elec-ui-drawings-6) — MDP's only load is SP: its incomer
       // sizes on SP's diversified 8 kW = 8000 / (√3·400·1.0) = 11.5 A → 16 A,
       // while the device-only selectivity floor lifts the feeder towards
-      // 1.6 × SP's 16 A incomer (25.6 A), held at the 25 A its cable
-      // protects — an outgoing device above its own incomer, now reported.
+      // 1.6 × SP's 16 A incomer (25.6 A ⇒ 32 A, backlog B-1: on a grown
+      // 6 mm² cable) — an outgoing device above its own incomer, reported.
       expect(r.warnings.map((w) => w.code), ['outgoing-exceeds-incomer']);
       expect(r.warnings.single.circuitId, 'f1');
       // The inversion is the engine's OWN selectivity floor (no override), so
@@ -251,9 +251,13 @@ void main() {
       // A; the 3φ trunk minimum is 4 mm², whose B1 Cu/PVC KHA is 28 A (IEC
       // Table B.52.4 B1, re-derived Round 11 — was the 34 A "in air" figure)
       // ⇒ 4 mm², Iz 28 A. Cap: the largest rung ≤ 28 A is 25 A (32 > 28).
-      expect(feeder.breaker.ratingA.amperes, 25);
-      expect(feeder.cable.csaMm2, 4);
-      expect(feeder.cable.deratedIz.amperes, 28);
+      // Backlog B-1 (2026-11-13): the cable is AUTO-sized, so it grows to the
+      // smallest section whose Iz carries the 32 A rung: 4 mm² 28 ✗, 6 mm²
+      // (B1) 36 ✓ ⇒ 6 mm², 32 A.
+      expect(feeder.breaker.ratingA.amperes, 32);
+      expect(feeder.cable.csaMm2, 6);
+      expect(feeder.cable.deratedIz.amperes, 36);
+      expect(feeder.cableRaisedForSelectivity, isTrue);
     });
 
     test('SP demand + heater current', () {

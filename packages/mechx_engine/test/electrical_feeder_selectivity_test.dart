@@ -14,6 +14,11 @@
 /// pinned in `feeder_floor_policy_test.dart`; the groups below keep their
 /// original fixtures and simply carry the new (hand-re-derived) answers.
 ///
+/// RE-DERIVED 2026-11-13 (backlog B-1): on an AUTO-sized feeder cable the cap
+/// no longer bites — the cable steps up the section ladder until its Iz
+/// carries the floor's rung (In ≤ Iz kept), flagged `cableRaisedForSelectivity`.
+/// A user-fixed cable, or one that would need parallel runs, keeps the cap.
+///
 /// Every expected value below is hand-derived from first principles against the
 /// `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
@@ -107,8 +112,8 @@ void main() {
   });
 
   // ── (1) the two-panel case the sizer used to make non-selective ────────────
-  group('(1) a feeder on the child incomer\'s own rung lifts as far as its '
-      'cable allows', () {
+  group('(1) a feeder on the child incomer\'s own rung reaches the floor on '
+      'a grown auto-sized cable', () {
     // SP: 3φ, ONE 3φ heater 35 kW at cosφ 1.0, diversity 1.
     //   Ib(s1) = 35 000 / (√3·400·1.0) = 50.518 A → 50.5 A ⇒ way breaker 63 A.
     //   The way is three-phase, so it loads L1=L2=L3 = 50.5 A ⇒ the board's
@@ -119,9 +124,10 @@ void main() {
     // FLOOR = 1.6 × 63 = 100.8 A ⇒ the target rung is 125 A.
     // CABLE (load-sized, derating 1.00): Iz ≥ max(63, 1.25 × 50.518 = 63.15)
     //   = 63.15 A ⇒ 10 mm² (60 A) is short, 16 mm² (80 A) carries it ⇒ Iz 80 A.
-    // CAP = 80 A ⇒ the largest rung ≤ 80 is 80 A, BELOW the 125 A target: the
-    //   device lifts 63 → 80 and stops, the cable never moves, and the residual
-    //   (80 / 63 = 1.27 < 1.6) stays a reported non-selectivity.
+    // Backlog B-1: 80 A Iz is BELOW the 125 A target rung, and the cable is
+    //   auto-sized, so it grows to the smallest section with Iz ≥ 125 A on
+    //   method E: 25 mm² 105 ✗, 35 mm² 130 ✓ ⇒ 35 mm², device 125 A
+    //   (125 / 63 = 1.98 ⇒ partial zone, the floor's own target ⇒ applied).
     const sp = ElectricalPanel(
       id: 'SP',
       name: 'Sub',
@@ -190,11 +196,10 @@ void main() {
       expect(nonSelective(63, 63), isTrue);
     });
 
-    test('the sized feeder lifts to the rung its own conductor protects', () {
+    test('the sized feeder reaches the 125 A floor rung', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
-      // The 125 A target is out of reach on a 16 mm² (Iz 80 A) conductor, so
-      // the device stops at 80 A rather than dragging copper up with it.
-      expect(feeder.breaker.ratingA.amperes, 80);
+      // The 125 A target rung is reached on the grown 35 mm² (Iz 130 A).
+      expect(feeder.breaker.ratingA.amperes, 125);
       expect(feeder.breaker.overridden, isFalse);
       // The floor never touches the design current — only the device.
       expect(feeder.designCurrent.amperes, closeTo(50.5, 1e-9));
@@ -203,31 +208,31 @@ void main() {
           lessThanOrEqualTo(feeder.cable.deratedIz.amperes));
     });
 
-    test('the cable does NOT move — it is sized on the load, not the floor', () {
+    test('the auto-sized cable grows from 16 to 35 mm2 for the floor', () {
       // PASS 1: Iz ≥ max(63, 1.25 × 50.518 = 63.15) = 63.15 A ⇒ 16 mm² (80 A);
       //         the 3φ trunk minimum 4 mm² is already cleared.
       expect(_way(pass1Mdp, 'f1').cable.csaMm2, 16);
-      // PASS 2 sizes the conductor from the SAME load-based pick, so it is the
-      // identical cable. (The old policy chased the 125 A device to 35 mm².)
+      // PASS 2 (backlog B-1): Iz ≥ the 125 A rung ⇒ 35 mm² (130 A).
       final feeder = _way(sys.panels['MDP']!, 'f1');
-      expect(feeder.cable.csaMm2, 16);
-      expect(feeder.cable.deratedIz.amperes,
-          _way(pass1Mdp, 'f1').cable.deratedIz.amperes);
-      expect(feeder.cable.deratedIz.amperes, closeTo(80, 0.1));
+      expect(feeder.cable.csaMm2, 35);
+      expect(feeder.cable.deratedIz.amperes, closeTo(130, 0.1));
       expect(feeder.cable.ampacityReached, isTrue);
+      expect(feeder.cableRaisedForSelectivity, isTrue);
     });
 
-    test('the capped-back residual IS reported (never suppressed)', () {
+    test('the floor is reached, so no selectivity finding remains', () {
       final fs = faultStudy(sys, project, p);
       final pair = fs.selectivity.single;
-      expect(pair.upstreamRatingA, 80);
+      expect(pair.upstreamRatingA, 125);
       expect(pair.downstreamRatingA, 63);
-      // 80 / 63 = 1.27 < 1.6 ⇒ still non-selective, and the sizer says so: the
-      // floor did not reach its target, so this feeder is NOT in the applied set.
-      expect(sys.feederFloorsApplied, isEmpty);
-      expect(pair.nonSelective, isTrue);
-      expect(pair.zone, SelectivityZone.nonSelective);
-      expect(fs.warnings.map((w) => w.code), contains('non-selective'));
+      // 125 / 63 = 1.98 ⇒ partial, the floor's own target ⇒ applied ⇒ the
+      // partial advisory is suppressed and nothing is non-selective.
+      expect(sys.feederFloorsApplied, {'f1'});
+      expect(pair.nonSelective, isFalse);
+      expect(pair.zone, SelectivityZone.partial);
+      expect(fs.warnings.map((w) => w.code), isNot(contains('non-selective')));
+      expect(fs.warnings.map((w) => w.code),
+          isNot(contains('selectivity-partial')));
     });
 
     test('the second pass adds no duplicate warnings', () {

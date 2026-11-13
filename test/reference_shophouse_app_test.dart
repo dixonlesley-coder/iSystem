@@ -809,8 +809,12 @@ void main() {
       expect(pb, [4.2, 16.1, 16.1]);
       expect(r.incomer.breaker.ratingA.amperes, 20);
       expect(r.incomer.poles, 4);
+      // Backlog B-1: the MEP feeder is 6 mm² (was 4). PP Ruko source R
+      // 0.003266 / X 0.022863 Ω + 10 m of 6 mm² cold (3.69 x 0.01 x 254.5 /
+      // 304.5 = 0.030841, X 0.0008) ⇒ |Z| 0.041512 ⇒ 400 / (√3 x 0.041512) =
+      // 5.56 kA (was 4.22 on 4 mm²).
       expect(adv.fault.panels[kMepEquipmentPanelId]!.prospectiveFaultkA,
-          closeTo(4.22, 1e-9));
+          closeTo(5.56, 1e-9));
     });
 
     test('MEP feeder and PP Ruko', () {
@@ -820,15 +824,20 @@ void main() {
       final mf = pp.circuits.firstWhere((w) => w.circuitId == kMepEquipmentFeederId);
       // The MEP feeder runs on its worst line 16.1 A: load-sized 20 A; Iz_req
       // max(20, 1.25 × 16.1 = 20.1) ⇒ NYY 5 × 4 mm² (3-phase trunk minimum 4,
-      // Iz 28); floor 1.6 × 20 = 32 capped at Iz 28 ⇒ MCB 25 A C 3P; VD 0.33 %.
+      // Iz 28). Backlog B-1: the floor 1.6 × 20 = 32 A needs Iz ≥ 32, so the
+      // auto-sized cable grows: 4 mm² 28 ✗, 6 mm² 36 ✓ ⇒ NYY 5 × 6, MCB
+      // 32 A C 3P. VD on 10 m at pf 7156 / 8419 = 0.85 (sin 0.5268): √3 ×
+      // 16.1 × 10 × (3.69 × 0.85 + 0.08 × 0.5268) / 1000 = 0.886 V = 0.22 %
+      // (was 25 A on 5 × 4, 0.33 %).
       expect(mf.designCurrent.amperes, closeTo(16.1, 1e-9));
       expect(mf.threePhase, isTrue);
-      expect(mf.cable.csaMm2, 4);
-      expect(mf.cable.deratedIz.amperes, 28);
+      expect(mf.cable.csaMm2, 6);
+      expect(mf.cable.deratedIz.amperes, 36);
+      expect(mf.cableRaisedForSelectivity, isTrue);
       expect(mf.grounding.cores, 5);
-      expect(mf.breaker.ratingA.amperes, 25);
+      expect(mf.breaker.ratingA.amperes, 32);
       expect(mf.breaker.curve.name, 'c');
-      expect(mf.voltageDrop.dropPercent, closeTo(0.33, 1e-9));
+      expect(mf.voltageDrop.dropPercent, closeTo(0.22, 1e-9));
       // PP Ruko: 14 040 + 7 156 = 21 196 W; 15 988 + 8 419 = 24 407 VA.
       expect(pp.demandW, closeTo(21196, 0.5));
       expect(pp.demandVa, closeTo(24407, 0.5));
@@ -848,9 +857,9 @@ void main() {
       expect(adv.recommendedDayaVa, 33000);
       expect(adv.recommendedDayaThreePhase, isTrue);
       final codes = [for (final w in c.read(electricalAllWarningsProvider)) w.code];
-      // Deliberate: the three unit feeders + the MEP feeder cannot reach the
-      // 1.6× discrimination target within their cable's Iz.
-      expect(codes.where((x) => x == 'non-selective').length, 4);
+      // Backlog B-1: the three unit feeders (10 mm², 40 A) and the MEP feeder
+      // (6 mm², 32 A) now reach the 1.6× target on grown cables (was ×4).
+      expect(codes.where((x) => x == 'non-selective'), isEmpty);
       expect(codes, isNot(contains('service-capacity-below-demand')));
     });
   });

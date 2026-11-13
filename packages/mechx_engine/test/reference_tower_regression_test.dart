@@ -266,9 +266,12 @@ void main() {
               c.startsWith('cumulative-voltage-drop-exceeded') ||
               c.startsWith('ads-disconnection:')),
           isEmpty);
-      // The short Lantai 1 feeder keeps its load-sized 10 mm²; the 131 m
-      // Lantai 30 feeder is raised, flagged with its reason.
-      expect(feeder(r.sys, 0).cable.csaMm2, 10);
+      // The short Lantai 1 feeder needs no VD raise; backlog B-1 grows its
+      // load-sized 10 mm² to 16 mm² (Iz 68) for its 1.6 × 32 ⇒ 63 A
+      // selectivity floor. The 131 m Lantai 30 feeder is raised, flagged with
+      // its reason.
+      expect(feeder(r.sys, 0).cable.csaMm2, 16);
+      expect(feeder(r.sys, 0).cableRaisedForSelectivity, isTrue);
       expect(feeder(r.sys, 0).cableRaisedForDownstreamVd, isFalse);
       final top = feeder(r.sys, kTowerFloors - 1);
       expect(top.cable.csaMm2, greaterThan(10));
@@ -337,6 +340,11 @@ void main() {
                   loadKind: LoadKind.feeder,
                   feedsPanelId: 'e',
                   length: Length(10),
+                  // Backlog B-1 (2026-11-13): the load-sized 10 mm² feeder is
+                  // pinned (an auto-sized one now grows to 16 mm² for its
+                  // 1.6 × 32 ⇒ 63 A selectivity floor, which lowers the
+                  // lift's genset loop and moves this fixture's premise).
+                  cableOverrideMm2: 10,
                 ),
               ],
             ),

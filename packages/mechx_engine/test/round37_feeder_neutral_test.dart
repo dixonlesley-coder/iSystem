@@ -29,6 +29,12 @@ ElectricalProject _project({bool ups = true}) => ElectricalProject(panels: [
             loadKind: LoadKind.feeder,
             feedsPanelId: 'ups',
             cableType: 'NYY',
+            // Backlog B-1 (2026-11-13): an auto-floored feeder now grows its
+            // cable for selectivity (which would carry the neutral by
+            // itself); the neutral rule is pinned on the load-sized 63 A
+            // device (57.7 A ⇒ rung 63), stated as an override so no floor
+            // applies.
+            breakerOverrideA: Current(63),
             length: Length(30)),
       ]),
       ElectricalPanel(id: 'ups', name: 'UPS', circuits: [

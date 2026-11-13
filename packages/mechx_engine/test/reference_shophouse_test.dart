@@ -670,24 +670,27 @@ void main() {
       // 4680 / 5329.4 = 0.8782; Ib = 5329.4 / 220 = 24.225 A on ONE line
       // (the fed board is 1-phase). Load-sized device 25 A; Iz_req =
       // max(25, 1.25 × 24.225 = 30.28) ⇒ 6 mm² (Iz 36; 4 mm² 28 < 30.28),
-      // NYY 3 cores. Selectivity floor 1.6 × 25 (sub incomer) = 40 A,
-      // capped at the largest rung Iz 36 protects ⇒ MCB 32 A C, 1P.
-      // VD = 2 × 24.225 × L × (3.69 × 0.8782 + 0.08 × 0.4784) / 1000 =
-      // 0.15885 × L V: 15 / 20 / 25 m ⇒ 2.38 / 3.18 / 3.97 V ⇒ / 220 =
-      // 1.08 / 1.44 / 1.81 %.
+      // NYY 3 cores. Selectivity floor 1.6 × 25 (sub incomer) = 40 A.
+      // Backlog B-1: the cable is auto-sized, so it grows until Iz carries
+      // the 40 A rung: 6 mm² Iz 36 < 40 ⇒ 10 mm² (Iz 50) ⇒ MCB 40 A C, 1P;
+      // Iz_req = max(In 40, 30.28) = 40.
+      // VD = 2 × 24.225 × L × (2.19 × 0.8782 + 0.08 × 0.4784) / 1000 =
+      // 0.095 × L V: 15 / 20 / 25 m ⇒ 1.43 / 1.90 / 2.38 V ⇒ / 220 =
+      // 0.65 / 0.86 / 1.08 %. (Was 6 mm², 32 A, 1.08 / 1.44 / 1.81 %.)
       const lines = {'A': PhaseLine.l1, 'B': PhaseLine.l2, 'C': PhaseLine.l3};
-      const vd = {'A': (2.38, 1.08), 'B': (3.18, 1.44), 'C': (3.97, 1.81)};
+      const vd = {'A': (1.43, 0.65), 'B': (1.90, 0.86), 'C': (2.38, 1.08)};
       for (final u in kShopUnits) {
         final f = pp.circuits.firstWhere((c) => c.circuitId == shopFeederId(u));
         expect(f.loadW, closeTo(4680, 1e-6), reason: u);
         expect(f.designCurrentExactA, closeTo(24.225, 5e-4), reason: u);
         expect(f.threePhase, isFalse, reason: u);
         expect(f.phase.name, lines[u]!.name, reason: u);
-        expect(f.breaker.ratingA.amperes, 32, reason: u);
+        expect(f.breaker.ratingA.amperes, 40, reason: u);
         expect(f.breaker.curve.name, 'c', reason: u);
-        expect(f.cable.csaMm2, 6, reason: u);
-        expect(f.cable.deratedIz.amperes, 36, reason: u);
-        expect(f.cable.izRequired!.amperes, closeTo(30.28, 5e-3), reason: u);
+        expect(f.cable.csaMm2, 10, reason: u);
+        expect(f.cable.deratedIz.amperes, 50, reason: u);
+        expect(f.cable.izRequired!.amperes, closeTo(40, 5e-3), reason: u);
+        expect(f.cableRaisedForSelectivity, isTrue, reason: u);
         expect(f.grounding.cableType, 'NYY', reason: u);
         expect(f.grounding.cores, 3, reason: u);
         expect(f.voltageDrop.dropV, closeTo(vd[u]!.$1, 1e-9), reason: u);
@@ -696,11 +699,11 @@ void main() {
     });
 
     test('cumulative VD at the sub-board ways = feeder % + own %', () {
-      const feederPct = {'A': 1.08, 'B': 1.44, 'C': 1.81};
+      const feederPct = {'A': 0.65, 'B': 0.86, 'C': 1.08};
       for (final u in kShopUnits) {
         for (final r in sys.panels[shopPanelId(u)]!.circuits) {
-          // e.g. A Lampu Lt3 0.22 + 1.08 = 1.30; C Stop kontak Lt3 0.74 +
-          // 1.81 = 2.55; every one within its 3 % / 5 % limit.
+          // e.g. A Lampu Lt3 0.22 + 0.65 = 0.87; C Stop kontak Lt3 0.74 +
+          // 1.08 = 1.82; every one within its 3 % / 5 % limit.
           expect(r.cumulativeDropPercent,
               closeTo(r.voltageDrop.dropPercent + feederPct[u]!, 1e-9),
               reason: r.circuitId);
@@ -713,16 +716,19 @@ void main() {
           .circuits
           .firstWhere((c) => c.circuitId == 'c_${id}_$u')
           .cumulativeDropPercent;
-      expect(cum('lampu_lt3', 'A'), closeTo(1.30, 1e-9));
-      expect(cum('kk_lt3', 'C'), closeTo(2.55, 1e-9));
+      expect(cum('lampu_lt3', 'A'), closeTo(0.87, 1e-9));
+      expect(cum('kk_lt3', 'C'), closeTo(1.82, 1e-9));
     });
 
     test('sub-board bus fault through the feeder; sub incomers', () {
-      // Origin 10 kA: Zs = 400 / (√3 × 10 000) = 0.023094 Ω, X/R 7. Feeder
-      // 6 mm² at 15 m, R × (234.5 + 20) / (234.5 + 70) = × 254.5 / 304.5
-      // (cold, maximum fault), L + N loop ⇒ 220 / 0.0991 = 2.22 kA; B (20 m)
-      // 1.70 kA; C (25 m) 1.38 kA.
-      const ka = {'A': 2.22, 'B': 1.70, 'C': 1.38};
+      // Origin 10 kA: Zs = 400 / (√3 × 10 000) = 0.023094 Ω, X/R 7
+      // (R 0.003266, X 0.022863). Feeder 10 mm² (B-1) at 15 m: R = 2.19 ×
+      // 0.015 × 254.5 / 304.5 (cold, maximum fault) = 0.027456 Ω, X 0.0012 Ω
+      // per conductor; L + N loop R 0.003266 + 2 × 0.027456 = 0.058178,
+      // X 0.022863 + 0.0024 = 0.025263 ⇒ |Z| 0.063426 ⇒ 220 / 0.063426 =
+      // 3.47 kA; B (20 m) 220 / 0.080801 = 2.72 kA; C (25 m) 220 / 0.098519
+      // = 2.23 kA. (Was 2.22 / 1.70 / 1.38 on 6 mm².)
+      const ka = {'A': 3.47, 'B': 2.72, 'C': 2.23};
       expect(adv.fault.panels[kShopMainPanelId]!.prospectiveFaultkA,
           closeTo(10.0, 1e-9));
       for (final u in kShopUnits) {
@@ -739,7 +745,7 @@ void main() {
     });
 
     test('PP Ruko: lines 24.2 each, 14 040 W / 15 988 VA, incomer 50 A on '
-        'the service floor, daya 23 000 VA, non-selective ×3', () {
+        'the service floor, daya 23 000 VA, selective feeders', () {
       final pp = sys.panels[kShopMainPanelId]!;
       // 3 × 4680 = 14 040 W; 3 × 5329.4 = 15 988 VA. One sub-board per line.
       expect(pp.demandW, closeTo(14040, 1e-6));
@@ -759,7 +765,8 @@ void main() {
       expect(adv.recommendedDayaVa, 23000);
       expect(adv.recommendedDayaThreePhase, isTrue);
       final warnings = [...sys.warnings, ...adv.fault.warnings, ...adv.warnings];
-      expect(warnings.where((w) => w.code == 'non-selective').length, 3);
+      // Backlog B-1: every feeder reaches 1.6 × its fed incomer (was ×3).
+      expect(warnings.where((w) => w.code == 'non-selective'), isEmpty);
       expect(warnings.where((w) => w.code == 'service-capacity-below-demand'),
           isEmpty);
     });

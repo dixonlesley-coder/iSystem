@@ -61,6 +61,11 @@ void main() {
           cosPhi: 0.85,
           length: Length(50),
           feedsPanelId: 'SP',
+          // Backlog B-1 (2026-11-13): an AUTO-sized feeder cable would now
+          // grow for its selectivity floor (25 ⇒ 50 mm², 125 A); this group
+          // pins the load-sized 25 mm² as a user-fixed cable so the decay /
+          // Zs derivations and the capped residual below keep their premise.
+          cableOverrideMm2: 25,
         ),
       ],
     );

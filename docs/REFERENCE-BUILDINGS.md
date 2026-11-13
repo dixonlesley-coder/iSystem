@@ -59,7 +59,7 @@ _(empty)_
 - Regression tests for its review fixes: `packages/mechx_engine/test/reference_shophouse_regression_test.dart` (F2, F3) and `test/reference_shophouse_regression_test.dart` (F1, F4).
 - Run either reference test with `REF_DUMP=1` to print every solved figure.
 
-**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 4 × `non-selective` (the three unit feeders and the auto-wired MEP feeder on `PP Ruko`: the 1.6 × discrimination floor over the fed incomer is capped by the feeder cable's Iz — see Backlog f), 5 `// VERIFY` advisories. Expected absent: `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
+**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 5 `// VERIFY` advisories. Expected absent: `non-selective` (B-1: the unit feeders grow to 10 mm² / 40 A and the MEP feeder to 5 × 6 / 32 A for the 1.6 × floor), `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
 
 **Fixed by its review (2026-11-13).**
 - **F1:** units B and C were solved as upfeed "extra supply components" from their ground tanks (no gravity field, RT at −146 kPa, booster sized 36.998 m). Every roof-tank component of a downfeed project is now its own downfeed system (`extraDownfeedTanksProvider`); B = C = A.
@@ -73,13 +73,13 @@ _(empty)_
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
 - **(e) Transfer pump label.** The transfer pump's electrical source reads "supply pump" (`_sourceFor` maps every pump to `supplyPump`).
-- **(f) Feeder discrimination.** Every feeder way on `PP Ruko` (and the auto-wired MEP feeder) raises `non-selective`: the feeder breaker is already at the largest rung its auto-sized cable protects. The fixture was not tuned to hide it.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
 - **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
 
 ### Backlog closed (2026-11-13)
 
 - **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
+- **(f) Feeder discrimination — closed by B-1.** An auto-sized feeder cable now grows until its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A (VD 0.65 / 0.86 / 1.08 %), MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A. No `non-selective` is left.
 
 
 ## 3. Office (kantor 4 lantai)
@@ -101,17 +101,15 @@ _(empty)_
 
 **Deliberate expected findings.**
 - `life-safety-not-essential`: there is no genset in this building.
-- 5 × `non-selective`: the four floor feeders and the MEP feeder.
 - `standpipe-prv-hose-valves:FP:0-3` info: every hose valve's static is above 1207 kPa (1341.5..1223.8), so each is designated a pressure-regulating hose valve set to 690 kPa (backlog A-3). The churn 1353.3 kPa sets the PN16 class of the pipework downstream of FP; no `fire-system-over-pressure` (since A-3 it warns only above 2413 kPa).
 - `fire-pump-protection` info.
 - `fire-tank-capacity-unset:FT` info: the fire-water reserve 31.5451 L/s x 1800 s = 56 781 L (backlog A-2).
 - The NFPA 20 standby-pump recommendation.
-- `enclosure-temp-rise-exceeded` on LVMDP: the 250 A incomer on the 164 kVA service floor.
 - 12 × `drainage-laid-steeper` and `drainage-cleanout` at D0.
 - `terminal-velocity` on RG1 (backlog F-2): 925 L/s on one 600 x 600 = 3.212 m/s > the office return limit 3.0 m/s; the room's own bank is 2 grilles.
 - 5 `// VERIFY` advisories.
 
-**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `air-duct-unsized` (backlog F-4), `unfed-panel`, any `pressure-zone`.
+**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `air-duct-unsized` (backlog F-4), `unfed-panel`, any `pressure-zone`, `non-selective` (B-1: floor feeders 5 × 16 / 63 A, MEP feeder FRC 70 / 200 A), `enclosure-temp-rise-exceeded` (B-1: the LVMDP estimate falls to 26.1 K).
 
 **Fixed by its review (2026-11-13).**
 - **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout (and since backlog A-5 FP→S0 itself carries 4.714 L/s on its DN125).
@@ -136,6 +134,7 @@ _(empty)_
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
 - **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m); 57.744 m after A-5.
+- **Feeder discrimination (5 x `non-selective`) — closed by B-1.** Floor feeders 5 x 6 / 32 A → 5 x 16 (Iz 68) / 63 A (VD 0.15 / 0.21 / 0.28 / 0.34 %); MEP feeder FRC 35 / 125 A → FRC 70 (Iz 222) / 200 A.
 
 ## 4. Apartment (rumah susun 12 lantai)
 
@@ -178,6 +177,10 @@ _(empty)_
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
 - **(i) Genset rating ignores ADS on the alternator fault.** The recommended genset rating (`sizeGenerator`: running kVA, motor-start floor) does not consider automatic disconnection on the alternator's own fault level. Before A1 the app's recommended 50 kVA set (alternator fault 0.6 kA) failed `ads-disconnection-on-genset` on three ways (lift Zs 0.573, FP and FPS 0.558 > 0.437 Ω). Only A1's 75 kW fire pump, which raised the start floor to 300 kVA, cleared it.
 
+### Backlog closed (2026-11-13)
+
+- **Feeder discrimination — B-1.** Feeder PP-E grows to FRC 4 x 185 + 95 / 400 A (VD 0.48 → 0.22 %); Feeder to MEP keeps `non-selective` (genset ADS refusal, see the findings above).
+
 ## 5. Tower (gedung kantor 30 lantai)
 
 **What it is.**
@@ -196,7 +199,7 @@ _(empty)_
 - Hand-value pins (pass 3): the engine groups in `reference_tower_test.dart` (flush-valve cold water, gravity field, PRVs, hot water, drainage, vent, rainwater) and the app group in `reference_tower_app_test.dart` (zones and PRVs, movers, recirculation, fire, air, floor boards, PP-E / MEP / LVMDP, transformer, genset, capacitor bank, Review findings).
 
 **Deliberate expected findings** (final state: 1600 kVA transformer, 800 kVA genset, 250 kvar bank, seven PRVs drawn):
-- 4 x `non-selective`: the PP-Lt1 / PP-Lt2 feeders (50 A vs the 32 A incomers), Feeder PP-E and Feeder to MEP, each at the largest rung its cable protects.
+- 2 x `non-selective`: Feeder PP-E (2 x 185 mm² FRC parallel: no single run carries its 1250 A floor rung) and Feeder to MEP (300 mm² FRC, the ladder top, Iz 553 < its 800 A rung). B-1 cured PP-Lt1 / PP-Lt2 (5 x 10 / 50 A → 5 x 16 / 63 A).
 - 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
 - `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m = 2893.6 kPa > 2413: since backlog A-3 worded as zone-split guidance) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
 - Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, `drainage-cleanout`, 5 `// VERIFY`.
@@ -217,7 +220,6 @@ _(empty)_
 - **(c) Heater cold feed on the valve curve.** The heater's cold make-up (4.5 UBAP) is read on its component's flush-VALVE curve (0.3975 L/s) while the hot side it feeds uses the tank curve (0.2250 L/s) for the same draw.
 - **(d) No MV-side device sizing.** The MV panel (incomer, metering, transformer feeder) is named in the note and drawn as a box, never rated.
 - **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
-- **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
 - **(i) Downstream-VD raise always enlarges the feeder.** The T3 raise for a board's cumulative drop always grows the FEEDER (PP-Lt30 ends at 95 mm² over 131 m), even where raising the short final way that owns most of the drop would cost far less. No least-cost split between feeder and final way is attempted.
 
 ### Backlog closed (2026-11-13)
@@ -225,6 +227,7 @@ _(empty)_
 - **`air-duct-unsized` on auto-sized ducts — backlog F-4.** The info now means a duct with NO size (neither auto nor chosen): 14 → 0 (all ducts are auto-sized within their limits).
 - **(g) AHU static, two figures — backlog F-3.** The Rooms inspector, the equipment schedule and the calc report print ONE duty per room (`roomAirHeadlineProvider`): AHU1 roots the drawn supply / return system, so the Kantor headline is the drawn-duct duty 327.68 Pa (2.2 kW); the room estimate (15 m assumed run, 303.93 Pa since F-1) is no longer printed beside it, and is labelled "estimate (no ducts drawn)" only for a room no drawn system serves. The toilet's headline is EF1's drawn 38.67 Pa.
 - **(f) Room return-bank face velocity — backlog F-2.** One limit per terminal kind and application (`terminalFaceVelocityMax`) for both the room sizing and the checker: office return min(3.0, 4.0) = 3.0 m/s governs. ceil(3.7 / (0.36 x 0.8 x 3.0)) = 5 return grilles; the fixture now draws RG1..RG5 (740 L/s each, 600 x 600, 2.569 m/s), return chain 500x350 / 700x450 / 900x600 / 1000x700 / 1200x700, return static 35.06 → 36.29 Pa, AHU 326.44 → 327.68 Pa (2.2 kW). The toilet's exhaust grilles (retail, 3.5 m/s) are 300 x 150 (3.426 m/s).
+- **(h) `non-selective` on auto-sized feeders — closed by B-1** where the single-run ladder reaches: PP-Lt1 / PP-Lt2 grow to 5 x 16 / 63 A (VD 0.25 / 0.32 %). PP-E (parallel runs) and the MEP feeder (300 mm², ladder top) keep the warning.
 
 ## Drawing review (2026-11-13)
 

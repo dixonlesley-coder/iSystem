@@ -167,6 +167,12 @@ class ElectricalCircuitResult {
   /// ENGINE floor, never the engineer's cable override.
   final bool cableRaisedForDownstreamVd;
 
+  /// Backlog B-1 (2026-11-13) — true when this AUTO-sized FEEDER's conductor
+  /// was stepped up the section ladder so its device can reach the
+  /// selectivity floor (1.6 × the fed board's incomer) with In ≤ Iz: an
+  /// ENGINE raise (`raised-for-selectivity`), never the engineer's override.
+  final bool cableRaisedForSelectivity;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -191,6 +197,7 @@ class ElectricalCircuitResult {
     this.motorLeadsPeCsaMm2,
     this.cableRaisedForAds = false,
     this.cableRaisedForDownstreamVd = false,
+    this.cableRaisedForSelectivity = false,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -224,6 +231,7 @@ class ElectricalCircuitResult {
         motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
         cableRaisedForAds: cableRaisedForAds,
         cableRaisedForDownstreamVd: cableRaisedForDownstreamVd,
+        cableRaisedForSelectivity: cableRaisedForSelectivity,
       );
 }
 
