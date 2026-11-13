@@ -77,3 +77,52 @@ _(empty)_
 - **(f) Feeder discrimination.** Every feeder way on `PP Ruko` (and the auto-wired MEP feeder) raises `non-selective`: the feeder breaker is already at the largest rung its auto-sized cable protects. The fixture was not tuned to hide it.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
 - **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
+
+
+## 3. Office (kantor 4 lantai)
+
+**What it is.**
+- **Building:** four storeys of 4.0 m ("Lantai 1..4", index 0..3), one sheet per floor at 0.02 m/px.
+- **Cold water:** water meter → ground tank GT → UPFEED pump P1 → riser. On every floor a public toilet core: two flush-valve WCs, a urinal (`urinalFlushTank`; no flush-valve urinal type exists) and two lavatories. Occupancy is public.
+- **Drainage / vent / rainwater:** every fixture drains to a 4-storey soil stack and a 10 m building drain; one stack vent; two 150 m² roof drains, a downpipe and a collector.
+- **Fire (separate network):** fire tank FT → fire pump FP. FP feeds a Class I hydrant riser with one `hydrantBox` per floor, and a sprinkler riser with six heads in a line on Lantai 4. Light hazard, K 80.
+- **HVAC (Lantai 2):** one 10 × 15 m office room (Room tool, seeded 3.7 m ceiling, 6 ACH). A ducted FCU feeds four supply diffusers in a line, each stamped with ¼ of the room airflow and a 450 × 300 face; a return grille (600 × 600) carries the whole airflow.
+- **Electrical:** one 3-phase 400 V service board `LVMDP` on a declared 164 000 VA PLN connection, feeding four 3-phase floor sub-boards `PP-L1..L4` (lighting, sockets, three 1-phase AC ways each). P1, FP and FCU1 are not added by hand: the MEP sync mints the "MEP Equipment" board and its feeder.
+
+**Files.**
+- Fixture: `packages/mechx_engine/test/reference/office.dart` (`buildOffice()`, `kOfficeRooms`, `officeRoomAir()`).
+- Engine pins: `packages/mechx_engine/test/reference_office_test.dart`. This covers the flush-valve cold-water sizing, Hazen–Williams friction, the upfeed field, drainage / vent / rainwater, the fire design and index friction, the room air, and the floor sub-boards and their feeders.
+- App pins: `test/reference_office_app_test.dart`. This covers the P1 duty and SNI floors, the zone table, the fire-pump rating / duty / jockey, the FCU fan static, the MEP board and feeder, LVMDP, and the Review findings.
+- Regression tests for its review fixes: `packages/mechx_engine/test/reference_office_regression_test.dart` (O1) and `test/reference_office_regression_test.dart` (O2, O4).
+- Run either reference test with `REF_DUMP=1` to print every solved figure.
+
+**Deliberate expected findings.**
+- `life-safety-not-essential`: there is no genset in this building.
+- 5 × `non-selective`: the four floor feeders and the MEP feeder.
+- `fire-system-over-pressure:FP`: churn 1353.3 kPa > 1210.
+- `standpipe-outlet-over-pressure:FP:0-3`: every hose valve's static is above 1207 kPa.
+- `fire-pump-protection` info.
+- The NFPA 20 standby-pump recommendation.
+- `enclosure-temp-rise-exceeded` on LVMDP: the 250 A incomer on the 164 kVA service floor.
+- 12 × `drainage-laid-steeper` and `drainage-cleanout` at D0.
+- `air-duct-unsized` info: no duct size is hand-chosen.
+- 5 `// VERIFY` advisories.
+
+**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `unfed-panel`, any `pressure-zone`.
+
+**Fixed by its review (2026-11-13).**
+- **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout.
+- **O2:** on upfeed the zone table used the legacy 255 kPa budget walk and prescribed two PRV zones. It now hangs from the solved upfeed field (`upfeedZoneDatumProvider`): one zone, no PRV.
+- **O4:** the auto-wired MEP feeder carrying the fire pump was NYY, and the app flagged its own feeder. The sync now specifies it FRC (and reverts only an FRC it set).
+- **O3 (not fixed — deliberate):** the sprinkler-vs-pump judge requires lift + branch-base head only (25.56 m), while the rating basis' sprinkler point includes the sized index friction (58.211 m after O1). `docs/ENGINE-INVARIANTS.md` (audit round 8) records the judge head as a deliberate LOWER BOUND (static lift + branch-base pressure, no friction), so it was left.
+
+### Backlog (outside scope, not fixed)
+
+- **(a) Duct friction basis.** The room-air equipment estimate uses galvanised duct roughness (0.09 mm), while the drawn network uses the PU product (0.03 mm): 109.13 Pa vs 121.25 Pa for one FCU.
+- **(b) Fire tank volume.** No fire-water tank volume is computed anywhere.
+- **(c) Urinal type.** There is no flush-valve urinal type.
+- **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
+- **(e) Churn over-pressure.** The Class I 690 kPa residual drives a churn over-pressure in a 4-storey building, with no pressure-restricting device modelled.
+- **(f) Two judge heads (O3).** The sprinkler-vs-pump judge and the rating basis give two heads for one requirement (the deliberate audit-round-8 lower bound).
+- **(g) Branch run prints the pump's flow (O1).** The branch run FP→S0 keeps the pump's rated 31.545 L/s on DN125 (the Round-62 stored-flow rule), not the sprinkler system's 4.714 L/s.
+- **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
