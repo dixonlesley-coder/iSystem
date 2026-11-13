@@ -209,6 +209,78 @@ def page_words(pdf):
     return res
 
 
+def key_table_hits(pdf):
+    """Fix round F4 - {page: [intruding text]} for every KETERANGAN PIPA /
+    PIPE KEY table on a plan: glyphs that are not the table's own and come
+    within half a text height of the table (or print inside it). Works on
+    single glyphs (pdfplumber's word grouping garbles a touching label)."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            up = [c for c in pg.chars if c.get('upright', True)]
+            rows = defaultdict(list)
+            for c in up:
+                rows[round(c['top'], 1)].append(c)
+            titles = []
+            for top, cs in rows.items():
+                cs.sort(key=lambda c: c['x0'])
+                txt = ''.join(c['text'] for c in cs)
+                for m in re.finditer('KETERANGAN PIPA', txt):
+                    titles.append(cs[m.start()])
+            hits = []
+            for t in titles:
+                ts = t['bottom'] - t['top']
+                hz = [l for l in pg.lines if abs(l['x0'] - t['x0']) < 1.0
+                      and abs(l['top'] - l['bottom']) < 0.5
+                      and t['bottom'] - 1 <= l['top'] <= t['bottom'] + 3 * ts]
+                if not hz:
+                    continue
+                x1 = max(l['x1'] for l in hz)
+                gtop = min(l['top'] for l in hz)
+                vt = [l for l in pg.lines if abs(l['x0'] - l['x1']) < 0.5
+                      and t['x0'] - 1 <= l['x0'] <= x1 + 1
+                      and abs(l['top'] - gtop) < 1.0]
+                if not vt:
+                    continue
+                bot = max(l['bottom'] for l in vt)
+                cols = sorted({l['x0'] for l in vt})
+                strict = (t['x0'] - 0.5, t['top'] - 0.2 * ts - 0.5,
+                          x1 + 0.5, bot + 0.5)
+                m = 0.5 * ts
+                infl = (strict[0] - m, strict[1] - m, strict[2] + m,
+                        strict[3] + m)
+
+                def meets(b, r):
+                    return (b[0] < r[2] and r[0] < b[2] and b[1] < r[3]
+                            and r[1] < b[3])
+
+                def within(c):
+                    return (c['x0'] >= strict[0] and c['x1'] <= strict[2]
+                            and c['top'] >= strict[1]
+                            and c['bottom'] <= strict[3])
+                # The table's own rows: the title row + every row that has a
+                # glyph starting a column (KEY / SIZE / LENGTH cell text).
+                own_tops = {round(t['top'], 1)}
+                for c in up:
+                    if within(c) and any(abs(c['x0'] - (x + 0.5 * ts)) < 1.0
+                                         for x in cols):
+                        own_tops.add(round(c['top'], 1))
+                bad = []
+                for c in pg.chars:
+                    b = (c['x0'], c['top'], c['x1'], c['bottom'])
+                    if not meets(b, infl) or not c['text'].strip():
+                        continue
+                    own = (c.get('upright', True) and within(c) and
+                           round(c['top'], 1) in own_tops)
+                    if not own:
+                        bad.append(c['text'])
+                if bad:
+                    hits.append(''.join(bad)[:40])
+            if hits:
+                out[i] = hits
+    return out
+
+
 def paper(w, h):
     a, b = sorted((round(w), round(h)))
     return {(595, 842): 'A4', (842, 1191): 'A3', (1191, 1684): 'A2',
@@ -477,11 +549,22 @@ def run_building(root, b):
 
     # 6 — stamped overlap warning.
     lines += ['', '## Item 6 - stamped label-overlap warning (exporter count)']
+    kt_hits = {}
+    for pdf in pdfs:
+        if re.search(r'-plan-', stem_of(pdf)):
+            for n, h in key_table_hits(pdf).items():
+                kt_hits[(stem_of(pdf), n)] = h
     for pg in pages:
         lab = f'{short(pg["stem"], project)} p{pg["page"]}'
         m = re.search(r'PERHATIAN:\s*(\d+)\s*label bertumpuk',
                       pg['text'].replace('\n', ' '))
-        if m:
+        kh = kt_hits.get((pg['stem'], pg['page']))
+        if kh:
+            # Fix round F4 - a pipe-key table touching the drawing is an
+            # overlap whatever the exporter counted.
+            emit(6, 'FAIL', lab, f'{len(kh)} pipe-key table(s) touched by '
+                 'drawing text: ' + ', '.join(f'"{x}"' for x in kh[:6]))
+        elif m:
             emit(6, 'FAIL', lab, f'sheet stamps {m.group(1)} overlapping '
                  'labels')
         elif re.search(r'-(elec-)?plan-', pg['stem']):

@@ -842,6 +842,11 @@ const double kPlanKeyedLeaderMaxFactor = 4.0;
 /// short local tie (≈ 19 mm at 9 pt).
 const double kPlanKeyTagLeaderMaxFactor = 6.0;
 
+/// Fix round F4 (2026-11-13) — the clear paper a plan's KETERANGAN PIPA /
+/// PIPE KEY table keeps round it, × text size: no mark, marker text, label
+/// or run comes nearer (≈ 3 mm at 9 pt), unless no such spot exists.
+const double kPlanKeyTableMarginFactor = 1.0;
+
 /// Drawing-review D5 — the keyed texts of one plan sheet (text → key, in key
 /// order; identical typical texts share one key).
 class PlanKeyRegistry {
@@ -897,10 +902,24 @@ PlanKeyTable? placePlanKeyTable(
   double blockH(int n) => (n + 2) * pitch + 0.5 * ts;
   // Is the box [b] clear of every mark, run and grid line (and of the blocks
   // already chosen)?
-  bool clear(LabelBox b) =>
-      !layout.hitsBox(b) &&
-      !layout.hitsRun(b, clearance: 0.25 * ts) &&
-      !layout.hitsGrid(b);
+  // Fix round F4 (2026-11-13) — the spot keeps a [margin] of clear paper
+  // round the table: every mark, marker text, rotated label (all registered
+  // boxes / label quads) and run must stay that far off, so a riser's
+  // "DN / UP" mark or a label never TOUCHES the table even where the glyph
+  // estimate runs short. The margin-free test is the last resort only.
+  var margin = kPlanKeyTableMarginFactor * ts;
+  bool clear(LabelBox b) {
+    final g = (
+      minX: b.minX - margin,
+      minY: b.minY - margin,
+      maxX: b.maxX + margin,
+      maxY: b.maxY + margin,
+    );
+    return !layout.hitsBox(g) &&
+        !layout.hitsRun(b, clearance: math.max(0.25 * ts, margin)) &&
+        !layout.hitsGrid(b);
+  }
+
   (double, double)? spot(double h) {
     for (var yTop = bounds.maxY; yTop - h >= bounds.minY; yTop -= ts) {
       for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += ts) {
@@ -916,29 +935,32 @@ PlanKeyTable? placePlanKeyTable(
   // blocks (each with its own heading row) in separate clear spots; none
   // ⇒ one block below [bounds], counted unresolved (the honest stamp).
   List<(double, double, int, int)>? plan;
-  for (var k = 1; k <= 4 && plan == null; k++) {
-    final per = (rows.length / k).ceil();
-    final chosen = <(double, double, int, int)>[];
-    final boxes = <LabelBox>[];
-    var ok = true;
-    for (var i = 0; i < rows.length; i += per) {
-      final n = math.min(per, rows.length - i);
-      final h = blockH(n);
-      final at = spot(h);
-      if (at == null) {
-        ok = false;
-        break;
+  for (var pass = 0; pass < 2 && plan == null; pass++) {
+    if (pass == 1) margin = 0;
+    for (var k = 1; k <= 4 && plan == null; k++) {
+      final per = (rows.length / k).ceil();
+      final chosen = <(double, double, int, int)>[];
+      final boxes = <LabelBox>[];
+      var ok = true;
+      for (var i = 0; i < rows.length; i += per) {
+        final n = math.min(per, rows.length - i);
+        final h = blockH(n);
+        final at = spot(h);
+        if (at == null) {
+          ok = false;
+          break;
+        }
+        final box =
+            (minX: at.$1, minY: at.$2 - h, maxX: at.$1 + tableW, maxY: at.$2);
+        layout.addBox(box);
+        boxes.add(box);
+        chosen.add((at.$1, at.$2, i, n));
       }
-      final box =
-          (minX: at.$1, minY: at.$2 - h, maxX: at.$1 + tableW, maxY: at.$2);
-      layout.addBox(box);
-      boxes.add(box);
-      chosen.add((at.$1, at.$2, i, n));
+      for (final bx in boxes) {
+        layout.boxes.remove(bx);
+      }
+      if (ok) plan = chosen;
     }
-    for (final bx in boxes) {
-      layout.boxes.remove(bx);
-    }
-    if (ok) plan = chosen;
   }
   if (plan == null) {
     layout.markUnresolved();

@@ -1,6 +1,9 @@
 // Drawing review fix round (2026-11-13) — F1..F7 from
 // docs/DRAWING-REVIEW-RECORD.md, each pinned to the pure rule it broke.
+import 'dart:math' as math;
+
 import 'package:mechx_engine/report/electrical_plan_export.dart';
+import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:test/test.dart';
 
@@ -18,8 +21,8 @@ void main() {
       for (var t = 1.0; t < 7.2; t += 0.013) {
         final w = sldLegibilityWarning(t);
         if (w == null) continue;
-        final shown =
-            double.parse(RegExp(r'tercetak ([\d.]+) pt').firstMatch(w)!.group(1)!);
+        final shown = double.parse(
+            RegExp(r'tercetak ([\d.]+) pt').firstMatch(w)!.group(1)!);
         expect(shown, lessThan(7.0), reason: 'pt=$t');
       }
     });
@@ -28,7 +31,10 @@ void main() {
   group('F1/F2 electrical layout tags stay in the frame and never stack', () {
     const area = (minX: 0.0, minY: 0.0, maxX: 400.0, maxY: 300.0);
     bool hit(a, b) =>
-        a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+        a.minX < b.maxX &&
+        b.minX < a.maxX &&
+        a.minY < b.maxY &&
+        b.minY < a.maxY;
     bool inside(b) =>
         b.minX >= area.minX &&
         b.maxX <= area.maxX &&
@@ -83,7 +89,8 @@ void main() {
         expect(inside(boxes[i]), isTrue);
         for (var j = 0; j < 3; j++) {
           final n = d.nodes[j];
-          final sym = (minX: n.x - 5, minY: n.y - 5, maxX: n.x + 5, maxY: n.y + 5);
+          final sym =
+              (minX: n.x - 5, minY: n.y - 5, maxX: n.x + 5, maxY: n.y + 5);
           expect(hit(boxes[i], sym), isFalse, reason: 'tag $i on symbol $j');
           if (i != j) expect(hit(boxes[i], boxes[j]), isFalse);
         }
@@ -133,11 +140,37 @@ void main() {
         ElectricalPlanNode(
             x: 0, y: 0, tag: 'L', kind: ElectricalPlanNodeKind.load),
       ]);
-      final dxf = electricalPlanToDxf(
-          data: d, projectName: 'P', sheetName: 'S');
+      final dxf =
+          electricalPlanToDxf(data: d, projectName: 'P', sheetName: 'S');
       expect(dxf, contains('Beban / titik'));
       expect(dxf.contains('\nKabel\n'), isFalse);
       expect(dxf.contains('\nPanel\n'), isFalse);
+    });
+  });
+
+  group('F4 the pipe-key table keeps clear paper round it', () {
+    test('a marker box beside the first spot pushes the table a margin off',
+        () {
+      const ts = 9.0;
+      final layout = PlanLabelLayout();
+      // A riser "DN / UP" mark sitting where the scan starts (top-left).
+      const mark = (minX: 250.0, minY: 560.0, maxX: 280.0, maxY: 600.0);
+      layout.addBox(mark);
+      final keys = PlanKeyRegistry()..keyFor('50-CW-PPR · 3.0 m');
+      final kt = placePlanKeyTable(layout, keys,
+          textSize: ts,
+          bounds: (minX: 0.0, minY: 0.0, maxX: 800.0, maxY: 600.0))!;
+      final table = layout.boxes.last;
+      final gapX = table.minX >= mark.maxX
+          ? table.minX - mark.maxX
+          : (mark.minX >= table.maxX ? mark.minX - table.maxX : -1.0);
+      final gapY = table.maxY <= mark.minY
+          ? mark.minY - table.maxY
+          : (mark.maxY <= table.minY ? table.minY - mark.maxY : -1.0);
+      expect(math.max(gapX, gapY),
+          greaterThanOrEqualTo(kPlanKeyTableMarginFactor * ts - 1e-9));
+      expect(kt.texts.first.text, 'KETERANGAN PIPA / PIPE KEY');
+      expect(layout.unresolvedCount, 0);
     });
   });
 }

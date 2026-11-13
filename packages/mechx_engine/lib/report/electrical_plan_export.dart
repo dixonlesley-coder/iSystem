@@ -209,7 +209,8 @@ ElectricalPlanData buildElectricalPlanData({
   // The placement a board's unplaced items are reported at (see above).
   LayoutPos? homeOf(String id) {
     final seen = <String>{};
-    for (String? cur = id; cur != null && seen.add(cur);
+    for (String? cur = id;
+        cur != null && seen.add(cur);
         cur = feedingBoardOf[cur]) {
       final pos = panelById[cur]?.layoutPos;
       if (pos != null) return pos;
@@ -316,8 +317,8 @@ ElectricalPlanData buildElectricalPlanData({
         // when only ONE end is here it becomes an off-sheet riser mark there.
         final target = panelById[c.feedsPanelId];
         final tpos = target?.layoutPos;
-        final routeEss = ess.contains(p.id) ||
-            (target != null && ess.contains(target.id));
+        final routeEss =
+            ess.contains(p.id) || (target != null && ess.contains(target.id));
         if (onSheet(pos) && onSheet(tpos)) {
           routes.add(ElectricalPlanRoute(
             x1: pos!.x,
@@ -331,8 +332,7 @@ ElectricalPlanData buildElectricalPlanData({
           offSheetRiser(pos!, tpos, 'ke', tagOf(target), routeEss,
               from: pos, to: tpos);
         } else if (onSheet(tpos) && target != null) {
-          offSheetRiser(tpos!, pos, 'dari', tag, routeEss,
-              from: pos, to: tpos);
+          offSheetRiser(tpos!, pos, 'dari', tag, routeEss, from: pos, to: tpos);
         }
         continue;
       }
@@ -523,7 +523,8 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     final sDy = panel ? z.panelSubDy : z.loadSubDy;
     final gapR = panel ? z.panelW / 2 + z.panelTagGap : z.loadTagGap;
     final hw = panel ? z.panelW / 2 : z.loadR;
-    final w = math.max(textW(nd.tag, tS), nd.sub == null ? 0.0 : textW(nd.sub!, sS));
+    final w =
+        math.max(textW(nd.tag, tS), nd.sub == null ? 0.0 : textW(nd.sub!, sS));
     final top = tDy + tS;
     final bot = nd.sub == null ? tDy - 0.25 * tS : sDy - 0.25 * sS;
     final h = top - bot;
@@ -938,13 +939,17 @@ Uint8List electricalPlanToPdf({
   void circle(double cx, double cy, double r, {bool fill = false}) {
     const k = 0.5523;
     cs.writeln('${_n(cx + r)} ${_n(cy)} m');
-    cs.writeln('${_n(cx + r)} ${_n(cy + k * r)} ${_n(cx + k * r)} ${_n(cy + r)} '
+    cs.writeln(
+        '${_n(cx + r)} ${_n(cy + k * r)} ${_n(cx + k * r)} ${_n(cy + r)} '
         '${_n(cx)} ${_n(cy + r)} c');
-    cs.writeln('${_n(cx - k * r)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + k * r)} '
+    cs.writeln(
+        '${_n(cx - k * r)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + k * r)} '
         '${_n(cx - r)} ${_n(cy)} c');
-    cs.writeln('${_n(cx - r)} ${_n(cy - k * r)} ${_n(cx - k * r)} ${_n(cy - r)} '
+    cs.writeln(
+        '${_n(cx - r)} ${_n(cy - k * r)} ${_n(cx - k * r)} ${_n(cy - r)} '
         '${_n(cx)} ${_n(cy - r)} c');
-    cs.writeln('${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
+    cs.writeln(
+        '${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
         '${_n(cx + r)} ${_n(cy)} c');
     cs.writeln(fill ? 'f' : 'S');
   }
@@ -969,8 +974,8 @@ Uint8List electricalPlanToPdf({
   // holds whether or not the sheet stamps one.
   final noteCols = <List<String>>[];
   if (data.unplaced.isNotEmpty) {
-    final perCol = math.max(
-        1, ((notesTop - overlapLine - notesFloor) / noteLine).floor());
+    final perCol =
+        math.max(1, ((notesTop - overlapLine - notesFloor) / noteLine).floor());
     final rows = ['BELUM DITEMPATKAN:', for (final u in data.unplaced) '- $u'];
     for (var i = 0; i < rows.length; i += perCol) {
       noteCols.add(rows.sublist(i, math.min(rows.length, i + perCol)));
@@ -1154,8 +1159,8 @@ Uint8List electricalPlanToPdf({
             titleTextOverride: blockTitle,
             dateTextOverride: blockDate)
         .ops);
-    cs.write(
-        pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
+    cs.write(pdfNorthArrow(chrome,
+        cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
   if (pointsPerMeter != null) {
     // drafting-9: on a framed (chrome) sheet the bar sits kScaleBarFrameInset
@@ -1202,9 +1207,8 @@ String electricalPlanToDxf({
   double? metersPerPixel,
   int? plottedScaleDenominator,
 }) {
-  final world = metersPerPixel != null &&
-      metersPerPixel.isFinite &&
-      metersPerPixel > 0;
+  final world =
+      metersPerPixel != null && metersPerPixel.isFinite && metersPerPixel > 0;
   final mmPerPx = world ? metersPerPixel * 1000 : 1.0;
   // Paper-mm → model units: the plotted-scale denominator of the drawing's mm
   // extent on A3 (the ladder the plan PDF snaps to). Legacy annotation sizes
@@ -1369,8 +1373,7 @@ String electricalPlanToDxf({
     text(layers.text, t.tagX, -t.tagY, nd.tag,
         size: panel ? a(12) : a(9), color: col);
     if (nd.sub != null) {
-      text(layers.text, t.tagX, -t.subY, nd.sub!,
-          size: panel ? a(8) : a(7));
+      text(layers.text, t.tagX, -t.subY, nd.sub!, size: panel ? a(8) : a(7));
     }
   }
 
@@ -1476,8 +1479,7 @@ String electricalPlanToDxf({
   // Round 27 (export-files-2-4) — no R2000 $INSUNITS / R14 $MEASUREMENT in
   // an AC1009 file: the world-mm drawing states its plotted 1 : N on the
   // title block's SCALE row instead.
-  const header =
-      '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n';
+  const header = '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n';
   return header + tables + b.toString();
 }
 
@@ -1489,8 +1491,10 @@ List<(String, String)> _dxfChromeRows(DrawingChrome? chrome,
     if (has(chrome.clientName)) ('CLIENT', chrome.clientName!),
     if (has(chrome.drawingNumber)) ('DWG NO', chrome.drawingNumber!),
     if (has(chrome.revisionNumber)) ('REV', chrome.revisionNumber!),
-    ('SCALE',
-        scaleOverride ?? (has(chrome.scaleText) ? chrome.scaleText! : 'NTS')),
+    (
+      'SCALE',
+      scaleOverride ?? (has(chrome.scaleText) ? chrome.scaleText! : 'NTS')
+    ),
     if (has(chrome.dateString)) ('DATE', chrome.dateString!),
     if (has(chrome.drawnBy)) ('DRAWN', chrome.drawnBy!),
     if (has(chrome.checkedBy)) ('CHECKED', chrome.checkedBy!),
