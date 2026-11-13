@@ -368,14 +368,17 @@ def run_building(root, b):
         else:
             emit(2, 'PASS', nr, f'unique ({lab})')
     for pg in pages:
-        if pg['page'] != 1:
+        # The front matter is three DISTINCT drawings (G-001..G-003, the
+        # register may continue on further G-002 pages): every page of the
+        # cover file is checked; any other file by its first page.
+        is_cover = pg['stem'] == stem_of(cover[0])
+        if pg['page'] != 1 and not is_cover:
             continue
         lab = short(pg['stem'], project)
+        if is_cover:
+            lab += f' p{pg["page"]}'
         tb = pg['tb'] or {}
         nr = tb.get('DWG NO')
-        if pg['stem'] == stem_of(cover[0]):
-            emit(23, 'N-A', lab, 'front matter (cover / list / legend)')
-            continue
         if not nr:
             emit(23, 'FAIL', lab, 'no drawing number on the sheet, so it '
                  'cannot be on the drawing list')
