@@ -35,14 +35,19 @@ NetNode _n(String id, double x, double y,
 
 NetEdge _e(String id, String a, String b,
         {ServiceType s = ServiceType.fireHydrant,
-        EdgeKind k = EdgeKind.run}) =>
-    NetEdge(id: id, fromId: a, toId: b, service: s, kind: k);
+        EdgeKind k = EdgeKind.run,
+        Diameter? size}) =>
+    NetEdge(
+        id: id, fromId: a, toId: b, service: s, kind: k, sizeOverride: size);
 
 /// 13 storeys x 3.5 m, ordinary hazard, calibrated at 0.01 m/px. GT -> HP ->
 /// header FH -> a hydrant stack with a hose box per floor; with [sprinkler]
 /// a sprinkler riser off FH serves 4 heads per floor.
 Network _tower(
-    {required bool sprinkler, int stacks = 1, double sprinklerY = 400}) {
+    {required bool sprinkler,
+    int stacks = 1,
+    double sprinklerY = 400,
+    Diameter? feedMain}) {
   final nodes = <NetNode>[
     _n('GT', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
     _n('HP', 50, 0, role: NodeRole.plant, c: NodeComponent.pump),
@@ -73,9 +78,10 @@ Network _tower(
     if (sprinkler) {
       nodes.add(_n('Q$f', 150, sprinklerY, floor: f));
       edges.add(f == 0
-          ? _e('q0', 'FH', 'Q0', s: ServiceType.fireSprinkler)
+          ? _e('q0', 'FH', 'Q0',
+              s: ServiceType.fireSprinkler, size: feedMain)
           : _e('qr$f', 'Q${f - 1}', 'Q$f',
-              s: ServiceType.fireSprinkler, k: EdgeKind.riser));
+              s: ServiceType.fireSprinkler, k: EdgeKind.riser, size: feedMain));
       for (var h = 1; h <= 4; h++) {
         nodes.add(_n('H$f-$h', 150 + 300.0 * h, sprinklerY,
             floor: f, role: NodeRole.fixture, c: NodeComponent.sprinklerHead));
@@ -174,7 +180,16 @@ void main() {
       return c;
     }
 
-    final gov = build(_tower(sprinkler: true, sprinklerY: 20000));
+    // Reference tower T2 — an AUTO-SIZED 200 m feed main is now enlarged
+    // until the sprinkler point no longer exceeds the standpipe head, so the
+    // hose basis governs; the sprinkler governs only on a HAND-PICKED feed
+    // main (never enlarged), which is the case below.
+    final auto = build(_tower(sprinkler: true, sprinklerY: 20000));
+    final ba = auto.read(firePumpBasisByNodeProvider)['HP']!;
+    expect(ba.sprinklerGovernsCombined, isFalse);
+    expect(auto.read(sprinklerFeedEnlargedProvider), contains('q0'));
+    final gov = build(_tower(
+        sprinkler: true, sprinklerY: 20000, feedMain: Diameter.mm(40)));
     final b = gov.read(firePumpBasisByNodeProvider)['HP']!;
     expect(b.sprinklerGovernsCombined, isTrue);
     expect(b.head.meters, greaterThan(b.standpipe!.pumpHead.meters));
