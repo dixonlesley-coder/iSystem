@@ -182,6 +182,12 @@ enum NodeComponent {
   acCassette,
   acSplitWall,
   acDucted,
+  // Backlog G-2 (2026-11-13) — an electric storage WATER HEATER (role:
+  // plant): the source of a hot-water service fed from a cold-water pipe.
+  // Its recovery / storage / element are sized from the hot fixtures it
+  // serves (`sizing/water_heater.dart`) and it is an electrical load
+  // (heating, cos φ 1). Appended last so stored indices never shift.
+  waterHeater,
 }
 
 /// Round 33 (hydraulics-3-1) — the ONE non-demand TERMINAL predicate: a
@@ -296,7 +302,8 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.exhaustFan ||
         NodeComponent.acCassette ||
         NodeComponent.acSplitWall ||
-        NodeComponent.acDucted =>
+        NodeComponent.acDucted ||
+        NodeComponent.waterHeater =>
           NodeRole.plant,
         // Inline valves + meters / strainer / expansion tank + FDC inlet +
         // inline dampers / VAV.
@@ -343,6 +350,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.acCassette => 'Cassette AC',
         NodeComponent.acSplitWall => 'Split wall AC',
         NodeComponent.acDucted => 'Ducted AC',
+        NodeComponent.waterHeater => 'Water heater',
       };
 
   /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /
@@ -390,7 +398,8 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.fcu ||
         NodeComponent.acCassette ||
         NodeComponent.acSplitWall ||
-        NodeComponent.acDucted =>
+        NodeComponent.acDucted ||
+        NodeComponent.waterHeater =>
           true,
         _ => false,
       };
@@ -411,6 +420,9 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.acSplitWall => 0.9,
         NodeComponent.acCassette => 1.8,
         NodeComponent.acDucted => 2.6,
+        // Backlog G-2 — an unsized heater's representative element (the
+        // smallest ladder rung); a sized one is fed its own element.
+        NodeComponent.waterHeater => 1.5,
         _ => 0.0,
       };
 }
@@ -801,6 +813,12 @@ Length nodeElevation(
         case NodeComponent.acCassette:
         case NodeComponent.acSplitWall:
         case NodeComponent.acDucted:
+        // Backlog G-2 — an electric storage water heater is wall-hung in the
+        // ceiling space beside the main that feeds it (its cold feed and hot
+        // outlet run level with the ceiling mains). VERIFY — notAnSniClause
+        // (a modelling datum; set the node's mount height / elevation for a
+        // floor-standing vessel).
+        case NodeComponent.waterHeater:
           return building.ceilingElevationOf(node.floorIndex, mounting);
         case null:
           // Round 17 (report-recompute-2-component-less-source-at-roof-on-

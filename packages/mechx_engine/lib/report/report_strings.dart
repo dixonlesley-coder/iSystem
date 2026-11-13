@@ -108,6 +108,9 @@ enum RptStringKey {
   wsDownfeedGravity,
   wsDownfeedBooster, // {m}
   wsHotWaterRecirc, // {lps} {loop} {kw} {c}
+  // Backlog G-2 — {tag} {n} {col} {hourly} {df} {rec} {sf} {st} {tank}
+  // {kwreq} {kw} {ph}
+  wsWaterHeater,
   wsLegionella, // {c}
 
   // Pressure-zone table.
@@ -310,6 +313,11 @@ enum RptStringKey {
   catCapacitorBank,
   catDistributedSource,
   catTanks,
+  // Backlog G-2 — water heaters.
+  catWaterHeaters,
+  esWaterHeaterService, // {fixtures}
+  esWaterHeaterDuty, // {recovery} {storage}
+  esWaterHeaterSize, // {tank} {kw} {phases}
   tblTag,
   tblDuty,
   tblModelSpec,
@@ -579,6 +587,11 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsHotWaterRecirc:
       '- Hot-water recirculation: **{lps} L/s** · return loop {len} m · '
           'head {head} m · pump {kw} kW · return {c} °C',
+  RptStringKey.wsWaterHeater:
+      '- Water heater {tag}: {n} fixtures ({col} column) · {hourly} L/h x '
+          '{df} = recovery **{rec} L/h** · storage {rec} x {sf} = {st} L '
+          '-> **{tank} L** · {kwreq} kW required -> **{kw} kW** element '
+          '({ph}) _(ASHRAE fixture demand — // VERIFY)_',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -826,6 +839,11 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.catCapacitorBank: 'Capacitor bank',
   RptStringKey.catDistributedSource: 'Battery, PV & inverters',
   RptStringKey.catTanks: 'Tanks',
+  RptStringKey.catWaterHeaters: 'Water heaters',
+  RptStringKey.esWaterHeaterService: 'Hot water ({fixtures} fixtures)',
+  RptStringKey.esWaterHeaterDuty:
+      '{recovery} L/h recovery, {storage} L storage required',
+  RptStringKey.esWaterHeaterSize: '{tank} L tank, {kw} kW element ({phases})',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Duty',
   RptStringKey.tblModelSpec: 'Model / spec',
@@ -1131,6 +1149,11 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsHotWaterRecirc:
       '- Resirkulasi air panas: **{lps} L/s** · loop balik {len} m · '
           'tinggi tekan {head} m · pompa {kw} kW · balik {c} °C',
+  RptStringKey.wsWaterHeater:
+      '- Pemanas air {tag}: {n} alat plambing (kolom {col}) · {hourly} L/jam '
+          'x {df} = pemulihan **{rec} L/jam** · tampungan {rec} x {sf} = '
+          '{st} L -> **{tank} L** · perlu {kwreq} kW -> elemen **{kw} kW** '
+          '({ph}) _(permintaan alat plambing ASHRAE — // VERIFY)_',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
@@ -1380,6 +1403,12 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.catCapacitorBank: 'Bank kapasitor',
   RptStringKey.catDistributedSource: 'Baterai, PV & inverter',
   RptStringKey.catTanks: 'Tangki',
+  RptStringKey.catWaterHeaters: 'Pemanas air',
+  RptStringKey.esWaterHeaterService: 'Air panas ({fixtures} alat plambing)',
+  RptStringKey.esWaterHeaterDuty:
+      'Pemulihan {recovery} L/jam, tampungan perlu {storage} L',
+  RptStringKey.esWaterHeaterSize:
+      'Tangki {tank} L, elemen {kw} kW ({phases})',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Kapasitas',
   RptStringKey.tblModelSpec: 'Model / spesifikasi',

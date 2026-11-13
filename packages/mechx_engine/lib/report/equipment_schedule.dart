@@ -47,6 +47,10 @@ enum EquipmentCategory {
   fan,
   airHandling,
   tank,
+
+  /// Backlog G-2 — electric storage water heaters (after the tanks; a
+  /// schedule with none is byte-identical).
+  waterHeater,
   panel,
   transformer,
   generator,
@@ -63,6 +67,7 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.fan => 'Fans',
         EquipmentCategory.airHandling => 'Air-handling (AHU / FCU / AC)',
         EquipmentCategory.tank => 'Tanks',
+        EquipmentCategory.waterHeater => 'Water heaters',
         EquipmentCategory.panel => 'Electrical panels',
         EquipmentCategory.transformer => 'Transformer',
         EquipmentCategory.generator => 'Standby generator',
@@ -243,6 +248,42 @@ class TankScheduleItem {
   });
 }
 
+/// Backlog G-2 (2026-11-13) — one placed water heater to schedule: its
+/// sized duty (`sizeWaterHeater`, the SAME design the panel way and the
+/// calc report read).
+class WaterHeaterScheduleItem {
+  final String tag;
+
+  /// Hot-water fixtures it serves (rated in the fixture-demand table).
+  final int fixtureCount;
+
+  /// Required recovery (probable maximum demand, L/h at 60 °C).
+  final double recoveryLph;
+
+  /// Required storage (L) and the selected standard tank (L).
+  final double storageRequiredL;
+  final double tankL;
+
+  /// The selected heating element (kW) and its supply phases.
+  final double elementKw;
+  final int phases;
+
+  final String? modelSpec;
+  final int qty;
+
+  const WaterHeaterScheduleItem({
+    required this.tag,
+    required this.fixtureCount,
+    required this.recoveryLph,
+    required this.storageRequiredL,
+    required this.tankL,
+    required this.elementKw,
+    required this.phases,
+    this.modelSpec,
+    this.qty = 1,
+  });
+}
+
 /// All inputs the equipment schedule tabulates. Empty lists ⇒ the section is
 /// skipped; an all-empty data set yields an "(no equipment scheduled)" note.
 class EquipmentScheduleData {
@@ -258,6 +299,9 @@ class EquipmentScheduleData {
 
   /// Round 25 — drawn storage tanks (tanks section). Empty ⇒ byte-identical.
   final List<TankScheduleItem> tanks;
+
+  /// Backlog G-2 — placed water heaters. Empty ⇒ byte-identical.
+  final List<WaterHeaterScheduleItem> waterHeaters;
 
   /// Solved electrical system whose panels become one schedule row each. Null ⇒
   /// the panel section is skipped.
@@ -295,6 +339,7 @@ class EquipmentScheduleData {
     this.fans = const [],
     this.acUnits = const [],
     this.tanks = const [],
+    this.waterHeaters = const [],
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
@@ -415,6 +460,29 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       modelSpec: t.modelSpec ?? specFor(t.tag),
       qty: t.qty,
       category: EquipmentCategory.tank,
+    ));
+  }
+
+  // ── Water heaters (backlog G-2) ──────────────────────────────────────────
+  for (final h in data.waterHeaters) {
+    rows.add(EquipmentScheduleRow(
+      tag: h.tag,
+      service: strings.format(
+          RptStringKey.esWaterHeaterService, {'fixtures': '${h.fixtureCount}'}),
+      duty: strings.format(RptStringKey.esWaterHeaterDuty, {
+        'recovery': _fmt(h.recoveryLph, dp: 1),
+        'storage': _fmt(h.storageRequiredL, dp: 1),
+      }),
+      size: strings.format(RptStringKey.esWaterHeaterSize, {
+        'tank': _fmt(h.tankL, dp: 0),
+        'kw': _fmt(h.elementKw, dp: 1),
+        'phases': strings(h.phases == 3
+            ? RptStringKey.sysThreePhase
+            : RptStringKey.sysSinglePhase),
+      }),
+      modelSpec: h.modelSpec ?? specFor(h.tag),
+      qty: h.qty,
+      category: EquipmentCategory.waterHeater,
     ));
   }
 
@@ -618,6 +686,7 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.fan => strings(RptStringKey.catFans),
       EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
       EquipmentCategory.tank => strings(RptStringKey.catTanks),
+      EquipmentCategory.waterHeater => strings(RptStringKey.catWaterHeaters),
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
       EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),

@@ -80,6 +80,8 @@ import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
+import 'package:mechx_engine/sizing/water_heater.dart'
+    show WaterHeaterDesign, waterHeaterPhases;
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -359,6 +361,16 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     additionalHotWaterRecirc: [
       for (final sys in ref.read(hotWaterRecircSystemsProvider).skip(1))
         sys.design,
+    ],
+    // Backlog G-2 — each placed water heater's duty, under its plan tag.
+    waterHeaters: [
+      for (final n in ref.read(sizingNetworkProvider).nodes)
+        if (ref.read(waterHeaterDesignsProvider)[n.id] case final h?)
+          (
+            tag: nodeTagMap[n.id] ?? n.id,
+            design: h,
+            phases: waterHeaterPhases(h.elementKw),
+          ),
     ],
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
@@ -1470,6 +1482,24 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     ));
   }
 
+  // Backlog G-2 — every placed water heater with a sized duty, under its
+  // plan tag (WH-nn), from the ONE design its panel way is fed from.
+  final heaterDesigns = ref.read(waterHeaterDesignsProvider);
+  final waterHeaters = <WaterHeaterScheduleItem>[
+    for (final n in net.nodes)
+      if (heaterDesigns[n.id] case final h?)
+        WaterHeaterScheduleItem(
+          tag: nodeTags[n.id] ?? 'WH-01',
+          fixtureCount: h.fixtures.values.fold<int>(0, (a, b) => a + b),
+          recoveryLph: h.recoveryLph,
+          storageRequiredL: h.storageRequiredL,
+          tankL: h.tankL,
+          elementKw: h.elementKw,
+          phases: waterHeaterPhases(h.elementKw),
+          modelSpec: specs[nodeTags[n.id] ?? 'WH-01'],
+        ),
+  ];
+
   return EquipmentScheduleData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -1477,6 +1507,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     fans: fans,
     acUnits: acUnits,
     tanks: tanks,
+    waterHeaters: waterHeaters,
     electrical: ref.read(electricalResultProvider),
     // N22 (app half): the source apparatus (transformer / standby genset /
     // PF-correction bank) the electrical project may carry, so the schedule
@@ -5008,6 +5039,11 @@ class _ResultsSection extends ConsumerWidget {
     final bom = ref.watch(bomProvider);
     final fittings = ref.watch(fittingsProvider);
     final hwr = ref.watch(hotWaterRecircProvider);
+    // Backlog G-2 — each placed water heater's sized duty.
+    final heaterDesigns = ref.watch(waterHeaterDesignsProvider);
+    final heaterTags = heaterDesigns.isEmpty
+        ? const <String, String>{}
+        : equipmentNodeTags(ref.watch(sizingNetworkProvider));
     final worstZone = zoneStatics.isEmpty
         ? 0.0
         : zoneStatics
@@ -5261,6 +5297,15 @@ class _ResultsSection extends ConsumerWidget {
                 context,
                 'HW recirc',
                 '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
+              ),
+            for (final MapEntry(key: id, value: WaterHeaterDesign h)
+                in heaterDesigns.entries)
+              _kvRow(
+                context,
+                'Water heater ${heaterTags[id] ?? id}',
+                '${h.recoveryLph.toStringAsFixed(1)} L/h · '
+                    '${h.tankL.toStringAsFixed(0)} L · '
+                    '${h.elementKw.toStringAsFixed(1)} kW',
               ),
             _kvRow(
               context,

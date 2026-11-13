@@ -794,6 +794,8 @@ const Set<NodeComponent> kEquipmentComponents = {
   NodeComponent.acCassette,
   NodeComponent.acSplitWall,
   NodeComponent.acDucted,
+  // Backlog G-2 — a storage water heater (scheduled by its tank / element).
+  NodeComponent.waterHeater,
 };
 
 ServiceType _equipmentDefaultService(NodeComponent c) => switch (c) {
@@ -805,6 +807,7 @@ ServiceType _equipmentDefaultService(NodeComponent c) => switch (c) {
       NodeComponent.acDucted =>
         ServiceType.duct,
       NodeComponent.exhaustFan => ServiceType.exhaust,
+      NodeComponent.waterHeater => ServiceType.hotWater,
       _ => ServiceType.coldWater,
     };
 

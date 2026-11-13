@@ -470,6 +470,30 @@ class SniProfile implements StandardsProfile {
             'Tabel 3.',
       );
 
+  /// Backlog G-2 (2026-11-13) — the ONE verify-checklist entry behind the
+  /// water-heater duty (`sizing/water_heater.dart`): the ASHRAE fixture-
+  /// demand table rows, demand / storage factors and the heating constants.
+  /// Classed `notAnSniClause` like the other general-practice plumbing
+  /// items: printed in the calc report's Unverified section, no Review
+  /// advisory.
+  StandardValue<Object?> get waterHeaterFixtureDemand =>
+      const StandardValue<Object?>(
+        'apartment: LAV 2, bath 20, kitchen sink 10, shower 30 gal/h, demand '
+        '0.30, storage 1.25; office: LAV 6, kitchen sink 20, shower 30 gal/h, '
+        'demand 0.30, storage 2.00; 60 °C stored, 25 °C inlet, η 0.98',
+        unit: 'table',
+        citation: 'ASHRAE HVAC Applications, Service Water Heating — hot water '
+            'demand per fixture (water heater sizing; NOT an SNI 03-7065 '
+            'clause)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'Water heater recovery = Σ fixture gal/h x demand factor; '
+            'storage = recovery x storage-capacity factor (rounded up to '
+            '50..2000 L); element kW = recovery L/h x 4.186 x (60 - 25) / '
+            '3600 / 0.98 (rounded up to 1.5..36 kW). Private occupancy reads '
+            'the apartment column, public / assembly the office column. '
+            'Confirm against SNI 03-7065 / ASHRAE.',
+      );
+
   // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
 
   /// mech-building-6 — the share of a fixture's TOTAL UBAP loaded onto EACH of
@@ -515,6 +539,8 @@ class SniProfile implements StandardsProfile {
         minResidualPressureFaucet,
         // Backlog D-5 — the flush-valve urinal's loads.
         urinalFlushValveLoads,
+        // Backlog G-2 — the water-heater fixture-demand basis.
+        waterHeaterFixtureDemand,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(

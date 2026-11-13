@@ -275,6 +275,9 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.roofTank,
             NodeComponent.groundTank,
             NodeComponent.boosterSet,
+            // Backlog G-2 — an electric storage water heater (the source
+            // of a hot-water service fed from a cold-water pipe).
+            NodeComponent.waterHeater,
           ]),
           equipmentGroup('Valves', const [
             NodeComponent.gateValve,

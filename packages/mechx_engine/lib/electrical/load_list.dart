@@ -68,6 +68,11 @@ enum MepLoadSource {
 
   /// Any other rotating equipment.
   generic,
+
+  /// Backlog G-2 (2026-11-13) — an electric storage water heater: a
+  /// RESISTIVE final ([LoadKind.heating], cos φ 1), never a motor. Appended
+  /// last so stored indices never shift.
+  waterHeater,
 }
 
 extension MepLoadSourceInfo on MepLoadSource {
@@ -75,7 +80,8 @@ extension MepLoadSourceInfo on MepLoadSource {
   bool get isPump => switch (this) {
         MepLoadSource.supplyFan ||
         MepLoadSource.exhaustFan ||
-        MepLoadSource.returnFan =>
+        MepLoadSource.returnFan ||
+        MepLoadSource.waterHeater =>
           false,
         _ => true,
       };
@@ -83,11 +89,13 @@ extension MepLoadSourceInfo on MepLoadSource {
   /// The [LoadKind] the derived circuit is minted with: an HVAC unit is an
   /// `hvac` final (its own curve / defaults), any other pump-like source a
   /// `pump`, a fan a `motor`.
-  LoadKind get circuitLoadKind => this == MepLoadSource.hvacUnit
-      ? LoadKind.hvac
-      : isPump
-          ? LoadKind.pump
-          : LoadKind.motor;
+  LoadKind get circuitLoadKind => this == MepLoadSource.waterHeater
+      ? LoadKind.heating
+      : this == MepLoadSource.hvacUnit
+          ? LoadKind.hvac
+          : isPump
+              ? LoadKind.pump
+              : LoadKind.motor;
 
   /// Is this source a life-safety load (no RCD, fire-resistant cable)?
   bool get isLifeSafety => this == MepLoadSource.firePump;
@@ -105,6 +113,7 @@ extension MepLoadSourceInfo on MepLoadSource {
         MepLoadSource.hotWaterRecircPump => 'HW recirc pump',
         MepLoadSource.hvacUnit => 'HVAC unit',
         MepLoadSource.generic => 'Equipment',
+        MepLoadSource.waterHeater => 'Water heater',
       };
 
   /// Backlog B-4 (2026-11-13) — the Indonesian twin of [label], for the
@@ -122,6 +131,7 @@ extension MepLoadSourceInfo on MepLoadSource {
         MepLoadSource.hotWaterRecircPump => 'Pompa sirkulasi air panas',
         MepLoadSource.hvacUnit => 'Unit HVAC',
         MepLoadSource.generic => 'Peralatan',
+        MepLoadSource.waterHeater => 'Pemanas air',
       };
 
   /// [label] or [labelId] by language.
@@ -371,7 +381,10 @@ ElectricalCircuit equipmentToCircuit(
     length: Length(math.max(0, lengthM)),
     loadKind: e.source.circuitLoadKind,
     demandFactor: e.demandFactor ?? demandFactor,
-    motorKw: e.mechanicalPower.inKiloWatts,
+    // Backlog G-2 — a resistive heater is no motor (no shaft rating).
+    motorKw: e.source == MepLoadSource.waterHeater
+        ? null
+        : e.mechanicalPower.inKiloWatts,
     phases: e.phases,
     lifeSafety: e.source.isLifeSafety,
     // A life-safety machine (fire pump) is minted on fire-resistant cable

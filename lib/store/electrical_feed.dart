@@ -11,6 +11,8 @@ library;
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/electrical/load_kind.dart'
+    show LoadKind, loadDefaults, singlePhaseMaxW;
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -32,6 +34,7 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart'
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show serviceComponentRoots;
 import 'package:mechx_engine/sizing/pump.dart' show PumpDuty, sizePump;
+import 'package:mechx_engine/sizing/water_heater.dart' show waterHeaterPhases;
 import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
@@ -1002,6 +1005,13 @@ final equipmentNodeDutiesProvider =
   ({Power motor, Power input})? dutyFor(NetNode n) {
     PumpDuty? p;
     FanDuty? f;
+    // Backlog G-2 — a placed water heater carries its sized ELEMENT (the
+    // rating is the electrical input: a resistive load, no motor η).
+    if (n.component == NodeComponent.waterHeater) {
+      final h = ref.watch(waterHeaterDesignsProvider)[n.id];
+      if (h == null) return null;
+      return (motor: h.elementPower, input: h.elementPower);
+    }
     if (bind.firePumpNodeIds.contains(n.id)) {
       // Round 21 — a JOCKEY is fed its own pressure-maintenance duty.
       // Round 28 (fire-3-sprinkler-pump-gets-standpipe-duty) — each pump is
@@ -1263,14 +1273,25 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
               // never the generic 'Supply pump'. No figure depends on it.
               : transfer
                   ? MepLoadSource.transferPump
-                  : _sourceFor(c),
+                  : c == NodeComponent.waterHeater
+                      ? MepLoadSource.waterHeater
+                      : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
       // Round 21 / 23 — a STANDBY pump (fire, supply or hot-water recirc) is
       // wired at full size but never runs with the duty pump: it adds no
       // demand to the board.
       demandFactor: bind.standbyPumpNodeIds.contains(n.id) ? 0 : null,
-      phases: _phasesFor(c),
+      // Backlog G-2 — a water heater is resistive: cos φ 1, no motor η,
+      // single-phase up to `singlePhaseMaxW`, three-phase above.
+      phases: c == NodeComponent.waterHeater
+          ? waterHeaterPhases(f.watts / 1000, singlePhaseMaxW: singlePhaseMaxW)
+          : _phasesFor(c),
+      cosPhi: c == NodeComponent.waterHeater
+          ? loadDefaults[LoadKind.heating]!.cosPhi
+          : defaultMotorCosPhi,
+      motorEfficiency:
+          c == NodeComponent.waterHeater ? 1.0 : defaultMotorEfficiency,
       loadPos: LayoutPos(
         sheetId: n.sheetId,
         floorIndex: n.floorIndex,

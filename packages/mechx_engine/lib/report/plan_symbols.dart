@@ -290,6 +290,13 @@ List<SldPrim> planComponentPrims(
       ln(0.72, 0.50, 0.92, 0.50);
       ln(0.86, 0.44, 0.92, 0.50);
       ln(0.92, 0.50, 0.86, 0.56);
+    case NodeComponent.waterHeater:
+      // Backlog G-2 — a storage vessel with a zig-zag heating element.
+      rect(0.26, 0.16, 0.74, 0.84);
+      ln(0.36, 0.66, 0.44, 0.40);
+      ln(0.44, 0.40, 0.52, 0.66);
+      ln(0.52, 0.66, 0.60, 0.40);
+      ln(0.60, 0.40, 0.66, 0.66);
   }
   return out;
 }
@@ -413,6 +420,8 @@ String? equipmentTagPrefix(NodeComponent c) => switch (c) {
       NodeComponent.acSplitWall ||
       NodeComponent.acDucted =>
         'AC',
+      // Backlog G-2 — a water heater.
+      NodeComponent.waterHeater => 'WH',
       _ => null,
     };
 

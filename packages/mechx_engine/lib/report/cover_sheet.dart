@@ -639,6 +639,7 @@ String componentLegendCode(NodeComponent c) => switch (c) {
       NodeComponent.acCassette => 'AC-C',
       NodeComponent.acSplitWall => 'AC-W',
       NodeComponent.acDucted => 'AC-D',
+      NodeComponent.waterHeater => 'WH',
     };
 
 /// The human name for a component's legend row (EN, ASCII). Exhaustive.
@@ -681,4 +682,5 @@ String componentLegendName(NodeComponent c) => switch (c) {
       NodeComponent.acCassette => 'AC cassette unit',
       NodeComponent.acSplitWall => 'AC split (wall)',
       NodeComponent.acDucted => 'AC ducted unit',
+      NodeComponent.waterHeater => 'Electric water heater',
     };

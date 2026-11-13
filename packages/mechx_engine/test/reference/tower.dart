@@ -503,7 +503,11 @@ Network buildTowerNetwork({List<int> prvFloors = const []}) {
     for (final k in prvFloors)
       node('PRV$k', _gr, floor: k, component: NodeComponent.prv),
     // ── Hot water (top three floors): heater WH → hot riser HW ───────────
-    node('WH', _wh, floor: top, role: NodeRole.plant),
+    // Backlog G-2 — WH is a typed electric storage water heater (it was an
+    // untyped plant node at the roof datum, 120.0 m): wall-hung in Lantai
+    // 30's ceiling space (116.0 + 3.7 = 119.7 m, level with BR29 / HW29),
+    // sized from the six public lavatories it serves.
+    node('WH', _wh, floor: top, component: NodeComponent.waterHeater),
     for (final f in kTowerBoostedFloors) node('HW$f', _hw, floor: f),
     // Drainage outfall + vent terminal.
     node('OUT', _out, floor: 0),

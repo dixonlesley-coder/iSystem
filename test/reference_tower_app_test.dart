@@ -55,6 +55,7 @@ import 'package:mechx_engine/electrical/advanced_study.dart'
         rootServiceBasisVa,
         servicePerPhaseBasisVa;
 import 'package:mechx_engine/electrical/genset_backup.dart';
+import 'package:mechx_engine/electrical/load_kind.dart' show LoadKind;
 import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, PhaseAssignmentInfo;
 import 'package:mechx_engine/electrical/sources.dart';
@@ -1544,14 +1545,62 @@ void main() {
       expect(count(c, 'downfeed-below-target'), 1);
     });
 
-    test('hot water recirculation: assumed 10.3 m return, 0.02461 L/s, '
+    test('hot water recirculation: assumed 10.0 m return, 0.02389 L/s, '
         '0.37 kW', () {
       final s = c.read(hotWaterRecircSystemsProvider).single;
       expect(s.drawnReturn, isFalse);
-      expect(s.assumedReturnLengthM, closeTo(10.3, 1e-9));
-      // 25 W/m x 20.6 m = 515 W; 515 / (1000 x 4186 x 5) = 2.4606e-5 m3/s.
-      expect(s.design.recircFlow.inLitersPerSecond, closeTo(0.02461, 5e-6));
+      // Backlog G-2 — WH is a typed water heater at Lantai 30's ceiling
+      // (119.7 m, level with HW29): WH → HW29 is its 2.0 m plan run (was
+      // 2.0 + the 0.3 m drop from the 120.0 m roof datum = 2.3). The index
+      // run 2.0 + 4.0 + 4.0 = 10.0 m (was 10.3).
+      expect(s.assumedReturnLengthM, closeTo(10.0, 1e-9));
+      // 25 W/m x 20.0 m = 500 W (was 515); 500 / (1000 x 4186 x 5) =
+      // 2.3889e-5 m3/s (was 2.4606e-5).
+      expect(s.design.recircFlow.inLitersPerSecond, closeTo(0.02389, 5e-6));
       expect(s.design.pump.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+    });
+
+    test('backlog G-2: water heater WH-01 — 6 public lavatories, 40.88 L/h, '
+        '100 L, 2 kW; its 1-phase way on the MEP board', () {
+      // Office column (public occupancy): basin, public lavatory 6 gal/h.
+      // 6 x 6 = 36 gal/h x 3.785411784 = 136.275 L/h; x demand factor 0.30
+      // = recovery 40.882 L/h; x storage factor 2.00 = 81.765 L → 100 L
+      // tank; 40.882 x 4.186 x (60 − 25) / 3600 / 0.98 = 1.6978 kW → 2 kW
+      // element (recovers 2 x 0.98 x 3600 / (4.186 x 35) = 48.16 L/h).
+      final h = c.read(waterHeaterDesignsProvider)['WH']!;
+      expect(h.column, 'office');
+      expect(h.fixtures.values.single, 6);
+      expect(h.unratedFixtures, 0);
+      expect(h.hourlyDemandLph, closeTo(136.2748, 5e-4));
+      expect(h.recoveryLph, closeTo(40.8825, 5e-4));
+      expect(h.storageRequiredL, closeTo(81.7649, 5e-4));
+      expect(h.tankL, 100);
+      expect(h.heatingKwRequired, closeTo(1.69776, 5e-5));
+      expect(h.elementKw, 2);
+      expect(h.elementRecoveryLph, closeTo(48.159, 5e-3));
+      // The way: 2000 W resistive, cos φ 1, single-phase (2000 <= 5500 W)
+      // at 400 / √3 = 231 V ⇒ 2000 / 231 = 8.658 A; MCCB 16 C 1P, NYM 3 x
+      // 2.5 mm², heating, DF 1, minted by the DEFAULT placed sync.
+      final w = way(c, _mepBoard, 'mep-node-WH');
+      expect(w.loadW, closeTo(2000, 1e-9));
+      expect(w.designCurrentExactA, closeTo(8.658, 5e-4));
+      expect(w.breaker.ratingA.amperes, 16);
+      expect(w.cable.csaMm2, 2.5);
+      final cc = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == _mepBoard)
+          .circuits
+          .firstWhere((x) => x.id == 'mep-node-WH');
+      expect(cc.loadKind, LoadKind.heating);
+      expect(cc.phases, 1);
+      expect(cc.cosPhi, 1.0);
+      expect(cc.motorKw, isNull);
+      expect(
+          c
+              .read(placedEquipmentCircuitsProvider)
+              .any((x) => x.id == 'mep-node-WH'),
+          isTrue);
     });
 
     test('fire: 750 gpm at the standpipe head 210.681 m, 200 kW; DN100 '
@@ -1864,13 +1913,19 @@ void main() {
       expect(lift.cable.csaMm2, 16);
       expect(lift.cableRaisedForAds, isTrue);
       final sys = c.read(electricalResultProvider);
-      // PP-E: 249 711 + 3 x 17 045.5 + 2000 = 302 847 W, 356 160 VA.
+      // PP-E: 251 711 + 3 x 17 045.5 + 2000 = 304 847 W, 358 160 VA
+      // (backlog G-2: + the 2000 W / 2000 VA water heater way; was 302 847
+      // W, 356 160 VA). Its heaviest line stays L1 520.5 A (the heater
+      // lands on L2: 510.9 + 8.658 = 519.5 A).
       final ppe = sys.panels[kTowerEssentialPanelId]!;
-      expect(ppe.demandW, 302847);
-      expect(ppe.demandVa, 356160);
+      expect(ppe.demandW, 304847);
+      expect(ppe.demandVa, 358160);
+      expect(sorted3(ppe.phaseBalance), [510.8, 519.5, 520.5]);
       expect(ppe.incomer.breaker.ratingA.amperes, 630);
       // MEP: TP 20 555.6 W ⇒ 34.905 A; FP 222 222.2 W ⇒ 377.353 A, MCCB
-      // 400, FRC 3x240 + 120; Σ 249 711 W, 293 778 VA; incomer MCCB 500.
+      // 400, FRC 3x240 + 120; Σ 251 711 W, 295 778 VA (backlog G-2: + the
+      // 2000 W water heater, cos φ 1; was 249 711 W, 293 778 VA); heaviest
+      // line 424.0 + 8.658 = 432.7 A (L2); incomer MCCB 500.
       final tp = way(c, _mepBoard, 'mep-node-TP');
       expect(tp.designCurrentExactA, closeTo(34.905, 5e-4));
       final fp = way(c, _mepBoard, 'mep-node-FP');
@@ -1879,21 +1934,26 @@ void main() {
       expect(fp.cable.csaMm2, 240);
       expect(fp.grounding.peCsaMm2, 120);
       final mep = sys.panels[_mepBoard]!;
-      expect(mep.demandW, 249711);
-      expect(mep.demandVa, 293778);
+      expect(mep.demandW, 251711);
+      expect(mep.demandVa, 295778);
+      expect(mep.demandCurrent.amperes, closeTo(432.7, 1e-9)); // 1 dp
       expect(mep.incomer.breaker.ratingA.amperes, 500);
-      // LVMDP: 30 x 18 750 + 302 847 = 865 347 W, 998 807 VA.
+      // LVMDP: 30 x 18 750 + 304 847 = 867 347 W, 1 000 807 VA (backlog
+      // G-2: was 865 347 W, 998 807 VA); L2 1438.5 + 8.66 = 1447.1 A, the
+      // heaviest line L1 1448.1 A unchanged (incomer unchanged).
       final lv = sys.panels[kTowerMainPanelId]!;
-      expect(lv.demandW, 865347);
-      expect(lv.demandVa, 998807);
-      expect(sorted3(lv.phaseBalance), [1438.5, 1438.5, 1448.1]);
+      expect(lv.demandW, 867347);
+      expect(lv.demandVa, 1000807);
+      expect(sorted3(lv.phaseBalance), [1438.4, 1447.1, 1448.1]);
       expect(lv.incomer.breaker.ratingA.amperes, 1600);
       expect(lv.incomer.poles, 4);
-      // Transformer 1600 kVA: 998.8 / 1600 = 62.4 %; LV fault 1 600 000 /
-      // (√3 x 400 x 0.04) = 57 735 A.
+      // Transformer 1600 kVA: 1000.8 / 1600 = 62.55 % (backlog G-2: was
+      // 998.8 / 1600 = 62.4 %); LV fault 1 600 000 / (√3 x 400 x 0.04) =
+      // 57 735 A.
       final adv = c.read(electricalAdvancedProvider);
       expect(adv.supply.transformerKva, 1600);
-      expect(adv.supply.demandKva / 1600 * 100, closeTo(62.4, 0.05));
+      expect(adv.supply.demandKva, closeTo(1000.8, 1e-9)); // 1 dp
+      expect(adv.supply.demandKva / 1600 * 100, closeTo(62.55, 0.005));
       final project = c.read(electricalSizingProjectProvider);
       expect(
         effectiveOriginFaultLevel(project, result: sys).amperes,
@@ -1905,21 +1965,26 @@ void main() {
         gensetStartFloorFor(project, sys).inKilovoltAmperes,
         closeTo(764.77, 5e-3),
       );
-      // 250 kvar installed ⇒ PF 0.961.
+      // 250 kvar installed ⇒ PF 0.961 (backlog G-2: the heater adds 2.0 kW
+      // at cos φ 1 — 873.0 kW / 500.0 kvar, uncorrected 0.868, was 871.0
+      // kW, 0.867).
       expect(adv.powerFactor.installedKvar, 250);
       expect(adv.powerFactor.existingPf, closeTo(0.961, 5e-4));
+      // Genset backup: 304 847 W = 304.8 kW (was 302.8); 800 kVA unchanged.
+      expect(gensetBackupDemandW(project, sys).watts, closeTo(304847, 0.5));
     });
 
-    test('backlog E-4: genset step load 302.8 kW <= 0.6 x 640 = 384 kW, OK',
+    test('backlog E-4: genset step load 304.8 kW <= 0.6 x 640 = 384 kW, OK',
         () {
       // On ATS transfer the 800 kVA set picks up PP-E (lifts, emergency
-      // lighting, the MEP board) in one step: 302 847 W = 302.8 kW (the
+      // lighting, the MEP board) in one step: 304 847 W = 304.8 kW (backlog
+      // G-2: + the 2 kW water heater on the MEP board; was 302.8) (the
       // `gensetBackupDemandW` basis, backup fraction 0). Allowable first
-      // step 0.6 x 800 kVA x 0.8 = 0.6 x 640 = 384 kW >= 302.8 => OK, no
+      // step 0.6 x 800 kVA x 0.8 = 0.6 x 640 = 384 kW >= 304.8 => OK, no
       // staged pick-up.
       final st = c.read(electricalAdvancedProvider).powerOneLine!
           .gensetStepLoad!;
-      expect(st.stepKw, closeTo(302.847, 1e-9));
+      expect(st.stepKw, closeTo(304.847, 1e-9));
       expect(st.ratedKw, closeTo(640, 1e-9));
       expect(st.allowableKw, closeTo(384, 1e-9));
       expect(st.exceeded, isFalse);

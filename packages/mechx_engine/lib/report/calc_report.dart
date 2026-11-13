@@ -23,6 +23,7 @@ import '../sizing/hot_water.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
+import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'report_blocks.dart';
@@ -200,6 +201,12 @@ class CalcReportData {
   /// printed on its own line after [hotWaterRecirc]. Empty ⇒ unchanged.
   final List<HotWaterRecircDesign> additionalHotWaterRecirc;
 
+  /// Backlog G-2 — each placed water heater's sized duty, by its tag (the
+  /// SAME design the equipment schedule and its panel way read). Empty ⇒
+  /// unchanged.
+  final List<({String tag, WaterHeaterDesign design, int phases})>
+      waterHeaters;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -334,6 +341,7 @@ class CalcReportData {
     this.zones = const [],
     this.hotWaterRecirc,
     this.additionalHotWaterRecirc = const [],
+    this.waterHeaters = const [],
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
@@ -802,6 +810,26 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       ws.writeln(strings.format(RptStringKey.wsLegionella,
           {'c': hwr.returnTempC.toStringAsFixed(0)}));
     }
+  }
+  // Backlog G-2 — the water heater duty (ASHRAE fixture-demand method).
+  for (final h in d.waterHeaters) {
+    final w = h.design;
+    ws.writeln(strings.format(RptStringKey.wsWaterHeater, {
+      'tag': h.tag,
+      'n': '${w.fixtures.values.fold<int>(0, (a, b) => a + b)}',
+      'col': w.column,
+      'hourly': w.hourlyDemandLph.toStringAsFixed(1),
+      'df': w.demandFactor.toStringAsFixed(2),
+      'rec': w.recoveryLph.toStringAsFixed(1),
+      'sf': w.storageFactor.toStringAsFixed(2),
+      'st': w.storageRequiredL.toStringAsFixed(1),
+      'tank': w.tankL.toStringAsFixed(0),
+      'kwreq': w.heatingKwRequired.toStringAsFixed(2),
+      'kw': w.elementKw.toStringAsFixed(1),
+      'ph': h.phases == 3
+          ? strings(RptStringKey.sysThreePhase)
+          : strings(RptStringKey.sysSinglePhase),
+    }));
   }
   ws.writeln(); // closes the cluster (one blank line, zones or not).
   blocks.add(RptMarkdown(ws.toString()));

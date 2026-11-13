@@ -25,6 +25,7 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart'
     show AirEquipmentKind, defaultInternalStatic;
 import 'package:mechx_engine/sizing/supply_design.dart';
+import 'package:mechx_engine/sizing/water_heater.dart';
 import 'package:mechx_engine/standards/pipe_products.dart' show hazenWilliamsCFor;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -3272,6 +3273,52 @@ class HotWaterRecircSystem {
     this.loopEdgeShares = const {},
   });
 }
+
+/// Backlog G-2 (2026-11-13) — the sized duty of every placed WATER HEATER
+/// (`NodeComponent.waterHeater`), keyed by node id: the hot-water fixtures
+/// of the hot-water component it sits on (fixture-role nodes, by their
+/// built-in type; an untyped or custom one is counted unrated), sized by
+/// the ASHRAE fixture-demand method at the project occupancy
+/// ([sizeWaterHeater]). Absent when it serves no rated fixture. The ONE
+/// design the inspector, the equipment schedule, the calc report and its
+/// electrical way (`nodeFedLoadsProvider`) read.
+final waterHeaterDesignsProvider =
+    Provider<Map<String, WaterHeaterDesign>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final heaters = [
+    for (final n in net.nodes)
+      if (n.component == NodeComponent.waterHeater) n.id,
+  ];
+  if (heaters.isEmpty) return const {};
+  final occupancy = ref.watch(occupancyProvider);
+  final hotAdj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.hotWater) continue;
+    (hotAdj[e.fromId] ??= []).add(e.toId);
+    (hotAdj[e.toId] ??= []).add(e.fromId);
+  }
+  final out = <String, WaterHeaterDesign>{};
+  for (final h in heaters) {
+    final seen = <String>{h};
+    final stack = [h];
+    while (stack.isNotEmpty) {
+      for (final o in hotAdj[stack.removeLast()] ?? const <String>[]) {
+        if (seen.add(o)) stack.add(o);
+      }
+    }
+    final d = sizeWaterHeater(
+      fixtures: [
+        for (final id in seen)
+          if (net.nodeById(id) case final n?
+              when n.role == NodeRole.fixture && n.id != h)
+            n.customFixtureId != null ? null : n.fixture,
+      ],
+      occupancy: occupancy,
+    );
+    if (d != null) out[h] = d;
+  }
+  return out;
+});
 
 /// Every hot-water recirculation system of the drawn network, ordered by
 /// recirculation flow (largest first, ties by root id) — the first is the
