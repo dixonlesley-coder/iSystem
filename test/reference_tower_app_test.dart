@@ -1946,7 +1946,7 @@ void main() {
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
       // Backlog A-3 — churn 1.4 x 210.681 = 294.954 m x 9.81 = 2893.5 kPa
-      // (backlog D-1: 294.954 / 2893.6 before the 0.1 m shorter box leg)
+      // (backlog D-1: 294.961 / 2893.6 before the 0.1 m shorter box leg)
       // > 2413: no class permits one zone, the zone-split WARNING stays.
       expect(n('fire-system-over-pressure:FP'), 1);
       final cls = c.read(firePressureClassesProvider).single;
@@ -1964,14 +1964,20 @@ void main() {
       expect(ft.capacityLitres, 120000);
       expect(ft.verdict, FireTankVerdict.ok);
       // Backlog A-3 — static 9.81 x (294.954 - (4 f + 1.2)) > 1207 for
-      // f <= 42: all 60 hose valves (2881.7 .. 1743.8 kPa) designated
-      // pressure-regulating (info) beside the zone warning.
+      // f <= 42: all 60 hose valves designated pressure-regulating (info)
+      // beside the zone warning. z = the box node's own datum 4 f + 1.2
+      // (backlog D-1: the same 1.2 m the node, its leg and the lift read):
+      // L1 9.81 x 293.754 = 2881.727 kPa, L30 9.81 x (294.954 - 117.2) =
+      // 9.81 x 177.754 = 1743.767 kPa (both 0.07 kPa below the 294.961 m
+      // churn's 2881.796 / 1743.836).
       expect(n('standpipe-prv-hose-valves:FP:0-29'), 1);
       expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
           isEmpty);
       final r = c.read(standpipeOutletOverPressureProvider).single;
       expect(r.maxKpa, closeTo(9.81 * (294.954 - 1.2), 0.1));
       expect(r.minKpa, closeTo(9.81 * (294.954 - 4 * 29 - 1.2), 0.1));
+      expect(r.maxKpa, closeTo(2881.727, 2e-3));
+      expect(r.minKpa, closeTo(1743.767, 2e-3));
       expect(c.read(prvHoseValvesProvider), hasLength(60));
       // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
       // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
