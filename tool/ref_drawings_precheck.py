@@ -105,6 +105,7 @@ def dxf_strings(path):
         s = re.sub(r'\\[A-Za-z][^;\\]*;', '', s)
         s = s.replace('{', '').replace('}', '').replace('%%c', 'Ø')
         s = s.replace('%%d', '°').replace('%%p', '±')
+        s = re.sub(r'%%(\d{3})', lambda m: chr(int(m.group(1))), s)
         s = re.sub(r'\s+', ' ', s).strip()
         if s:
             clean.append(s)

@@ -533,7 +533,7 @@ void main() {
   // ── drafting-5: the CAD deliverable is code-page safe ─────────────────────
   group('drafting-5 DXF text encoding', () {
     test('dxfText maps the non-ASCII drawing glyphs to R12-safe ASCII', () {
-      expect(dxfText('CW-R1 \u00b7 DN32'), 'CW-R1 - DN32');
+      expect(dxfText('CW-R1 \u00b7 DN32'), 'CW-R1 %%183 DN32');
       expect(dxfText('\u00d8200'), '%%c200');
       expect(dxfText('\u00f8200'), '%%c200');
       expect(dxfText('90\u00b0'), '90%%d');

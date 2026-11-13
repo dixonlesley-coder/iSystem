@@ -220,6 +220,50 @@ Uint8List electricalSldDetailToPdf({
       projectName: pname);
 }
 
+/// Drawing-review D6 (2026-11-13) — the PAGES [electricalSldDetailToPdf]
+/// issues, as sheets (the same one-page-vs-paginated decision), so the DXF of
+/// the detail single-line can carry exactly the PDF's pages
+/// (`sldSheetsToDxfSet`).
+List<SldSheet> electricalSldDetailSheets({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
+  String? projectName,
+}) {
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
+  final whole = buildElectricalSld(
+      project: project,
+      result: result,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds);
+  final minPt = sldSinglePageMinLabelPt(whole,
+      chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
+  if (minPt >= kMinPlotLabelPt - 1e-9 || result.order.isEmpty) return [whole];
+  return [
+    for (final id in result.order)
+      ...electricalBoardScheduleSheets(
+          project: project,
+          result: result,
+          panelId: id,
+          diagramTitle: diagramTitle,
+          chrome: chrome,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+          adsFailedCircuitIds: adsFailedCircuitIds,
+          projectName: pname),
+  ];
+}
+
 /// Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — ONE
 /// board's schedule as issuable sheets: `[whole]` when it prints at
 /// [kMinPlotLabelPt] on one A3 page, else the fewest equal WAY RANGES whose

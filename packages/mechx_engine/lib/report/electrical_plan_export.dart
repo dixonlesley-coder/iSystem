@@ -1206,6 +1206,9 @@ String electricalPlanToDxf({
   final frameTop = noteY - a(24) - frameH;
   final pname = projectName.isNotEmpty ? projectName : 'Untitled project';
   box(layers.frame, 0, frameTop, a(360), frameH);
+  // Drawing-review D6 — the PDF title block's PROJECT / TITLE cell labels.
+  text(layers.frame, a(8), frameTop + a(10), 'PROJECT', size: a(5));
+  text(layers.frame, a(8), frameTop + a(32), 'TITLE', size: a(5));
   text(layers.frame, a(8), frameTop + a(22), pname, size: a(16));
   text(layers.frame, a(8), frameTop + a(44),
       'DENAH INSTALASI LISTRIK - $sheetName',
@@ -1220,6 +1223,43 @@ String electricalPlanToDxf({
       text(layers.frame, a(8), rowTop + a(13), l, size: a(7));
       text(layers.frame, labelW + a(8), rowTop + a(13), v, size: a(10));
     }
+  }
+
+  // Drawing-review D6 — the device LEGENDA the PDF prints (Panel / Beban /
+  // titik / Kabel), right of the title block, same symbols and strings.
+  {
+    final lx = a(380.0);
+    var ly = frameTop + a(14);
+    text(layers.frame, lx, ly, 'LEGENDA', size: a(9));
+    ly += a(16);
+    box(layers.device, lx, ly - a(8), a(12), a(8));
+    text(layers.frame, lx + a(18), ly, 'Panel', size: a(8));
+    ly += a(13);
+    dxfCircle(layers.device, lx + a(6), ly - a(4), a(4));
+    text(layers.frame, lx + a(18), ly, 'Beban / titik', size: a(8));
+    ly += a(13);
+    line(layers.feeder, lx, ly - a(4), lx + a(12), ly - a(4));
+    text(layers.frame, lx + a(18), ly, 'Kabel', size: a(8));
+  }
+  // … and the SAME honest scale bar (a real-metre rung at the plotted 1 : N,
+  // `0` / `X/2 m` / `X m`) — only on a real plotted scale, like the PDF.
+  if (world && plotN != null && plotN > 0) {
+    final m = planScaleBarMetres(1000 / plotN * 72 / 25.4);
+    final barLen = m * 1000; // world millimetres
+    final bx = a(380.0);
+    final by = frameTop + a(80);
+    final barH = a(4);
+    line(layers.frame, bx, by, bx + barLen, by);
+    line(layers.frame, bx, by - barH, bx + barLen, by - barH);
+    for (var i = 0; i <= 4; i++) {
+      final x = bx + barLen * i / 4;
+      line(layers.frame, x, by, x, by - barH);
+    }
+    text(layers.frame, bx, by + a(12), '0', size: a(8));
+    text(layers.frame, bx + barLen / 2, by + a(12), planScaleBarFigure(m / 2),
+        size: a(8));
+    text(layers.frame, bx + barLen, by + a(12), planScaleBarFigure(m),
+        size: a(8));
   }
 
   g(0, 'ENDSEC');

@@ -88,6 +88,19 @@ const double kMechRiserLabelCharW = 0.6;
 // A chosen label slot pulled more than this far (drawing units) from its default
 // anchor gets a short leader line back to the element it tags.
 const double _kLeaderThreshold = 14;
+
+/// Drawing-review D5 (2026-11-13) — the LONGEST leader a riser tag may have,
+/// in label heights (× the tag's size): 4 × 8 = 32 drawing units, about 9 mm
+/// on an A3 plot. A tag whose every clear slot needs a longer leader — or a
+/// leader crossing another leader / a pipe it does not name — is not placed
+/// at all: the element gets a numbered KEY TAG and its text goes into the
+/// sheet's KETERANGAN PIPA / PIPE KEY table. A drafting rule, not a standard.
+const double kMechRiserMaxLeaderLabelHeights = 4.0;
+
+/// Drawing-review D5 — the longest leader of a KEY TAG (its small numbered
+/// circle needs far less room than the text it replaces, so it is tried
+/// hugging the element first): 6 label heights, still a short local tie.
+const double kMechRiserMaxKeyLeaderLabelHeights = 6.0;
 // When the ladder finds no CLEAR slot (two short branch tags share a midpoint),
 // the placer escapes further out in these steps until it clears, then leaders
 // back — so tags never fuse into one unreadable token (N3). VERIFY: a drafting
@@ -427,6 +440,17 @@ SldSheet buildMechanicalRiserSld({
       if (rel < 0) return null;
       final i = (rel / _bandH).floor();
       return i >= bandCount ? null : i;
+    }
+    // Drawing-review D5 — the floor name of a sheet y (key-table LEVEL).
+    ..levelAt = (double y) {
+      final rel = y - (_topPad + roofH);
+      if (rel < 0) return roofBand ? 'ATAP' : null;
+      final i = (rel / _bandH).floor();
+      if (i >= bandCount) return null;
+      final f = hiFloor - i;
+      return (building != null && f < building.levelCount)
+          ? building.floors[f].name
+          : 'Level ${f + 1}';
     };
 
   // ── Floor bands: a baseline hairline + the FFL gutter label ─────────────────
@@ -599,13 +623,25 @@ SldSheet buildMechanicalRiserSld({
       ? 0.0
       : detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
   const notesLeft = contentMaxX - _notesW;
-  var calloutX0 = _gutterW + (_drawW - calloutTotalW) / 2;
+  // Drawing-review D4 (2026-11-13) — the PUMP-SET DETAIL rides the extras
+  // strip BELOW the bands (bottom-left), never a right-margin column: that
+  // column widened the lowest-floor page by 252 units, so the A3 fit printed
+  // every tag of the issued sheet at ~5.3-6.1 pt. The callouts start right
+  // of it.
+  final plantH = plantWillDraw
+      ? _plantDetailH(network,
+          ground: plant.ground, pump: plant.pump, include: nodeVisible)
+      : 0.0;
+  const plantLeft = 8.0;
+  final calloutMinX = plantWillDraw ? plantLeft + _plantW + 16 : _gutterW;
+  var calloutX0 =
+      math.max(calloutMinX, _gutterW + (_drawW - calloutTotalW) / 2);
   var notesTop = extrasTop;
   if (detailBoxes.isNotEmpty &&
       showNotes &&
       calloutX0 + calloutTotalW > notesLeft - 16) {
     final shifted = notesLeft - 16 - calloutTotalW;
-    if (shifted >= _gutterW) {
+    if (shifted >= calloutMinX) {
       calloutX0 = shifted;
     } else {
       notesTop = extrasTop + _calloutH + 12;
@@ -640,12 +676,7 @@ SldSheet buildMechanicalRiserSld({
   }
   if (plantWillDraw) {
     placer.reserveBox(
-        contentMaxX + 12,
-        _topPad,
-        contentMaxX + 12 + _plantW,
-        _topPad +
-            _plantDetailH(network,
-                ground: plant.ground, pump: plant.pump, include: nodeVisible));
+        plantLeft, extrasTop, plantLeft + _plantW, extrasTop + plantH);
   }
   if (detailBoxes.isNotEmpty) {
     var bx = calloutX0;
@@ -992,15 +1023,15 @@ SldSheet buildMechanicalRiserSld({
   }
 
   // ── B1 detail callouts + system-notes block (drawn only when supplied) ──────
-  // The callouts sit in a strip BELOW the floor bands (clear of every band tag)
-  // and the plant detail in a right margin column, so the placer never has to
-  // divert around them; the bounds grow to include whatever was drawn.
-  var maxX = contentMaxX;
+  // The callouts and (D4) the plant detail sit in a strip BELOW the floor
+  // bands (clear of every band tag), so the placer never has to divert around
+  // them; the bounds grow to include whatever was drawn.
+  const maxX = contentMaxX;
   var extrasBottom = extrasTop;
 
   if (detailCallouts && drawExtras) {
     if (waterFocus &&
-        _emitPlantDetail(prims, network, contentMaxX + 12, _topPad,
+        _emitPlantDetail(prims, network, plantLeft, extrasTop,
             hasRoof: plant.roof,
             hasGround: plant.ground,
             hasPump: plant.pump,
@@ -1009,7 +1040,7 @@ SldSheet buildMechanicalRiserSld({
             equipmentDetailByNodeId: equipmentDetailByNodeId,
             downfeed: downfeed,
             transferPumpNodeIds: transferPumpNodeIds)) {
-      maxX = contentMaxX + 12 + _plantW;
+      extrasBottom = math.max(extrasBottom, extrasTop + plantH);
     }
     // Reference detail callouts, bottom-centre of the band — each drawn ONLY
     // when the network actually carries the assembly's key device (G7/G4,
@@ -1041,6 +1072,15 @@ SldSheet buildMechanicalRiserSld({
       y += _notesLineH;
     }
     extrasBottom = math.max(extrasBottom, notesTop + notesH);
+  }
+
+  // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of every keyed
+  // tag, below the extras strip, on THIS sheet.
+  final keyRows = placer.keyRows();
+  if (keyRows.isNotEmpty) {
+    final top = extrasBottom == extrasTop ? extrasTop : extrasBottom + 16;
+    extrasBottom = emitMechRiserKeyTable(prims,
+        rows: keyRows, left: 8, top: top, maxRight: contentMaxX);
   }
 
   // ── Bounds ──────────────────────────────────────────────────────────────────
@@ -2012,6 +2052,17 @@ class _LabelPlacer {
   final List<_LabelRect> _hard = <_LabelRect>[];
   _LabelPlacer(this.prims);
 
+  /// Drawing-review D5 — the keyed entries (text → key) of tags that found no
+  /// legal slot, in key order; identical texts share one key.
+  final Map<String, int> keyOf = <String, int>{};
+
+  /// The level names each keyed text was tagged on (key table LEVEL column).
+  final Map<String, List<String>> keyLevels = <String, List<String>>{};
+
+  /// Drawing-review D5 — the level (floor) name of a sheet y, for the key
+  /// table; null outside the floor bands.
+  String? Function(double y)? levelAt;
+
   /// Round 29 (drawings-3-1) — tags that could only be placed FUSED into
   /// another label (the least-cost fallback after every escape). Carried on
   /// the sheet ([SldSheet.overlapCount]) so the issued PDF / DXF prints the
@@ -2153,6 +2204,171 @@ class _LabelPlacer {
     return (hard: total, soft: soft);
   }
 
+  /// Set per [place] call: is candidate slot `c` (with leader soft cost) a
+  /// LEGAL leader (drawing-review D5)?
+  bool Function(Offset c, double soft) _leaderLegal = (_, __) => true;
+
+  /// Drawing-review D5 — the KEY TAG fallback: a numbered circle hugging the
+  /// element at ([anchorX], [anchorY]) (first clear slot of a small ring, a
+  /// short leader for the outer ring), its text recorded for the key table
+  /// (identical texts share one key). A tag that cannot even fit its circle
+  /// clear is counted in [unresolvedCount] — the honest overlap stamp.
+  void _placeKey(String text,
+      {required double size,
+      required SldRole role,
+      required double anchorX,
+      required double anchorY}) {
+    final key = keyOf.putIfAbsent(text, () => keyOf.length + 1);
+    final level = levelAt?.call(anchorY);
+    if (level != null) {
+      final ls = keyLevels.putIfAbsent(text, () => <String>[]);
+      if (!ls.contains(level)) ls.add(level);
+    }
+    final num = '$key';
+    final w = _labelWidth(num, size);
+    final r = math.max(0.9 * size, w / 2 + 2);
+    double rectCost(_LabelRect q) {
+      var t = 0.0;
+      for (final p in _labels) {
+        t += p.overlap(q);
+      }
+      for (final p in _ink) {
+        t += p.overlap(q);
+      }
+      for (final p in _hard) {
+        t += p.overlap(q);
+      }
+      for (final (x1, y1, x2, y2) in _leaders) {
+        if (_segmentHitsRect(x1, y1, x2, y2, q)) t += size;
+      }
+      return t;
+    }
+
+    // Candidate centres on a 4-unit grid around the element, nearest first:
+    // hugging it (no leader) out to a leader of at most
+    // [kMechRiserMaxLeaderLabelHeights] label heights.
+    final maxLead = kMechRiserMaxKeyLeaderLabelHeights * size;
+    // A sliver of a pipe's 2-unit clearance halo (< 0.15 size squared units
+    // of box overlap) is not an overprint — the drawn line is 0.5 wide.
+    final tol = 0.15 * size;
+    final cands = <(double, double, double)>[];
+    final reach = (maxLead + r) ~/ 4 + 1;
+    for (var i = -reach; i <= reach; i++) {
+      for (var j = -reach; j <= reach; j++) {
+        final dx = i * 4.0, dy = j * 4.0;
+        final d = math.sqrt(dx * dx + dy * dy);
+        if (d < r + 3 || d - r > maxLead) continue;
+        cands.add((dx, dy, d));
+      }
+    }
+    cands.sort((a, b) {
+      final c = a.$3.compareTo(b.$3);
+      if (c != 0) return c;
+      final c2 = a.$2.compareTo(b.$2);
+      return c2 != 0 ? c2 : a.$1.compareTo(b.$1);
+    });
+    // The 16-direction rings first (the preferred hugging slots), then the
+    // grid.
+    cands.insertAll(0, [
+      for (final gap in const [4.0, 7.0, 10.0, 14.0, 18.0, 23.0, 28.0])
+        for (var k = 0; k < 16; k++)
+          (
+            math.sin(k * math.pi / 8) * (r + gap),
+            -math.cos(k * math.pi / 8) * (r + gap),
+            r + gap
+          ),
+    ]);
+    (double, double)? best;
+    var bestCost = double.infinity;
+    var bestFar = false;
+    for (final (dx, dy, d) in cands) {
+      final cx = anchorX + dx, cy = anchorY + dy;
+      // The circle's collision box: its bbox less the empty corners (a
+      // 0.85 r half-side square keeps the round ink, not the corners).
+      final q = _LabelRect(
+          cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
+      final far = d - r > 6;
+      var c = rectCost(q);
+      if (far) {
+        // Its leader must cross no other leader and no placed label.
+        final ex = cx - dx / d * r, ey = cy - dy / d * r;
+        for (final (x1, y1, x2, y2) in _leaders) {
+          if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+            c += size;
+          }
+        }
+        for (final p in _labels) {
+          if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
+        }
+      }
+      if (c < bestCost) {
+        bestCost = c;
+        best = (cx, cy);
+        bestFar = far;
+      }
+      if (c <= tol) break;
+    }
+    // Last resort before the honest stamp: the circle ON its own element
+    // (the element's own pipe may pass under its tag; nothing else may).
+    if (bestCost > tol) {
+      final q = _LabelRect(anchorX - 0.85 * r, anchorY - 0.85 * r,
+          anchorX + 0.85 * r, anchorY + 0.85 * r);
+      var c = 0.0;
+      for (final p in _labels) {
+        c += p.overlap(q);
+      }
+      for (final p in _ink) {
+        final own = anchorX >= p.minX - 0.01 &&
+            anchorX <= p.maxX + 0.01 &&
+            anchorY >= p.minY - 0.01 &&
+            anchorY <= p.maxY + 0.01;
+        if (!own) c += p.overlap(q);
+      }
+      for (final p in _hard) {
+        c += p.overlap(q);
+      }
+      for (final (x1, y1, x2, y2) in _leaders) {
+        // A leader leaving this same element is its own linework.
+        final mine = (x1 - anchorX).abs() < 0.01 && (y1 - anchorY).abs() < 0.01;
+        if (!mine && _segmentHitsRect(x1, y1, x2, y2, q)) c += size;
+      }
+      if (c <= tol) {
+        bestCost = 0;
+        best = (anchorX, anchorY);
+        bestFar = false;
+      }
+    }
+    final (cx, cy) = best!;
+    if (bestCost > tol) unresolvedCount++;
+    _labels.add(_LabelRect(cx - r, cy - r, cx + r, cy + r));
+    if (bestFar) {
+      final dx = cx - anchorX, dy = cy - anchorY;
+      final dl = math.sqrt(dx * dx + dy * dy);
+      final ex = cx - dx / dl * r, ey = cy - dy / dl * r;
+      prims.add(SldLine(anchorX, anchorY, ex, ey,
+          weight: SldWeight.thin, role: role));
+      _leaders.add((anchorX, anchorY, ex, ey));
+    }
+    prims
+      ..add(SldCircle(cx, cy, r, weight: SldWeight.thin, role: role))
+      ..add(SldLabel(cx - w / 2, cy + 0.36 * size, num, size: size, role: role));
+  }
+
+  /// The key-table rows in key order (drawing-review D5).
+  List<({int key, String text, String levels})> keyRows() {
+    String levels(List<String>? ls) {
+      if (ls == null || ls.isEmpty) return '-';
+      if (ls.length <= 2) return ls.join(', ');
+      return '${ls.last}..${ls.first} (x${ls.length})';
+    }
+
+    final out = [
+      for (final MapEntry(:key, :value) in keyOf.entries)
+        (key: value, text: key, levels: levels(keyLevels[key])),
+    ]..sort((a, b) => a.key.compareTo(b.key));
+    return out;
+  }
+
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
@@ -2207,6 +2423,21 @@ class _LabelPlacer {
   }) {
     bool needsLeader(Offset c) =>
         math.sqrt(c.dx * c.dx + c.dy * c.dy) > _kLeaderThreshold;
+    _leaderLegal = (Offset c, double soft) {
+      if (!needsLeader(c)) return true;
+      if (soft > 0) return false;
+      final r = _rectFor(defaultX + c.dx, defaultY + c.dy, text, size);
+      final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
+      final len = math.sqrt(
+          (ex - anchorX) * (ex - anchorX) + (ey - anchorY) * (ey - anchorY));
+      if (len > kMechRiserMaxLeaderLabelHeights * size) return false;
+      for (final (x1, y1, x2, y2) in _leaders) {
+        if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+          return false;
+        }
+      }
+      return true;
+    };
     double cost(Offset c) =>
         _costAt(defaultX + c.dx, defaultY + c.dy, text, size,
             anchorX: anchorX, anchorY: anchorY, withLeader: needsLeader(c));
@@ -2227,10 +2458,11 @@ class _LabelPlacer {
       if (total > bestCost) return;
       final (:hard, :soft) = leaderCost(c);
       final lead = hard + soft;
-      // A primary-clear slot whose leader is HARD-free ends the search (a
-      // short hop over the adjacent run does not block it); every crossing,
-      // soft or hard, orders the slots that cannot clear.
-      if (total <= 0 && hard <= 0) {
+      // Drawing-review D5 — a slot is LEGAL only when it overlaps nothing AND
+      // its leader (if any) is short ([kMechRiserMaxLeaderLabelHeights]),
+      // crosses no pipe it does not name and no other leader. Only a legal
+      // slot ends the search; with none, the tag is keyed (below).
+      if (total <= 0 && hard <= 0 && _leaderLegal(c, soft)) {
         bestCost = total;
         bestLeader = lead;
         best = c;
@@ -2307,15 +2539,19 @@ class _LabelPlacer {
         }
       }
     }
+    // Drawing-review D5 — no legal slot: KEY the element instead of parking
+    // its text far away / over another tag.
+    if (!cleared) {
+      _placeKey(text, size: size, role: role, anchorX: anchorX, anchorY: anchorY);
+      return;
+    }
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
     final rect = _rectFor(lx, ly, text, size);
     final bandOf = bandIndexAt;
     final anchorBand = bandOf?.call(anchorY);
     final labelBand = bandOf?.call((rect.minY + rect.maxY) / 2);
-    if (!cleared && _labels.any((p) => rect.fusesWith(p, size))) {
-      unresolvedCount++;
-    } else if (anchorBand != null && labelBand != anchorBand) {
+    if (anchorBand != null && labelBand != anchorBand) {
       unresolvedCount++;
     }
     _labels.add(rect);
@@ -2331,6 +2567,80 @@ class _LabelPlacer {
     }
     prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));
   }
+}
+
+/// Proper crossing of two segments (shared endpoints / touches do not count).
+bool _segmentsCrossProper(double ax, double ay, double bx, double by,
+    double cx, double cy, double dx, double dy) {
+  double o(double px, double py, double qx, double qy, double rx, double ry) =>
+      (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  final d1 = o(cx, cy, dx, dy, ax, ay), d2 = o(cx, cy, dx, dy, bx, by);
+  final d3 = o(ax, ay, bx, by, cx, cy), d4 = o(ax, ay, bx, by, dx, dy);
+  const eps = 1e-9;
+  return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) &&
+      ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+}
+
+/// Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of a riser
+/// sheet: one row per key (key, size-service-material / tag, length, level),
+/// in column blocks of at most [maxRows] rows laid left to right from
+/// ([left], [top]) within [maxRight]; text at [size] (the tag size, so it
+/// prints at the same >= 7 pt as the tags). Returns the table's bottom y.
+double emitMechRiserKeyTable(
+  List<SldPrim> prims, {
+  required List<({int key, String text, String levels})> rows,
+  required double left,
+  required double top,
+  required double maxRight,
+  double size = 8,
+}) {
+  if (rows.isEmpty) return top;
+  const pitch = 12.0;
+  const title = 'KETERANGAN PIPA / PIPE KEY';
+  (String, String) split(String t) {
+    final i = t.indexOf(' - ');
+    return i < 0 ? (t, '-') : (t.substring(0, i), t.substring(i + 3));
+  }
+
+  final cells = [
+    for (final r in rows) ['${r.key}', ...() {
+      final (a, b) = split(r.text);
+      return [a, b];
+    }(), r.levels],
+  ];
+  const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH', 'LEVEL'];
+  final colW = [
+    for (var c = 0; c < 4; c++)
+      [heads[c], for (final row in cells) row[c]]
+              .map((t) => _labelWidth(t, size))
+              .fold(0.0, math.max) +
+          10,
+  ];
+  final blockW = colW.fold(0.0, (a, b) => a + b);
+  final fit = math.max(1, ((maxRight - left + 16) / (blockW + 16)).floor());
+  final maxRows = (rows.length / fit).ceil();
+  prims.add(SldLabel(left, top + size, title, size: size, bold: true));
+  var bottom = top;
+  for (var b = 0; b * maxRows < rows.length; b++) {
+    final x0 = left + b * (blockW + 16);
+    final y0 = top + size + 6;
+    final slice = cells.skip(b * maxRows).take(maxRows).toList();
+    final h = (slice.length + 1) * pitch + 4;
+    prims.add(SldRect(x0, y0, blockW, h, weight: SldWeight.thin));
+    var x = x0;
+    for (var c = 0; c < 4; c++) {
+      if (c > 0) prims.add(SldLine(x, y0, x, y0 + h));
+      prims.add(SldLabel(x + 4, y0 + pitch - 2, heads[c], size: size, bold: true));
+      for (var r = 0; r < slice.length; r++) {
+        prims.add(
+            SldLabel(x + 4, y0 + (r + 2) * pitch - 2, slice[r][c], size: size));
+      }
+      x += colW[c];
+    }
+    prims.add(SldLine(x0, y0 + pitch + 2, x0 + blockW, y0 + pitch + 2));
+    bottom = math.max(bottom, y0 + h);
+  }
+  return bottom;
 }
 
 /// Round 15 — where a leader from ([ax], [ay]) lands on label box [r]: the

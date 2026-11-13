@@ -844,6 +844,16 @@ const _pdfScaleLadderM = <double>[1, 2, 5, 10, 20, 50, 100];
 /// when [pointsPerMeter] is not finite/positive (nothing honest to draw).
 /// The ladder length (metres) [pdfScaleBarReal] draws at [pointsPerMeter] —
 /// the one whose drawn width lands nearest 120 pt.
+/// Drawing-review D6 — the scale-bar rung (metres) the plan PDF draws at
+/// [pointsPerMeter], public so every DXF twin draws the SAME bar.
+double planScaleBarMetres(double pointsPerMeter) =>
+    _pdfScaleBarMetres(pointsPerMeter);
+
+/// Drawing-review D6 — the scale-bar figure text (`0` / `1.5 m` / `3 m`)
+/// exactly as the PDF bar prints it, shared by the DXF bars.
+String planScaleBarFigure(double m) =>
+    m == m.roundToDouble() ? '${m.round()} m' : '${_n(m)} m';
+
 double _pdfScaleBarMetres(double pointsPerMeter) {
   const targetPt = 120.0;
   var bestM = _pdfScaleLadderM.first;
@@ -1162,6 +1172,7 @@ String dxfPlanChrome(
   required double unitsPerPaperMm,
   required int? plotDenominator,
   required String projectName,
+  String paperLabel = 'A3',
 }) {
   if (chrome.isEmpty) return '';
   final b = StringBuffer();
@@ -1250,12 +1261,11 @@ String dxfPlanChrome(
       final x = minX + barLen * i / 4;
       line(kDxfLayerScale, x, y0, x, y0 + barH);
     }
-    String fig(double v) =>
-        v == v.roundToDouble() ? v.round().toString() : v.toString();
     final fy = y0 - txt * 1.5;
     text(kDxfLayerScale, minX, fy, txt, '0');
-    text(kDxfLayerScale, minX + barLen / 2, fy, txt, '${fig(m / 2)} m');
-    text(kDxfLayerScale, minX + barLen, fy, txt, '${fig(m)} m');
+    text(kDxfLayerScale, minX + barLen / 2, fy, txt,
+        planScaleBarFigure(m / 2));
+    text(kDxfLayerScale, minX + barLen, fy, txt, planScaleBarFigure(m));
     text(kDxfLayerScale, minX + barLen + 6 * u, y0, txt, '1 : $n');
   }
 
@@ -1271,7 +1281,9 @@ String dxfPlanChrome(
   text(kDxfLayerNorth, tipX, tipY + txt / 2, txt, 'N');
 
   // The shared ISO title block, hung below the extent at the right.
-  final scaleRow = n != null && n > 0 ? '1 : $n' : 'NTS';
+  // Drawing-review D6 — the SAME scale row the plan PDF stamps
+  // (`1 : N @ A3`), so the two formats of one sheet agree.
+  final scaleRow = n != null && n > 0 ? '1 : $n @ $paperLabel' : 'NTS';
   final rows = _titleBlockRows(chrome, projectName, scaleRow);
   if (rows.isNotEmpty) {
     final unit = txt / 1.2; // dxfTitleBlock: value text = unit × 1.2
@@ -1303,7 +1315,9 @@ const double kHelveticaCapHeightEm = 0.718;
 /// as `Â·` in AutoCAD; every writer routes its string group values through
 /// here so the output is pure printable ASCII (no byte > 0x7E) while carrying
 /// the same information as the PDF:
-///   `·` (U+00B7)  → `-`   (the label separator)
+///   `·` (U+00B7)  → `%%183` (drawing-review D6: the AutoCAD `%%nnn`
+///                   character-code escape — the ANSI_1252 middle dot, so the
+///                   DXF prints the SAME separator as the PDF instead of `-`)
 ///   `Ø` / `ø`     → `%%c` (the AutoCAD diameter control code)
 ///   `°`           → `%%d` (the AutoCAD degree control code)
 ///   `²` / `³`     → `2` / `3`
@@ -1322,7 +1336,7 @@ String dxfText(String raw) {
   for (final code in raw.runes) {
     switch (code) {
       case 0xB7:
-        b.write('-');
+        b.write('%%183');
       case 0xD8 || 0xF8:
         b.write('%%c');
       case 0xB0:

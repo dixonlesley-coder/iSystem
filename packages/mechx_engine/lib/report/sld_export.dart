@@ -9,7 +9,8 @@ library;
 import 'dart:typed_data';
 
 import 'drawing_chrome.dart' show DrawingChrome;
-import 'electrical_dxf_export.dart' show SldDxfLayers, electricalSldToDxf;
+import 'electrical_dxf_export.dart'
+    show SldDxfLayers, electricalSldToDxf, sldSheetsToDxfSet;
 import 'electrical_pdf_export.dart'
     show electricalSldSheetsToPdf, electricalSldToPdf;
 import 'sld_sheet.dart';
@@ -17,7 +18,7 @@ import 'sld_sheet.dart';
 // The DXF layer namespace a mechanical caller selects rides this neutral
 // wrapper, so re-export it here (the app imports `sld_export` for the SLD
 // exports).
-export 'electrical_dxf_export.dart' show SldDxfLayers;
+export 'electrical_dxf_export.dart' show SldDxfLayers, sldSheetsToDxfSet;
 
 /// Render a prebuilt [sheet] to a single-page vector PDF. [diagramTitle] is the
 /// title-block heading (e.g. `SINGLE-LINE DIAGRAM` / `DIAGRAM SISTEM AIR BERSIH`).
@@ -92,3 +93,20 @@ String sldSheetToDxf({
       projectName: projectName,
       layers: layers,
     );
+
+/// Drawing-review D6 — the DXF of a PAGINATED sheet set ([sldSheetsToPdf]'s
+/// pages), one model-space frame per page with its own `SHEET i of n`, so the
+/// PDF and DXF of one drawing carry the same content. Mechanical layers by
+/// default (the riser set).
+String sldSheetsToDxf(
+  List<SldSheet> sheets, {
+  String diagramTitle = 'SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  String? projectName,
+  SldDxfLayers layers = SldDxfLayers.mechanical,
+}) =>
+    sldSheetsToDxfSet(sheets,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        projectName: projectName,
+        layers: layers);

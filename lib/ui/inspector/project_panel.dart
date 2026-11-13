@@ -15,11 +15,16 @@ import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
-    show SldDxfLayers, electricalSldToDxf;
+    show SldDxfLayers, electricalSldToDxf, sldSheetsToDxfSet;
 import 'package:mechx_engine/report/electrical_pagination.dart'
-    show electricalOverviewToPdf, electricalRiserToPdf;
+    show
+        electricalOverviewToPdf,
+        electricalRiserToPdf,
+        paginatedElectricalOverviewSheets,
+        paginatedElectricalRiserSheets;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show
+        electricalSldDetailSheets,
         electricalSldDetailToPdf,
         electricalSldToPdf,
         electricalSldToPdfPaginated;
@@ -46,7 +51,7 @@ import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
     show drawnWaterFeedEquipment, elementTags;
 import 'package:mechx_engine/report/sld_export.dart'
-    show sldSheetToDxf, sldSheetToPdf, sldSheetsToPdf;
+    show sldSheetToPdf, sldSheetsToDxf, sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -2227,9 +2232,20 @@ Future<bool> writeSubmittalPackageToDir(
     sldSheetsToPdf(
       frontMatter,
       title: 'iSystem MEP submittal',
-      diagramTitles: kFrontMatterDiagramTitles,
-      // Drawing-review D1 — each front-matter page stamps its OWN number.
-      drawingNumbers: frontMatterNumbers,
+      // Drawing-review D1 — each front-matter page stamps its OWN number (a
+      // long Daftar Gambar continues on further G-002 pages).
+      diagramTitles: [
+        kFrontMatterDiagramTitles[0],
+        for (var i = 0; i < drawingListPageCount(drawingList.length); i++)
+          kFrontMatterDiagramTitles[1],
+        kFrontMatterDiagramTitles[2],
+      ],
+      drawingNumbers: [
+        frontMatterNumbers[0],
+        for (var i = 0; i < drawingListPageCount(drawingList.length); i++)
+          frontMatterNumbers[1],
+        frontMatterNumbers[2],
+      ],
       chrome: DrawingChrome(
         revisionNumber: doc.revisionTag,
         clientName: doc.clientName,
@@ -2395,9 +2411,8 @@ Future<bool> writeSubmittalPackageToDir(
   final titleProjectName = project.name.trim().isEmpty
       ? null
       : project.name.trim();
-  final riserSheet = buildLiveRiserSheet(ref, null);
   // Round 21 (riser-drafting-2-2) — the issued PDF paginates a tall riser to
-  // legible pages; the DXF below stays one sheet.
+  // legible pages; drawing-review D6 — the DXF carries the same pages.
   final riserPages = buildLiveRiserPages(ref, null);
   await File(out('riser-sld.pdf')).writeAsBytes(
     riserPages.length == 1
@@ -2416,9 +2431,11 @@ Future<bool> writeSubmittalPackageToDir(
             projectName: titleProjectName,
           ),
   );
+  // Drawing-review D6 — the DXF carries the SAME pages as the PDF (one
+  // model-space frame per page, `SHEET i of n`, the LANJUT KE marks).
   await File(out('riser-sld.dxf')).writeAsString(
-    sldSheetToDxf(
-      sheet: riserSheet,
+    sldSheetsToDxf(
+      riserPages,
       diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
       chrome: sldChrome(DrawingSeries.mechanicalRiser),
       projectName: titleProjectName,
@@ -2680,14 +2697,17 @@ Future<bool> writeSubmittalPackageToDir(
     // every other electrical sheet of the set), built exactly as the
     // standalone 'Single-line DXF' export builds it (same kA maps).
     await File(out('electrical-sld.dxf')).writeAsString(
-      electricalSldToDxf(
-        sheet: buildElectricalSld(
+      sldSheetsToDxfSet(
+        electricalSldDetailSheets(
           project: eProject,
           result: eResult,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
           adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
+          chrome: sldChrome(DrawingSeries.electricalDetail),
+          projectName: base,
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
         ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
         chrome: sldChrome(DrawingSeries.electricalDetail),
@@ -2698,11 +2718,6 @@ Future<bool> writeSubmittalPackageToDir(
     // Building single-line (overview) — the whole distribution hierarchy on one
     // sheet, with the PLN/MV/TX/LV source spine, in both formats.
     final overviewChrome = sldChrome(DrawingSeries.electricalOverview);
-    final overviewSheet = buildElectricalOverview(
-      project: eProject,
-      result: eResult,
-      sourceChain: true,
-    );
     // Round 23 (elec-drafting-2-1) — paginated by sub-tree whenever one A3
     // sheet would print below the minimum plotted label size.
     await File(out('electrical-overview-sld.pdf')).writeAsBytes(
@@ -2716,8 +2731,15 @@ Future<bool> writeSubmittalPackageToDir(
       ),
     );
     await File(out('electrical-overview-sld.dxf')).writeAsString(
-      electricalSldToDxf(
-        sheet: overviewSheet,
+      sldSheetsToDxfSet(
+        paginatedElectricalOverviewSheets(
+          project: eProject,
+          result: eResult,
+          sourceChain: true,
+          chrome: overviewChrome,
+          projectName: base,
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
+        ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
         chrome: overviewChrome,
         projectName: base,
@@ -2730,12 +2752,6 @@ Future<bool> writeSubmittalPackageToDir(
     // Round 17 (drafting-visual-3-2) — the riser carries the SAME supply
     // spine (PLN head / earthing / TX / genset) as the overview in this
     // package, so two sheets of one submittal never disagree on the supply.
-    final eRiserSheet = buildElectricalRiser(
-      project: eProject,
-      result: eResult,
-      building: project.building,
-      sourceChain: true,
-    );
     // Round 23 (elec-drafting-2-1) — floor-range pages (LANJUT KE match
     // stubs) whenever one A3 sheet would print below the label floor.
     await File(out('electrical-riser.pdf')).writeAsBytes(
@@ -2750,8 +2766,16 @@ Future<bool> writeSubmittalPackageToDir(
       ),
     );
     await File(out('electrical-riser.dxf')).writeAsString(
-      electricalSldToDxf(
-        sheet: eRiserSheet,
+      sldSheetsToDxfSet(
+        paginatedElectricalRiserSheets(
+          project: eProject,
+          result: eResult,
+          building: project.building,
+          sourceChain: true,
+          chrome: eRiserChrome,
+          projectName: base,
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
+        ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
         chrome: eRiserChrome,
         projectName: base,
