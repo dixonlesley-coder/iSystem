@@ -143,6 +143,16 @@ _(empty)_
 - App pins: `test/reference_apartment_app_test.dart` (BEFORE / AFTER the PRV).
 - Regression tests (A1, A2): `test/reference_apartment_regression_test.dart`.
 
+**Deliberate expected findings** (final state: PLN 197 000 VA, genset 300 kVA, PRV drawn):
+- `fire-system-over-pressure:FP`: churn 1.4 x 127.054 = 177.876 m = 1745 kPa > 1210.
+- `standpipe-outlet-over-pressure:FP:0-11`: every hose valve's static at churn is above 1207 kPa.
+- 2 x `non-selective`: Feeder PP-E (200 A vs the 200 A PP-E incomer) and Feeder to MEP (200 A vs 160 A), both capped at Iz 222 of 70 mm² FRC.
+- `enclosure-temp-rise-exceeded` on PP-E (36 K > 35 K).
+- Infos: `combined-fire-sprinkler-governs:FP` (the sprinkler sets the head, the standpipe the flow), `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
+- Before the PRV is drawn: 8 x `downfeed-over-pressure` (Lantai 1, 401.229 kPa static).
+
+**Expected absent:** any critical or error, `ads-disconnection-on-genset`, `life-safety-*`, `service-capacity-below-demand`, `pressure-zone`, `downfeed-over-pressure` (after the PRV), `unfed-panel`.
+
 **Fixed by its review (2026-11-13).**
 - **A2:** `combined-fire-sprinkler-governs` was keyed on `pumpIds.first`, the jockey FJ. It is now keyed on the duty pump FP.
 - **A1:** the combined pump was rated on the sprinkler point, 4.714 L/s @ 127.054 m (11 kW), a pump that cannot deliver the 31.545 L/s hydrant flow its pipes are sized for. It is now rated at the larger flow and the larger head, 31.545 L/s @ 127.054 m (75 kW; jockey 0.3155 L/s). The reviewer overruled the Round 37 "larger head at its own flow" rule (marked superseded in `docs/ENGINE-INVARIANTS.md`).
@@ -157,3 +167,4 @@ _(empty)_
 - **(f) No step-load / fire-tank rules.** There is no genset step-load check beyond the largest-motor dip, and no fire-water reserve rule (FT 60 000 L is a brief value).
 - **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
+- **(i) Genset rating ignores ADS on the alternator fault.** The recommended genset rating (`sizeGenerator`: running kVA, motor-start floor) does not consider automatic disconnection on the alternator's own fault level. Before A1 the app's recommended 50 kVA set (alternator fault 0.6 kA) failed `ads-disconnection-on-genset` on three ways (lift Zs 0.573, FP and FPS 0.558 > 0.437 Ω). Only A1's 75 kW fire pump, which raised the start floor to 300 kVA, cleared it.
