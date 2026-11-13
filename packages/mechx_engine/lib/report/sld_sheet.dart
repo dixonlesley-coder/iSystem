@@ -111,6 +111,12 @@ class SldSheet {
   /// byte-identical.
   final double? belowMinLabelPt;
 
+  /// Drawing backlog C-4 — tags the builder could only print as numbered KEY
+  /// circles (read through the sheet's pipe-key table). Lets a lone-floor
+  /// riser page prefer the band height that tags most elements directly.
+  /// 0 (the default) ⇒ byte-identical.
+  final int keyCount;
+
   const SldSheet({
     required this.prims,
     required this.minX,
@@ -121,6 +127,7 @@ class SldSheet {
     required this.supplyNote,
     this.overlapCount = 0,
     this.belowMinLabelPt,
+    this.keyCount = 0,
   });
 
   /// This sheet flagged as printing at [pt] (below the plotted floor).
@@ -134,6 +141,7 @@ class SldSheet {
         supplyNote: supplyNote,
         overlapCount: overlapCount,
         belowMinLabelPt: pt,
+        keyCount: keyCount,
       );
 
   bool get isEmpty => prims.isEmpty;

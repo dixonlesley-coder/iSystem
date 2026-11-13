@@ -10,6 +10,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/electrical_pagination.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
@@ -266,6 +267,51 @@ void main() {
         expect(all.where((x) => x == 'PP-Lt$f'), hasLength(1),
             reason: 'PP-Lt$f listed once');
       }
+    });
+  });
+
+  group('C-4 plant-level riser pages tag directly', () {
+    SldSheet fake(double h, {int keys = 0, int overlaps = 0}) => SldSheet(
+        prims: const [],
+        minX: 0,
+        minY: 0,
+        maxX: 1000,
+        maxY: h,
+        legend: const [],
+        supplyNote: '',
+        overlapCount: overlaps,
+        keyCount: keys);
+
+    test('a taller band wins when it keys fewer tags and stays width-bound',
+        () {
+      // keys fall with the band: 1.0 → 9, 1.5 → 4, 2.0 → 0.
+      SldSheet build(double h, double p) =>
+          fake(h, keys: {150.0: 9, 225.0: 4, 300.0: 0}[h] ?? 0);
+      final out = riserKeyBandEscalation(
+          build: build, bandH: 150, best: build(150, 1));
+      expect(out.keyCount, 0);
+      expect(out.maxY, 300);
+    });
+
+    test('never trades an overprint or a height-bound page for a key', () {
+      SldSheet more(double h, double p) => fake(h, keys: 0, overlaps: 1);
+      expect(
+          riserKeyBandEscalation(
+                  build: more, bandH: 150, best: fake(150, keys: 3))
+              .keyCount,
+          3);
+      // Too tall for the A3 width: the search stops (aspect > 0.5).
+      SldSheet tall(double h, double p) => fake(h * 3, keys: 0);
+      expect(
+          riserKeyBandEscalation(
+                  build: tall, bandH: 150, best: fake(150, keys: 3))
+              .keyCount,
+          3);
+    });
+
+    test('keyCount defaults to 0 and survives the legibility flag', () {
+      expect(fake(10).keyCount, 0);
+      expect(fake(10, keys: 2).withBelowMinLabelPt(6).keyCount, 2);
     });
   });
 }

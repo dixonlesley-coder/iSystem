@@ -1009,6 +1009,21 @@ void main() {
       // The terminus at the drainage exit — a GENERIC disposal label, never a
       // fabricated STP / city-sewer destination the model can't confirm.
       expect(text, contains('KE SALURAN PEMBUANGAN'));
+      // Drawing backlog C-4 — the note takes a clear slot: no pipe line runs
+      // through its text box.
+      final note = s.prims
+          .whereType<SldLabel>()
+          .firstWhere((l) => l.text == 'KE SALURAN PEMBUANGAN');
+      final nx1 = note.x + note.text.length * note.size * 0.6;
+      for (final l in s.prims.whereType<SldLine>()) {
+        final lx0 = l.x1 < l.x2 ? l.x1 : l.x2, lx1 = l.x1 < l.x2 ? l.x2 : l.x1;
+        final ly0 = l.y1 < l.y2 ? l.y1 : l.y2, ly1 = l.y1 < l.y2 ? l.y2 : l.y1;
+        final hits = lx1 > note.x + 0.5 &&
+            lx0 < nx1 - 0.5 &&
+            ly1 > note.y - note.size + 0.5 &&
+            ly0 < note.y - 0.5;
+        expect(hits, isFalse, reason: 'line through the terminus note: $l');
+      }
       expect(text, isNot(contains('KE STP')));
       expect(text, isNot(contains('KE RIOL')));
       // Focusing the clean-water view hides the drainage reference boxes + the

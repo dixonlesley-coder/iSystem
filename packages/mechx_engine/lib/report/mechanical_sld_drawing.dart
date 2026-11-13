@@ -386,16 +386,62 @@ SldSheet riserPitchEscalation({
   bool enabled = true,
 }) {
   var best = build(bandH, 1.0);
-  if (!enabled || best.overlapCount == 0) return best;
-  for (final p in kMechRiserPitchSteps) {
-    for (final k in kMechRiserBandSteps) {
-      if (p == 1.0 && k == 1.0) continue;
-      final s = build(bandH * k, p);
-      if (s.overlapCount < best.overlapCount) best = s;
-      if (best.overlapCount == 0) return best;
+  if (!enabled) return best;
+  var bestK = 1.0, bestP = 1.0;
+  if (best.overlapCount > 0) {
+    search:
+    for (final p in kMechRiserPitchSteps) {
+      for (final k in kMechRiserBandSteps) {
+        if (p == 1.0 && k == 1.0) continue;
+        final s = build(bandH * k, p);
+        if (s.overlapCount < best.overlapCount) {
+          best = s;
+          bestK = k;
+          bestP = p;
+        }
+        if (best.overlapCount == 0) break search;
+      }
     }
   }
-  return best;
+  return riserKeyBandEscalation(
+      build: build, bandH: bandH, best: best, bandStep: bestK, pitch: bestP);
+}
+
+/// Drawing backlog C-4 — the taller lone-floor bands tried to tag a crowded
+/// plant level DIRECTLY: the band height is free on a width-bound page, so the
+/// extra rows give the placer clear slots before it falls back to a numbered
+/// key. Steps beyond [kMechRiserBandSteps].
+const List<double> kMechRiserKeyBandSteps = [1.5, 2.0, 2.5, 3.0];
+
+/// Largest drawing height / width a taller band may reach: the page stays
+/// WIDTH-bound on the A3 drawing area (under its ~0.59 ratio, with room for
+/// the title strip), so the band costs no label size.
+const double kMechRiserKeyBandMaxAspect = 0.5;
+
+/// Drawing backlog C-4 — from the escalation's [best] (band step [bandStep],
+/// pitch [pitch]) a page that still prints KEY circles is re-drawn at each
+/// taller band ([kMechRiserKeyBandSteps]) at the same pitch; the first sheet
+/// with no more overprints, strictly fewer keys and a width-bound aspect wins
+/// a step, and the search keeps the fewest keys. No key ⇒ [best]. Pure.
+SldSheet riserKeyBandEscalation({
+  required SldSheet Function(double bandH, double pitchScale) build,
+  required double bandH,
+  required SldSheet best,
+  double bandStep = 1.0,
+  double pitch = 1.0,
+}) {
+  var out = best;
+  for (final k in kMechRiserKeyBandSteps) {
+    if (out.keyCount == 0) break;
+    if (k <= bandStep) continue;
+    final s = build(bandH * k, pitch);
+    final w = s.maxX - s.minX, h = s.maxY - s.minY;
+    if (w <= 0 || h / w > kMechRiserKeyBandMaxAspect) break;
+    if (s.overlapCount <= out.overlapCount && s.keyCount < out.keyCount) {
+      out = s;
+    }
+  }
+  return out;
 }
 
 /// Drawing review S4 — the FIXTURE COLUMNS of one floor page moved to part 2
@@ -1136,12 +1182,18 @@ SldSheet _buildMechanicalRiserSld({
       // Round 15 — the terminus glyph is ink a node tag must not print over.
       placer.reserveBox(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
           p.dx + _symbolSize / 2, gy + _symbolSize / 2);
-      placer.reserve(
-          SldLabel(p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
-              // Drawing-review D4 — 8 units like the tags, so it still plots at
-              // >= 7 pt on a page fitted below 1:1.
-              size: 8,
-              bold: true));
+      // Drawing backlog C-4 — the note takes its own CLEAR slot: placed
+      // (not forced) after every pipe leg is reserved, so it never sits on a
+      // line, and reserved before the pipe tags, which then avoid it.
+      // Drawing-review D4 — 8 units like the tags, so it still plots at
+      // >= 7 pt on a page fitted below 1:1.
+      const note = 'KE SALURAN PEMBUANGAN';
+      placer.place(p.dx + _symbolSize / 2 + 4, gy + 3, note,
+          size: 8,
+          bold: true,
+          anchorX: p.dx,
+          anchorY: gy,
+          candidates: _riserLadder(note));
     }
   }
 
@@ -1569,6 +1621,7 @@ SldSheet _buildMechanicalRiserSld({
     legend: _fittingLegend(network, focus, prims),
     supplyNote: supplyNote,
     overlapCount: placer.unresolvedCount,
+    keyCount: placer.keyOf.length,
   );
 }
 

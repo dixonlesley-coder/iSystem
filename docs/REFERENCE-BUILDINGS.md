@@ -259,8 +259,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
 
 ### Backlog (not cured in this pass)
-- Plant-level mechanical riser pages (tower `riser-sld` p13 / p1, apartment p1 / p6,
-  shophouse p2) are crowded and readable only via the key table.
 - Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
   detail sheet; it keeps the honest overlap stamp. Only the submittal package
   issues detail sheets.
@@ -280,3 +278,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 - C-3 Building single-line density: identical sibling leaf boards (same incomer and
   ways) ride one `<first>..<last> (TIPIKAL xN)` node with a per-board feeder table; a wide
   flat tier packs into a grid of rows. Tower E-301 now issues on one page (was 17).
+- C-4 Plant-level riser pages: the drainage terminus note takes its own clear slot (pipes
+  and tags avoid it), and a lone-floor page that still prints key circles is re-drawn at
+  a taller band while it stays width-bound, keeping the fewest keys.
