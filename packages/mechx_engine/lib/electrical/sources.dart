@@ -75,10 +75,28 @@ ApparentPower selectGeneratorKva(ApparentPower required) {
 
 /* ------------------------------ Genset dip -------------------------------- */
 
-/// Typical per-unit direct-axis sub-transient reactance Xd'' of a genset
-/// alternator on its own kVA base (real machines ~0.12–0.20 pu).
-/// // VERIFY — IEC 60034-4 / alternator datasheet.
-const double kGensetSubtransientReactancePu = 0.15;
+/// Backlog B-5 (2026-11-13) — THE ONE alternator reactance pair (per unit on
+/// the set's own kVA base). Two calculations need two different reactances
+/// of the SAME machine, so they are named, not merged:
+///
+///  * [kAlternatorSubtransientXdPu] — X''d, the direct-axis SUB-TRANSIENT
+///    reactance: it sets the first-cycles symmetrical fault current
+///    S / (√3·U·X''d) that breaking capacity, busbar withstand and the
+///    instantaneous (magnetic) release see — the genset fault level
+///    (`onSiteSourceFaultA`, `gensetFaultBasis`, `gensetAdsCheck`).
+///  * [kAlternatorTransientXdPu] — X'd, the direct-axis TRANSIENT reactance:
+///    a motor start draws its locked-rotor kVA for hundreds of milliseconds
+///    to seconds, past the sub-transient period, so the momentary terminal
+///    dip the AVR must recover from is the voltage divider on X'd
+///    (`_estimateDipPct`, the genset start floor).
+///
+/// X''d < X'd on every machine (typical LV alternators X''d 0.10–0.15,
+/// X'd 0.15–0.25). // VERIFY — secondarySource: IEC 60034-4 / the alternator
+/// datasheet governs both.
+const double kAlternatorSubtransientXdPu = 0.12;
+
+/// X'd — see [kAlternatorSubtransientXdPu]. // VERIFY — alternator datasheet.
+const double kAlternatorTransientXdPu = 0.15;
 
 /// Maximum permissible MOMENTARY terminal-voltage dip during motor starting
 /// (% of nominal). // VERIFY — ISO 8528-5 transient-deviation class.
@@ -573,21 +591,21 @@ String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
 /// Estimated momentary voltage-dip % for a starting kVA against a genset rating,
-/// via the voltage-divider model with Xd'' the alternator sub-transient
-/// reactance: dip = 100·z/(gen + z), z = startKva·Xd''.
+/// via the voltage-divider model with X'd the alternator TRANSIENT reactance
+/// ([kAlternatorTransientXdPu], B-5): dip = 100·z/(gen + z), z = startKva·X'd.
 double _estimateDipPct(double startKva, double genKva) {
   if (genKva <= 0) return 100;
   if (startKva <= 0) return 0;
-  final z = startKva * kGensetSubtransientReactancePu;
+  final z = startKva * kAlternatorTransientXdPu;
   return 100 * (z / (genKva + z));
 }
 
 /// Smallest genset kVA holding the dip from [startKva] within [limitPct].
-/// From dip ≤ limit ⇒ gen ≥ z·(100 − limit)/limit, z = startKva·Xd''.
+/// From dip ≤ limit ⇒ gen ≥ z·(100 − limit)/limit, z = startKva·X'd.
 double _minGensetKvaForDip(double startKva, double limitPct) {
   if (startKva <= 0) return 0;
   if (limitPct <= 0) return double.infinity;
-  final z = startKva * kGensetSubtransientReactancePu;
+  final z = startKva * kAlternatorTransientXdPu;
   return z * ((100 - limitPct) / limitPct);
 }
 
@@ -672,7 +690,7 @@ GensetStartResult assessGensetStart(
 /// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
 /// — the smallest genset kVA that starts the limiting motor of [motors]
 /// within [kMaxStartVoltageDipPct] (the [assessGensetStart] recommendation,
-/// `z·(100 − limit)/limit`, z = start kVA × Xd''). 0 with no motor.
+/// `z·(100 − limit)/limit`, z = start kVA × X'd). 0 with no motor.
 ApparentPower gensetStartFloorKva(List<GensetMotor> motors) =>
     assessGensetStart(const ApparentPower(1), motors: motors)
         .recommendedMinGensetKva;

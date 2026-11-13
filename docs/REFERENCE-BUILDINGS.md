@@ -168,7 +168,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Jockey flow basis:** resolved by A1 (both 0.3155 L/s).
-- **(b) Two alternator reactances.** The motor-start dip and the genset start floor use Xd'' 0.15 pu (`kGensetSubtransientReactancePu`), while the genset ADS fault uses 0.12 pu (`kAlternatorXdPu`), for the same set.
 - **(c) Hose outlet height.** A hydrant box sits at the 1.1 m fixture height (39.6 m on Lantai 12), which sets its pipe leg, while the standpipe lift uses the 1.2 m outlet height (39.7 m).
 - **(d) Sprinkler head height.** A head node sits at the 1.1 m fixture height, while its run is measured as a ceiling run (no leg) and the lift is taken at the ceiling.
 - **(e) Two booster heads.** The gravity solve asks for a 22.230 m booster (KSb11). The Review's `downfeed-below-target` recommends a +15.3 m booster for Lantai 10 (KSb9), which the drawn side-branch booster cannot serve.
@@ -179,6 +178,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
+- **(b) Two alternator reactances — closed by B-5.** They are two different reactances of one machine and are now named as a pair in `sources.dart`: the fault level reads the sub-transient X''d 0.12 pu, the motor-start dip and start floor the transient X'd 0.15 pu (no figure changed).
 - **Feeder discrimination — B-1.** Feeder PP-E grows to FRC 4 x 185 + 95 / 400 A (VD 0.48 → 0.22 %); Feeder to MEP keeps `non-selective` (genset ADS refusal, see the findings above).
 
 ## 5. Tower (gedung kantor 30 lantai)

@@ -53,6 +53,7 @@ import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
 import 'results.dart' show kStarDeltaInternalWiringM;
+import 'sources.dart' show kAlternatorSubtransientXdPu;
 import 'supply_design.dart'
     show
         SupplyDesign,
@@ -314,10 +315,12 @@ const String faultStudyMotorVerifyItem =
 /// [faultStudyVerifyItems] this pass (that would change every existing study's
 /// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
 /// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
-/// Round 39 — representative alternator sub-transient reactance Xd'' (p.u.)
-/// for the generator-plant fault estimate. // VERIFY — secondarySource
-/// (typical LV alternator 0.10–0.15 p.u.; the alternator datasheet governs).
-const double kAlternatorXdPu = 0.12;
+/// Round 39 — representative alternator sub-transient reactance X''d (p.u.)
+/// for the generator-plant fault estimate. Backlog B-5: an alias of the ONE
+/// pair in `sources.dart` ([kAlternatorSubtransientXdPu], the fault-level
+/// reactance; the motor-start dip reads the transient X'd). // VERIFY —
+/// secondarySource (the alternator datasheet governs).
+const double kAlternatorXdPu = kAlternatorSubtransientXdPu;
 
 /// Round 39 — an inverter's fault contribution as a multiple of its rated
 /// current (current-limited, ~1.2–1.5 × In). // VERIFY — secondarySource

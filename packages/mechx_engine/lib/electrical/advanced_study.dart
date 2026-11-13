@@ -115,6 +115,8 @@ import 'sources.dart'
     show
         GensetMotor,
         gensetStartFloorKva,
+        kAlternatorSubtransientXdPu,
+        kAlternatorTransientXdPu,
         kMaxStartVoltageDipPct,
         sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
@@ -880,8 +882,10 @@ ApparentPower gensetStartFloorFor(
 /// sizes / judges the genset.
 const String gensetStartDipVerifyItem =
     'Genset motor-start dip: the 25 % momentary-dip limit and the '
-    "voltage-divider model on Xd'' = 0.15 pu (ISO 8528-5 practice) are "
-    'representative — confirm against the alternator datasheet. '
+    "voltage-divider model on the TRANSIENT reactance X'd = "
+    '${kAlternatorTransientXdPu} pu (ISO 8528-5 practice; the genset fault '
+    "level uses the sub-transient X''d = ${kAlternatorSubtransientXdPu} pu) "
+    'are representative — confirm both against the alternator datasheet. '
     '// VERIFY notAnSniClause';
 
 /// Round 70 — JUDGE-ONLY: the generator node of the power one-line failed
@@ -1098,7 +1102,9 @@ FaultStudyResult mergeGensetFaultStudy({
 /// Round 72 — the `// VERIFY` basis [mergeGensetFaultStudy] specifies
 /// genset-backed devices and judges their bus withstand on.
 const String gensetMaxFaultVerifyItem =
-    "standby genset alternator sub-transient fault (Xd'' 0.12 pu) also "
+    "standby genset alternator sub-transient fault (X''d "
+    '$kAlternatorSubtransientXdPu pu; the motor-start dip uses the transient '
+    "X'd $kAlternatorTransientXdPu pu) also "
     'governs device breaking capacity (Icu / Ics) and busbar withstand (Icw) '
     'on genset-backed boards';
 
