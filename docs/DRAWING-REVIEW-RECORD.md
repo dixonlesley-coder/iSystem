@@ -186,3 +186,21 @@ round F1-F7"). PNG paths are relative to the same `drawings/` root.
 
 Observations 1, 3, 4 and 2 are recorded in the Backlog of `docs/REFERENCE-BUILDINGS.md`
 ("Drawing review").
+
+## Re-check of the failed sheets (2026-11-13, reviewer)
+
+Only the sheets that failed were re-checked, at full resolution, after the fix round and a full regeneration of the five sets (scripted pre-check: zero FAIL lines on all five buildings).
+
+| Fail | Sheet re-checked | Item | Result | What the sheet now shows |
+|---|---|---|---|---|
+| F1 | office `elec-plan-1-Lantai 1` p1 (E-101) | 4 | PASS | "Pump P-01 / MCCB 125A" sits left of its symbol, wholly inside the frame |
+| F2 | tower `elec-plan-1-Lantai 1` p1 (E-101) | 6 | PASS | P-01 and P-02 tags are separate, P-02 on a short leader; nothing overprints |
+| F3 | office `electrical-riser` p1 (E-401) | 5 | PASS | no "below 7 pt" stamp on the 7.0 pt sheet |
+| F4 | shophouse `plan-2-Lantai 2` p1 (M-102) | 6 | PASS | pipe key table sits clear below the drawing; no marker or label touches it |
+| F5 | tower / office E-101 | 9 | PASS | legend lists only "Beban / titik", the one kind drawn |
+| F6 | apartment `plan-12-Lantai 12-detail` p1 (M-512) | 9 | PASS | legend lists cold water, drainage, vent and booster set only |
+| F7 | tower `electrical-power-one-line` p1 (E-501) | 22 | PASS | MV supply, 1600 kVA transformer, LV bus, 250 kvar capacitor bank, 800 kVA genset and ATS are drawn |
+
+Observations carried to the backlog (not failures): the office E-101 tag ends flush against its own symbol; the detail-sheet abbreviation notes still name fixtures outside the window; E-401 p1 is a floor-label-only page.
+
+Result: every checklist item passes on the sheets reviewed. Coverage limits of the first review (thumbnail-only sheet types, verdicts carried by sheet type on some apartment and tower montages) are stated in the header above and still apply.
