@@ -868,18 +868,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   // hot-water loop (a drawn one carries it via [equipmentNodeDutiesProvider]).
   // Round 26 (hot-water-2-separate-systems-merged) — ONE way per hot-water
   // system with no pump drawn on it (the primary keeps the legacy id).
-  final recircSystems = ref.watch(hotWaterRecircSystemsProvider);
-  for (var i = 0; i < recircSystems.length; i++) {
-    final sys = recircSystems[i];
-    if (sys.nodeIds.any(bind.hwRecircPumpNodeIds.contains)) continue;
-    if (sys.design.pump.selectedMotor.watts <= 0) continue;
-    loads.add(MepEquipmentLoad.fromPumpDuty(
-      sys.design.pump,
-      id: i == 0 ? 'hw-recirc-pump' : 'hw-recirc-pump-${i + 1}',
-      name: i == 0 ? kHwRecircPumpLoadName : '$kHwRecircPumpLoadName ${i + 1}',
-      source: MepLoadSource.hotWaterRecircPump,
-    ));
-  }
+  loads.addAll(ref.watch(hwRecircDutyLoadsProvider).map((r) => r.load));
 
   // The fire-pump way is sized on the SELECTED NFPA 20 motor frame (the same
   // kW the equipment schedule tells the contractor to buy — it must carry the
@@ -903,6 +892,37 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   }
 
   return loads;
+});
+
+/// Round 16 / Round 26 — ONE solved recirculation-duty way per hot-water
+/// system with no pump DRAWN on it (the primary keeps the legacy id), with
+/// whether that system's return is DRAWN. Backlog G-3 (2026-11-13) — a
+/// system whose return is drawn has its circulator in the design even when
+/// the pump symbol is not drawn: its way joins the DEFAULT sync
+/// ([mepAutoFeedCircuitsProvider]); an assumed return stays behind the
+/// 'Feed solved MEP duties' opt-in. (A pump node drawn on the loop is a
+/// placed machine and is minted by default already.)
+final hwRecircDutyLoadsProvider =
+    Provider<List<({MepEquipmentLoad load, bool drawnReturn})>>((ref) {
+  final bind = ref.watch(mepDutyBindingProvider);
+  final recircSystems = ref.watch(hotWaterRecircSystemsProvider);
+  final out = <({MepEquipmentLoad load, bool drawnReturn})>[];
+  for (var i = 0; i < recircSystems.length; i++) {
+    final sys = recircSystems[i];
+    if (sys.nodeIds.any(bind.hwRecircPumpNodeIds.contains)) continue;
+    if (sys.design.pump.selectedMotor.watts <= 0) continue;
+    out.add((
+      load: MepEquipmentLoad.fromPumpDuty(
+        sys.design.pump,
+        id: i == 0 ? 'hw-recirc-pump' : 'hw-recirc-pump-${i + 1}',
+        name:
+            i == 0 ? kHwRecircPumpLoadName : '$kHwRecircPumpLoadName ${i + 1}',
+        source: MepLoadSource.hotWaterRecircPump,
+      ),
+      drawnReturn: sys.drawnReturn,
+    ));
+  }
+  return out;
 });
 
 /// Map a placed motorised equipment [NodeComponent] to its electrical source
@@ -1380,8 +1400,21 @@ void setMepDutyFeedUndoable(
 /// (opt-out) ⇒ placed-only, IDENTICAL to the prior wiring, so an untouched
 /// project is byte-identical. This is the provider the store's reactive listener
 /// watches — the seam that finally makes the solved-duty bridge reachable.
-final mepAutoFeedCircuitsProvider = Provider<List<ElectricalCircuit>>(
-  (ref) => ref.watch(mepDutyFeedEnabledProvider)
-      ? ref.watch(mepEquipmentCircuitsProvider)
-      : ref.watch(placedEquipmentCircuitsProvider),
-);
+///
+/// Backlog G-3 (2026-11-13) — with the opt-in OFF, the solved recirculation
+/// way of a hot-water system whose return is DRAWN joins the placed circuits
+/// ([hwRecircDutyLoadsProvider]); an assumed return keeps today's opt-in.
+final mepAutoFeedCircuitsProvider = Provider<List<ElectricalCircuit>>((ref) {
+  if (ref.watch(mepDutyFeedEnabledProvider)) {
+    return ref.watch(mepEquipmentCircuitsProvider);
+  }
+  final drawnRecirc = [
+    for (final r in ref.watch(hwRecircDutyLoadsProvider))
+      if (r.drawnReturn) r.load,
+  ];
+  if (drawnRecirc.isEmpty) return ref.watch(placedEquipmentCircuitsProvider);
+  return buildEquipmentCircuits(
+    [...drawnRecirc, ...ref.watch(placedEquipmentLoadsProvider)],
+    panelVoltage: mepPanelVoltage,
+  );
+});

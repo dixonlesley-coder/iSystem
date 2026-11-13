@@ -294,7 +294,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **HVAC backlog F-1..F-4 (2026-11-13)**: the room-air estimate reads the drawn duct's product roughness (`defaultDuctRoughnessForService` / `effectiveDuctRoughnessFor`, F-1); ONE face-velocity limit per terminal kind and application (`terminalFaceVelocityMax`) for the room's banks and the checker (F-2: office return 3.0 m/s; tower redrawn with 5 return grilles, the office's single grille is a deliberate `terminal-velocity` finding); ONE headline air-unit duty per room (`store/room_air_store.dart` `roomAirHeadlineProvider`: the drawn system's duty, else the estimate labelled "estimate (no ducts drawn)", F-3); `air-duct-unsized` only for a duct with no size at all (F-4).
 
-**Hot-water backlog (2026-11-13)**: the Hunter demand curve is chosen per PIPE (valve branch only with a flush valve downstream — G-1); a placed `NodeComponent.waterHeater` is sized by the ASHRAE fixture-demand method (`sizing/water_heater.dart`, `waterHeaterDesignsProvider`: recovery, storage up the tank ladder, element up the kW ladder) and fed to the MEP board as a 1-/3-phase heating way (G-2).
+**Hot-water backlog (2026-11-13)**: the Hunter demand curve is chosen per PIPE (valve branch only with a flush valve downstream — G-1); a placed `NodeComponent.waterHeater` is sized by the ASHRAE fixture-demand method (`sizing/water_heater.dart`, `waterHeaterDesignsProvider`: recovery, storage up the tank ladder, element up the kW ladder) and fed to the MEP board as a 1-/3-phase heating way (G-2); a hot-water system with a DRAWN return mints its solved recirculation way in the default MEP sync (G-3; an assumed return keeps the 'Feed solved MEP duties' opt-in).
 
 ## Conventions
 

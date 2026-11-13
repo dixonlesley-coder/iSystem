@@ -215,7 +215,7 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(b) Recirculation pump way only with the duty-feed opt-in.** The solved HW recirculation pump (no pump drawn) becomes an MEP way only after "Feed solved MEP duties" is switched on.
+- **(b) Recirculation pump way only with the duty-feed opt-in — partly closed by backlog G-3.** A circulator pump DRAWN on the loop was already a placed machine (minted by default); since G-3 a system whose return is DRAWN also mints its solved recirculation way in the default sync even with no pump symbol drawn. The tower draws no return (the app ASSUMES it), so its HW recirc way stays behind the "Feed solved MEP duties" opt-in (on in this fixture): no tower figure moves.
 - **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
 
 ### Backlog closed (2026-11-13)
