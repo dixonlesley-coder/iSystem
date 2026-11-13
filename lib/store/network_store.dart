@@ -1958,6 +1958,66 @@ class NetworkController extends Notifier<DrawingState> {
     return node.id;
   }
 
+  /// Backlog D-4 (2026-11-13) — put an INLINE component (PRV, valve, meter…)
+  /// ON riser [edgeId] at floor [floorIndex]: the riser is split into two
+  /// RISER segments (from → component → to) that both keep its service /
+  /// size override / product ([_splitEdgeInserting]), and the component node
+  /// sits on that floor at the riser's plan position (the end node on that
+  /// floor, else the lower end) and at its own datum there ([nodeElevation] —
+  /// a PRV / valve at the floor's ceiling, like the riser's bare junctions),
+  /// or at the explicit [elevation] when given. [sheetId] defaults to the
+  /// sheet of the end node on that floor (else the lower end's).
+  ///
+  /// The split elevation must lie within the riser's own span (its two
+  /// [riserEndElevation]s) and [floorIndex] within its floors; otherwise —
+  /// or for a missing edge / a run — nothing changes and null is returned.
+  /// One undo step. Returns the new node id.
+  ///
+  /// Old files that splice a component with a 0 m RUN keep solving exactly as
+  /// before; this intent is the drawn way to get the same station.
+  String? insertComponentOnRiser(
+    String edgeId,
+    NodeComponent component, {
+    required int floorIndex,
+    String? sheetId,
+    Length? elevation,
+  }) {
+    final net = state.network;
+    final e = net.edgeById(edgeId);
+    if (e == null || e.kind != EdgeKind.riser) return null;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) return null;
+    final lo = math.min(a.floorIndex, b.floorIndex);
+    final hi = math.max(a.floorIndex, b.floorIndex);
+    if (floorIndex < lo || floorIndex > hi) return null;
+    final anchor = a.floorIndex == floorIndex
+        ? a
+        : b.floorIndex == floorIndex
+            ? b
+            : (a.floorIndex <= b.floorIndex ? a : b);
+    final node = NetNode(
+      id: _id('n'),
+      sheetId: sheetId ?? anchor.sheetId,
+      x: anchor.x,
+      y: anchor.y,
+      floorIndex: floorIndex,
+      role: component.role,
+      component: component,
+      elevation: elevation,
+    );
+    final project = ref.read(projectControllerProvider);
+    double z(NetNode n) =>
+        riserEndElevation(e, n, project.building, project.mounting, net).meters;
+    final za = z(a), zb = z(b), zn = z(node);
+    if (zn < math.min(za, zb) - 1e-9 || zn > math.max(za, zb) + 1e-9) {
+      return null;
+    }
+    final (nodes, edges) = _splitEdgeInserting(edgeId, node);
+    _commit(Network(nodes: nodes, edges: edges));
+    return node.id;
+  }
+
   /// Auto-place the air terminals a [room] needs — closing the room→network
   /// loop. Runs the room's ACH air-side sizing ([RoomArea.sizing]) to get the
   /// supply-diffuser COUNT + per-terminal airflow + chosen face, then drops that

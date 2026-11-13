@@ -82,6 +82,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show electricalRiserFloorOf;
 import 'reference_board_floors.dart';
 import 'reference_copper.dart';
+import 'reference_riser_component_util.dart';
 import '../packages/mechx_engine/test/reference/tower.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -1410,6 +1411,37 @@ void main() {
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
+  // Backlog D-4 — the seven PRV stations placed ON the riser with the store
+  // intent solve and zone exactly as the fixture's spliced stations; the
+  // only difference is the BOM: the splice's 0 m RUNs PRVk → GRk print three
+  // 0.000 m cold-water run lines (DN40 / DN65 / DN80, PPR) that the drawn
+  // stations (two riser segments, the lower one 0 m inside its riser line)
+  // do not. So the tower keeps its spliced fixture; this pins the difference.
+  test('D-4: the PRVs placed with insertComponentOnRiser = the spliced '
+      'fixture except three 0 m run BOM lines', () async {
+    final fixture = await _loadTower(buildTower());
+    final drawn = await _loadTower(buildTower(prvFloors: const []));
+    final ids = placePrvsByIntent(drawn, kTowerPrvFloors);
+    final a = prvFingerprint(fixture);
+    final b =
+        prvFingerprint(drawn, {for (final e in ids.entries) e.value: e.key});
+    if (_dump) {
+      // ignore: avoid_print
+      print([
+        for (final l in {...a}.difference({...b})) '- $l',
+        for (final l in {...b}.difference({...a})) '+ $l',
+      ].join('\n'));
+    }
+    expect({...a}.difference({...b}), {
+      'bom coldWater run 40 PPR 0.000000000 CW',
+      'bom coldWater run 65 PPR 0.000000000 CW',
+      'bom coldWater run 80 PPR 0.000000000 CW',
+    });
+    expect({...b}.difference({...a}), isEmpty);
+    fixture.dispose();
+    drawn.dispose();
+  });
+
   group('hand values (app providers, pass 3)', () {
     late ProviderContainer before;
     late ProviderContainer c;

@@ -68,6 +68,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show electricalRiserFloorOf;
 import 'reference_board_floors.dart';
 import 'reference_copper.dart';
+import 'reference_riser_component_util.dart';
 import '../packages/mechx_engine/test/reference/apartment.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -80,6 +81,15 @@ const String _mepBoard = 'mep-equipment';
 
 /// Loads [b] through the store intents, lets the MEP sync run and re-feeds
 /// the MEP board from PP-E (FRC).
+/// Backlog D-4 — the apartment as drawn in the app: the fixture without its
+/// spliced PRV, the station then placed ON the gravity riser with
+/// `insertComponentOnRiser` (pinned equal to the spliced fixture below).
+Future<ProviderContainer> _loadApartmentDrawnPrv() async {
+  final c = await _loadApartment(buildApartment(prvFloor: null));
+  placePrvsByIntent(c, [kAptPrvFloor!]);
+  return c;
+}
+
 Future<ProviderContainer> _loadApartment(ReferenceBuilding b) async {
   final c = ProviderContainer();
   c
@@ -925,7 +935,7 @@ void main() {
     }
 
     // AFTER: the fixture as specified (the app-prescribed PRV station).
-    final c = await _loadApartment(buildApartment());
+    final c = await _loadApartmentDrawnPrv();
     addTearDown(c.dispose);
     final sizing = c.read(sizingProvider);
     for (final e in c.read(sizingNetworkProvider).edges) {
@@ -977,13 +987,31 @@ void main() {
     }
   });
 
+  // Backlog D-4 — the PRV station placed ON the riser with the store intent
+  // (riser GR1 → PRV → GR0, both riser segments) solves, zones and prices
+  // exactly as the fixture's spliced station (riser GR1 → PRV0 + a 0 m RUN
+  // PRV0 → GR0).
+  test('D-4: the PRV placed with insertComponentOnRiser = the spliced '
+      'fixture', () async {
+    final fixture = await _loadApartment(buildApartment());
+    final drawn = await _loadApartment(buildApartment(prvFloor: null));
+    final ids = placePrvsByIntent(drawn, [kAptPrvFloor!]);
+    final a = prvFingerprint(fixture);
+    final b = prvFingerprint(drawn, {for (final e in ids.entries) e.value: e.key});
+    // ignore: avoid_print
+    if (_dump) print([for (final l in {...a}.difference({...b})) '- $l', for (final l in {...b}.difference({...a})) '+ $l'].join('\n'));
+    expect(b, a);
+    fixture.dispose();
+    drawn.dispose();
+  });
+
   // ── Hand-derived pins (reviewer pass 2, 2026-11-13) ─────────────────────
   group('hand values (app providers)', () {
     late ProviderContainer before;
     late ProviderContainer c;
     setUpAll(() async {
       before = await _loadApartment(buildApartment(prvFloor: null));
-      c = await _loadApartment(buildApartment());
+      c = await _loadApartmentDrawnPrv();
     });
     tearDownAll(() {
       before.dispose();
@@ -1129,7 +1157,7 @@ void main() {
   group('hand values (pass 4): fire and electrical', () {
     late ProviderContainer c;
     setUpAll(() async {
-      c = await _loadApartment(buildApartment());
+      c = await _loadApartmentDrawnPrv();
     });
     tearDownAll(() => c.dispose());
 

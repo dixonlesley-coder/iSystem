@@ -6886,6 +6886,23 @@ class _SelectionSection extends ConsumerWidget {
             ),
           ),
         ],
+        // Backlog D-4 — the "add a component to a run" path extended to a
+        // pressurized riser: put an inline device ON it at a chosen floor
+        // (the riser is split into two riser segments, one undo step).
+        if (edge.kind == EdgeKind.riser &&
+            edge.service.regime == FlowRegime.pressurized) ...[
+          const SizedBox(height: MechXSpacing.sm),
+          _RiserInsertControl(
+            edge: edge,
+            net: net,
+            floorNames: [for (final f in project.floors) f.name],
+            onInsert: (component, floor) {
+              final id = ctrl.insertComponentOnRiser(edge.id, component,
+                  floorIndex: floor);
+              if (id != null) selCtrl.selectNode(id);
+            },
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -7190,6 +7207,89 @@ class _SaveAssemblyFieldState extends State<_SaveAssemblyField> {
         ),
         const SizedBox(width: MechXSpacing.xs),
         MechXButton(label: 'Save block', onPressed: _save),
+      ],
+    );
+  }
+}
+
+/// Backlog D-4 — "Insert on riser": pick the floor along the selected
+/// pressurized riser (default its lower end) and an inline device; it lands
+/// on the riser through [NetworkController.insertComponentOnRiser].
+class _RiserInsertControl extends StatefulWidget {
+  final NetEdge edge;
+  final Network net;
+  final List<String> floorNames;
+  final void Function(NodeComponent component, int floorIndex) onInsert;
+
+  const _RiserInsertControl({
+    required this.edge,
+    required this.net,
+    required this.floorNames,
+    required this.onInsert,
+  });
+
+  @override
+  State<_RiserInsertControl> createState() => _RiserInsertControlState();
+}
+
+class _RiserInsertControlState extends State<_RiserInsertControl> {
+  int? _floor;
+
+  static const _devices = [
+    NodeComponent.prv,
+    NodeComponent.gateValve,
+    NodeComponent.checkValve,
+    NodeComponent.waterMeter,
+    NodeComponent.strainer,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.net.nodeById(widget.edge.fromId);
+    final b = widget.net.nodeById(widget.edge.toId);
+    if (a == null || b == null) return const SizedBox.shrink();
+    final lo = a.floorIndex < b.floorIndex ? a.floorIndex : b.floorIndex;
+    final hi = a.floorIndex < b.floorIndex ? b.floorIndex : a.floorIndex;
+    final floor = (_floor ?? lo).clamp(lo, hi);
+    String name(int f) =>
+        f >= 0 && f < widget.floorNames.length
+            ? widget.floorNames[f]
+            : 'L${f + 1}';
+    final caption = context.type.caption.copyWith(
+      color: context.colors.textMuted,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Insert on riser', style: caption),
+        if (hi > lo) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              for (var f = lo; f <= hi; f++)
+                _Pill(
+                  label: name(f),
+                  selected: f == floor,
+                  onTap: () => setState(() => _floor = f),
+                ),
+            ],
+          ),
+        ],
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final c in _devices)
+              _Pill(
+                label: c.label,
+                selected: false,
+                onTap: () => widget.onInsert(c, floor),
+              ),
+          ],
+        ),
       ],
     );
   }
