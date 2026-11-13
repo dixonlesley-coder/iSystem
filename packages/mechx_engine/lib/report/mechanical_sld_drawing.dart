@@ -761,7 +761,9 @@ SldSheet buildMechanicalRiserSld({
           p.dx + _symbolSize / 2, gy + _symbolSize / 2);
       placer.reserve(SldLabel(
           p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
-          size: 7, bold: true));
+          // Drawing-review D4 — 8 units like the tags, so it still plots at
+          // >= 7 pt on a page fitted below 1:1.
+          size: 8, bold: true));
     }
   }
 
@@ -1930,7 +1932,7 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
       ..add(SldLine(legX + 4, midY - 4, legX, midY,
           weight: SldWeight.thin, layer: layer));
     placer.place(legX + 5, midY, 'HWR',
-        size: 7,
+        size: 8,
         bold: true,
         anchorX: legX,
         anchorY: midY,
@@ -1970,7 +1972,7 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
     const half = (_nodeBox + 4) / 2;
     placer.reserveBox(px - half, lp.dy - half, px + half, lp.dy + half);
     placer.place(px + (_nodeBox + 4) / 2 + 4, lp.dy + 3, 'HWR PUMP',
-        size: 7,
+        size: 8,
         anchorX: px,
         anchorY: lp.dy,
         candidates: _nodeLadder('HWR PUMP'));

@@ -259,6 +259,14 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
       if (northBox != null) northBox,
       if (legendBox != null) legendBox,
       if (scaleBarBox != null) scaleBarBox,
+      // Drawing-review D5 — the top-left line the overlap stamp prints on
+      // (when it prints) is kept free, so a key table never lands under it.
+      (
+        minX: margin,
+        minY: pageH - margin - 26,
+        maxX: margin + 520,
+        maxY: pageH - margin,
+      ),
     ],
   );
 }
