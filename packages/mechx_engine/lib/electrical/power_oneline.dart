@@ -145,6 +145,25 @@ const String kPowerCouplerLabel = 'coupler N.O.';
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
+/// The board-figure format the building single-line prints (`_num` there):
+/// whole numbers bare, else one decimal.
+String _fmt1(double v) => v == v.roundToDouble()
+    ? v.toInt().toString()
+    : v.toStringAsFixed(1);
+
+/// Fix round 3 (S2) — the 'Essential bus' sub-label. With the essential
+/// boards' solved demand ([essential], VA) it prints `demand <kVA> kVA` — the
+/// SAME figure E-301 / E-401 print on the essential board — and, when the
+/// genset sizing basis ([basisKva]) reads differently, `genset basis <kVA>
+/// kVA` beside it (two named quantities, never one unexplained second
+/// figure). Without it, the basis alone (byte-identical).
+String _essentialBusSub(double basisKva, ApparentPower? essential) {
+  final ess = essential?.inKilovoltAmperes;
+  if (ess == null || ess <= 0) return '${_fmt(basisKva)} kVA';
+  final d = _fmt1(ess), b = _fmt1(basisKva);
+  return d == b ? 'demand $d kVA' : 'demand $d kVA · genset basis $b kVA';
+}
+
 /// Build the hybrid power one-line from the sources design.
 ///
 /// [demand] is the diversified building demand (apparent power) reaching the
@@ -192,6 +211,16 @@ PowerOneLine buildPowerOneLine(
   // Backlog B-3 — the disconnection floor of an unforced set
   // (`gensetAdsFloorFor`). Null ⇒ byte-identical.
   ApparentPower? minKvaForAds,
+  // Fix round 3 (S2, 2026-11-13) — the solved diversified demand of the
+  // ESSENTIAL board(s) (`essentialDemandVa`), the figure E-301 / E-401 print
+  // on the essential board. With it the 'Essential bus' prints that demand by
+  // name and, when the genset is sized on a different basis (worst phase /
+  // largest machine), names that basis beside it. Null ⇒ byte-identical.
+  ApparentPower? essentialDemand,
+  // Fix round 3 (O3) — the transfer switch's label from the declared service
+  // arrangement (`serviceArrangementOf(...).transfer`), the SAME switch the
+  // building single-line draws on its genset tie. Null ⇒ derived here.
+  String? transferLabel,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -359,7 +388,7 @@ PowerOneLine buildPowerOneLine(
     nodes.add(PowerNode(
       id: 'ats',
       kind: PowerNodeKind.ats,
-      label: manualTransfer ? 'COS' : 'ATS',
+      label: transferLabel ?? (manualTransfer ? 'COS' : 'ATS'),
       sub: manualTransfer ? 'manual changeover' : 'transfer switch',
     ));
     gridOut = 'ats';
@@ -368,7 +397,8 @@ PowerOneLine buildPowerOneLine(
         id: 'ess-bus',
         kind: PowerNodeKind.bus,
         label: 'Essential bus',
-        sub: '${_fmt(genResult.backupKva.inKilovoltAmperes)} kVA',
+        sub: _essentialBusSub(
+            genResult.backupKva.inKilovoltAmperes, essentialDemand),
       ));
       edge(utilityOut, 'bus', 'mains');
       edge('bus', 'ats', 'normal');

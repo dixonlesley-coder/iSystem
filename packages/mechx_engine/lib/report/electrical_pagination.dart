@@ -712,23 +712,36 @@ List<SldSheet> paginatedElectricalOverviewSheets({
           for (final k in kidsOf(r))
             if (!typicalHidden.contains(k)) k,
       ];
-      for (var g = 2; g <= direct.length; g++) {
-        final size = (direct.length / g).ceil();
-        final chunks = [
-          for (var i = 0; i < direct.length; i += size)
-            {
-              for (final k
-                  in direct.sublist(i, (i + size).clamp(0, direct.length)))
-                ...(typical[k] ?? [k]),
-            },
-        ];
-        final pages = [
-          for (var i = 0; i < chunks.length; i++)
-            topPage(chunk: chunks[i], spine: i == 0),
-        ];
-        tops = pages;
-        if (pages.every(legible)) break;
+      // Fix round 3 (O3, 2026-11-13) — the chunks are FILLED in board
+      // order, not cut equal: each page takes the next sub-board (a typical
+      // node with all its members) while it still prints at the floor, so
+      // no page but the last is left near-empty (equal chunks of two left
+      // three tower pages holding two single boards each).
+      Set<String> expand(List<String> es) => {
+            for (final k in es) ...(typical[k] ?? [k]),
+          };
+      // First fit in board order: a page that cannot take the next board
+      // (a wide typical node) still takes a later one that fits, so the
+      // source-spine page is filled too.
+      final pages = <SldSheet>[];
+      final left = [...direct];
+      while (left.isNotEmpty) {
+        final cur = <String>[left.removeAt(0)];
+        var curPage = topPage(chunk: expand(cur), spine: pages.isEmpty);
+        var i = 0;
+        while (i < left.length) {
+          final trial = [...cur, left[i]];
+          final page = topPage(chunk: expand(trial), spine: pages.isEmpty);
+          if (legible(page)) {
+            cur.add(left.removeAt(i));
+            curPage = page;
+          } else {
+            i++;
+          }
+        }
+        pages.add(curPage);
       }
+      if (pages.isNotEmpty) tops = pages;
     }
     return [
       ...tops,

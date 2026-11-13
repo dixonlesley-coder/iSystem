@@ -74,6 +74,7 @@ import 'genset_backup.dart'
     show
         alternatorBasis,
         effectiveGeneratorBackupFraction,
+        essentialDemandVa,
         serviceSystemOf,
         gensetBackedPanelIds,
         gensetBackupDemandVa,
@@ -114,6 +115,7 @@ import 'power_oneline.dart'
 import 'results.dart' show BusbarWithstand;
 import 'sources.dart'
     show
+        GeneratorTransfer,
         GensetMotor,
         gensetStartFloorKva,
         kAlternatorSubtransientXdPu,
@@ -650,6 +652,10 @@ AdvancedStudy computeAdvancedStudy(
       // Backlog E-4 — the one-step pick-up on transfer: what the set backs
       // (the SAME `gensetBackupDemandW` basis it is sized on).
       stepLoad: gensetBackupDemandW(project, sys),
+      // Fix round 3 (S2) — the essential boards' solved demand, the figure
+      // E-301 / E-401 print on the essential board.
+      essentialDemand: ApparentPower(essentialDemandVa(project, sys)),
+      transferLabel: arrangement.transfer?.label,
       capacitor: arrangement.capacitor == null
           ? null
           : (
@@ -2055,9 +2061,16 @@ Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
 /// (a single bank not on a board schedule) and/or the PF study's RECOMMENDED
 /// APFC bank, from the one [capacitorBanksToProcure] list the BOM buys —
 /// null when neither exists. Pure.
+///
+/// Fix round 3 (O3, 2026-11-13) — [transfer] is the standby genset's
+/// transfer switch (`ATS`, or `COS` for a manual changeover) and the
+/// topmost board(s) it transfers ([gensetBackedPanelIds]; empty = the whole
+/// building), on a utility service with a standby set; null otherwise. E-301
+/// / E-401 draw it on the genset tie and E-501 draws the same switch.
 ({
   String? transformer,
   ({String head, String sub, String compact})? capacitor,
+  ({String label, List<String> boards})? transfer,
 }) serviceArrangementOf(ElectricalProject project, ElectricalSystemResult sys) {
   String n(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
@@ -2094,7 +2107,26 @@ Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
       );
     }
   }
-  return (transformer: tx, capacitor: cap);
+  ({String label, List<String> boards})? transfer;
+  final gen = project.sources?.generator;
+  if (gen != null && project.supplyKind != SupplyKind.generator) {
+    final backed = gensetBackedPanelIds(project);
+    final parentOf = <String, String>{
+      for (final p in project.panels)
+        for (final c in p.circuits)
+          if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+            c.feedsPanelId!: p.id,
+    };
+    transfer = (
+      label: gen.transfer == GeneratorTransfer.manual ? 'COS' : 'ATS',
+      boards: [
+        for (final p in project.panels)
+          if (backed.contains(p.id) && !backed.contains(parentOf[p.id]))
+            p.name,
+      ],
+    );
+  }
+  return (transformer: tx, capacitor: cap, transfer: transfer);
 }
 
 /// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a

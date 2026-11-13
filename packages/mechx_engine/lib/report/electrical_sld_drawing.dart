@@ -138,8 +138,13 @@ String _amps(double v) => v.toStringAsFixed(1);
 /// Round 20 (drafting-visual-4-4) — whether any primitive is drawn in the
 /// ESSENTIAL role: the overview / riser legend keys 'Essential' only when the
 /// sheet shows an essential board or feeder.
+///
+/// Fix round 3 (S3, 2026-11-13) — DRAWN means linework: an essential board
+/// box, feeder or bus. A note printed in the essential (red) ink — the
+/// supply-capacity warning 'DEMAND > DECLARED ...' — is not an essential
+/// supply, so a house with no essential board or genset never keys one.
 bool _anyEssentialPrim(List<SldPrim> prims) =>
-    _anyRolePrim(prims, SldRole.essential);
+    prims.any((p) => p is! SldLabel && _anyRolePrim([p], SldRole.essential));
 
 /// Round 34 (electrical-drawings-4-overview-legend-keys-unprinted) — whether
 /// any primitive is drawn in [role]: a legend keys only what is printed.
@@ -2158,6 +2163,10 @@ _Spine _buildSourceSpine(
   // one-line (E-501) draws its transformer from.
   final txLabel =
       serviceArrangementOf(project, result).transformer ?? 'TRANSFORMER';
+  // Fix round 3 (O3) — the standby genset's transfer switch (ATS / COS) and
+  // the board(s) it transfers, from the ONE declared service arrangement the
+  // power one-line draws.
+  final transfer = serviceArrangementOf(project, result).transfer;
   // Backlog E-3 — the MV transformer feeder's device (HV HRC fuse, or MV CB
   // + relay on its CT), printed beside the MV main.
   final mvDevice = isMv ? serviceMvProtection(project, result)?.device : null;
@@ -2323,7 +2332,8 @@ _Spine _buildSourceSpine(
       _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
       prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${genFig.text} kVA',
           size: 8.5, bold: true, role: SldRole.source));
-      prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
+      prims.add(SldLabel(sideX + 34, gcy + 12,
+          _gensetModeLine(gen.mode.label, transfer),
           size: 7.5, role: SldRole.source));
       // What fraction of the building's diversified demand this set can carry —
       // the honest coverage figure (capped at 100%), printed only when a demand
@@ -2334,8 +2344,19 @@ _Spine _buildSourceSpine(
         prims.add(SldLabel(sideX + 34, gcy + 24, pct,
             size: 7.5, role: SldRole.source));
       }
-      prims.add(SldLine(collX, gcy, sideX + 1, gcy,
-          weight: SldWeight.medium, role: SldRole.source));
+      if (transfer != null) {
+        // Fix round 3 (O3) — the genset reaches the bus through its
+        // transfer switch, as on E-501.
+        const tsX = 20.0; // switch centre, right of the collector
+        prims.add(SldLine(collX, gcy, collX + tsX - _kTsW / 2, gcy,
+            weight: SldWeight.medium, role: SldRole.source));
+        _emitTransferSwitch(prims, collX + tsX, gcy, transfer.label);
+        prims.add(SldLine(collX + tsX + _kTsW / 2, gcy, sideX + 1, gcy,
+            weight: SldWeight.medium, role: SldRole.source));
+      } else {
+        prims.add(SldLine(collX, gcy, sideX + 1, gcy,
+            weight: SldWeight.medium, role: SldRole.source));
+      }
       tieYs.add(gcy);
     }
     // CAPACITOR BANK: drawn ONLY when a real bank is specified (kvar > 0).
@@ -2438,11 +2459,23 @@ _Spine _buildSourceSpine(
             minKvaForStart: gensetStartFloorFor(project, result),
             minKvaForAds: gensetAdsFloorFor(result));
         final genKva = genFig.totalKva;
-        connectTo(13, 13);
+        if (transfer != null) {
+          // Fix round 3 (O3) — the transfer switch on the genset drop.
+          final tsY = (prevDropBottom + cy - 13) / 2;
+          prims.add(SldLine(dropX, prevDropBottom, dropX, tsY - _kTsH / 2,
+              weight: SldWeight.medium, role: SldRole.source));
+          _emitTransferSwitch(prims, dropX, tsY, transfer.label);
+          prims.add(SldLine(dropX, tsY + _kTsH / 2, dropX, cy - 13,
+              weight: SldWeight.medium, role: SldRole.source));
+          prevDropBottom = cy + 13;
+        } else {
+          connectTo(13, 13);
+        }
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
         prims.add(SldLabel(dropX + 20, cy - 2, 'GENSET ${genFig.text} kVA',
             size: 8.5, bold: true, role: SldRole.source));
-        prims.add(SldLabel(dropX + 20, cy + 12, gen.mode.label,
+        prims.add(SldLabel(dropX + 20, cy + 12,
+            _gensetModeLine(gen.mode.label, transfer),
             size: 7.5, role: SldRole.source));
         final pct =
             _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
@@ -2665,13 +2698,26 @@ _Spine _buildSourceSpineH(
         minKvaForAds: gensetAdsFloorFor(result));
     final genKva = genFig.totalKva;
     final gcy = nextCy;
-    prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
-        weight: SldWeight.medium, role: role));
+    // Fix round 3 (O3) — the transfer switch on the genset drop, from the
+    // ONE declared service arrangement E-501 draws.
+    final transfer = serviceArrangementOf(project, result).transfer;
+    if (transfer != null && gcy - 13 - prevBottom >= _kTsH + 8) {
+      final tsY = (prevBottom + gcy - 13) / 2;
+      prims.add(SldLine(lvX, prevBottom, lvX, tsY - _kTsH / 2,
+          weight: SldWeight.medium, role: role));
+      _emitTransferSwitch(prims, lvX, tsY, transfer.label);
+      prims.add(SldLine(lvX, tsY + _kTsH / 2, lvX, gcy - 13,
+          weight: SldWeight.medium, role: role));
+    } else {
+      prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
+          weight: SldWeight.medium, role: role));
+    }
     _emitGenerator(prims, lvX, gcy, 13, role);
     prims.add(SldLabel(lvX - 104, gcy - 1, 'GENSET ${genFig.text} kVA',
         size: 7.5, bold: true, role: role));
-    prims.add(
-        SldLabel(lvX - 104, gcy + 11, gen.mode.label, size: 7, role: role));
+    prims.add(SldLabel(
+        lvX - 104, gcy + 11, _gensetModeLine(gen.mode.label, transfer),
+        size: 7, role: role));
     // The honest coverage figure — this set against the building's diversified
     // demand, capped at 100%; printed only when a demand exists.
     final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
@@ -3404,6 +3450,8 @@ SldSheet buildElectricalOverview({
         const SldLegendEntry('Earth', 'System earthing point'),
       // Round 65 r2 — a sectioned spine draws its bus couplers on this sheet.
       if (sourceChain && _hasOpenCoupler(prims)) _kCouplerLegend,
+      // Fix round 3 (O3) — the genset's transfer switch, keyed when drawn.
+      ..._transferLegend(prims),
     ],
     supplyNote: supplyNote,
   );
@@ -3592,6 +3640,29 @@ const double _kRiserGutterPenalty = 1e9;
 /// The collision-box width of [text] drawn at [size].
 double _riserLabelWidth(String text, double size) =>
     text.length * size * kElectricalRiserLabelCharW;
+
+/// Fix round 3 (S4) — a feeder tag printed in the riser's floor gutter,
+/// broken at its ` · ` separators so no line runs past the gutter into the
+/// first board column.
+List<String> _riserGutterWrap(String text, double size) {
+  const maxW = _riserGutterW - 14;
+  if (_riserLabelWidth(text, size) <= maxW) return [text];
+  final parts = text.split(' · ');
+  // The cable rides its own line; device · length stay together below it.
+  final out = <String>[parts.first];
+  var cur = '';
+  for (final p in parts.skip(1)) {
+    final next = cur.isEmpty ? p : '$cur · $p';
+    if (cur.isNotEmpty && _riserLabelWidth(next, size) > maxW) {
+      out.add(cur);
+      cur = p;
+    } else {
+      cur = next;
+    }
+  }
+  if (cur.isNotEmpty) out.add(cur);
+  return out;
+}
 
 /// An axis-aligned box in drawing space (a label's baseline is its [maxY], the
 /// text rising to [minY]).
@@ -4573,7 +4644,14 @@ SldSheet buildElectricalRiser({
     final fedFrom = [
       for (final id in byFloor[i] ?? const <String>[])
         if (offPageFeedNotes[id] != null && panelX.containsKey(id))
-          '${offPageFeedNotes[id]} > ${typicalNames[id] ?? result.panels[id]?.name ?? id}',
+          (
+            text: '${offPageFeedNotes[id]} > '
+                '${typicalNames[id] ?? result.panels[id]?.name ?? id}',
+            tag: _feederConnLabel(feederCircuitOf, feederResultOf, id,
+                parentThreePhase: _parentIsThreePhase(parentOf, result, id),
+                lengthOverride: typicalFeederLengths[id]),
+            role: essential.contains(id) ? SldRole.essential : SldRole.normal,
+          ),
     ];
     // Drawing backlog C-2 — the storeys the riser leaves off (no board, no
     // feeder) listed compactly under the edge band's FFL, TANPA PANEL.
@@ -4589,8 +4667,22 @@ SldSheet buildElectricalRiser({
     if (fedFrom.isNotEmpty) {
       final dy = (note != null ? 24.0 : 0.0) + lnDy;
       prims.add(SldLabel(6, y + 47 + dy, 'DARI (lembar lain):', size: 7));
+      var row = 0;
       for (var k = 0; k < fedFrom.length; k++) {
-        prims.add(SldLabel(6, y + 57 + dy + 10 * k, fedFrom[k], size: 7));
+        prims.add(SldLabel(6, y + 57 + dy + 10.0 * row++, fedFrom[k].text,
+            size: 7, role: fedFrom[k].role));
+        // Fix round 3 (S4, 2026-11-13) — the feeder whose leg is cut to an
+        // off-sheet stub carries its tag HERE (cable · device · length, the
+        // same `_feederConnLabel` every drawn leg prints), so every feeder on
+        // the riser is labelled once — the parent's sheet names the board
+        // only ('LANJUT (lembar lain): ...').
+        final tag = fedFrom[k].tag;
+        if (tag != null) {
+          for (final line in _riserGutterWrap(tag, 7)) {
+            prims.add(SldLabel(6, y + 57 + dy + 10.0 * row++, line,
+                size: 7, role: fedFrom[k].role));
+          }
+        }
       }
     }
   }
@@ -4881,6 +4973,8 @@ SldSheet buildElectricalRiser({
         const SldLegendEntry('Earth', 'System earthing point'),
       // Round 65 r2 — a sectioned spine draws its bus couplers on this sheet.
       if (sourceChain && _hasOpenCoupler(prims)) _kCouplerLegend,
+      // Fix round 3 (O3) — the genset's transfer switch, keyed when drawn.
+      ..._transferLegend(prims),
     ],
     supplyNote: supplyNote,
     overlapCount: stubOverlaps + feederLineOverlaps.length,
@@ -5198,11 +5292,99 @@ typedef _PolBox = ({double l, double t, double r, double b});
 /// The label (name + optional sub) beside a SYMBOL node (utility / generator),
 /// placed to the right of the glyph so all content stays inside the footprint.
 void _polSymLabel(
-    List<SldPrim> out, double x, double cy, PowerNode n, SldRole role) {
+    List<SldPrim> out, double x, double cy, PowerNode n, SldRole role,
+    {required double maxW}) {
   out.add(SldLabel(x, cy - 3, n.label, size: 9, bold: true, role: role));
   if (n.sub != null && n.sub!.isNotEmpty) {
-    out.add(SldLabel(x, cy + 9, n.sub!, size: 7, role: role));
+    final lines = wrapPowerOneLineCaption(n.sub!, 7, maxW);
+    for (var k = 0; k < lines.length; k++) {
+      out.add(SldLabel(x, cy + 9 + 9.0 * k, lines[k], size: 7, role: role));
+    }
   }
+}
+
+/// Fix round 3 (S1, 2026-11-13) — a power one-line caption broken at words
+/// so no line is wider than [maxW] at [size] (real Helvetica widths): a long
+/// utility caption ('MV supply 20 kV + MV main (MV CB + relay, CT 60/5 A)')
+/// wraps under its symbol label instead of running into the next column's
+/// symbol. A single word wider than [maxW] keeps its own line. Pure; the PDF
+/// and the DXF print the same lines (one [SldSheet]).
+List<String> wrapPowerOneLineCaption(String text, double size, double maxW) {
+  if (helveticaTextWidth(text, size) <= maxW) return [text];
+  // Two named figures (`demand ... · genset basis ...`) break at their ` · `
+  // separator first, never leaving a dangling '·'.
+  if (text.contains(' · ')) {
+    final out = <String>[];
+    var cur = '';
+    for (final part in text.split(' · ')) {
+      final next = cur.isEmpty ? part : '$cur · $part';
+      if (cur.isNotEmpty && helveticaTextWidth(next, size) > maxW) {
+        out.add(cur);
+        cur = part;
+      } else {
+        cur = next;
+      }
+    }
+    if (cur.isNotEmpty) out.add(cur);
+    return [
+      for (final l in out)
+        ...(l.contains(' · ') || helveticaTextWidth(l, size) <= maxW
+            ? [l]
+            : wrapPowerOneLineCaption(l, size, maxW)),
+    ];
+  }
+  final out = <String>[];
+  var cur = '';
+  for (final w in text.split(' ')) {
+    final next = cur.isEmpty ? w : '$cur $w';
+    if (cur.isNotEmpty && helveticaTextWidth(next, size) > maxW) {
+      out.add(cur);
+      cur = w;
+    } else {
+      cur = next;
+    }
+  }
+  if (cur.isNotEmpty) out.add(cur);
+  return out;
+}
+
+/// Fix round 3 (S1) — the clear width a symbol node's caption may take: from
+/// the caption's start (right of the symbol) to the NEXT column's footprint,
+/// less a gap.
+const double _polSymCaptionX = _polSymR * 2 + 8 + 12;
+const double _polSymCaptionW = _polW + _polGapX - _polSymCaptionX - 8;
+
+/// Fix round 3 (S2) — a board node's sub-label wraps left of the node's
+/// centre drop (its outgoing edge leaves the box bottom-centre).
+const double _polBoxSubW = _polW / 2 - 9;
+
+/// Fix round 3 (O3) — the transfer-switch box on a source spine's genset tie.
+const double _kTsW = 24;
+const double _kTsH = 14;
+
+void _emitTransferSwitch(
+    List<SldPrim> prims, double cx, double cy, String label) {
+  prims.add(SldRect(cx - _kTsW / 2, cy - _kTsH / 2, _kTsW, _kTsH,
+      weight: SldWeight.medium, role: SldRole.source));
+  prims.add(SldLabel(cx - helveticaTextWidth(label, 7) / 2, cy + 2.5, label,
+      size: 7, bold: true, role: SldRole.source));
+}
+
+/// Fix round 3 (O3) — the legend rows of a transfer switch the sheet draws.
+List<SldLegendEntry> _transferLegend(List<SldPrim> prims) => [
+      if (_printsCode(prims, 'ATS'))
+        const SldLegendEntry('ATS', 'Automatic transfer switch (mains / genset)'),
+      if (_printsCode(prims, 'COS'))
+        const SldLegendEntry('COS', 'Manual changeover switch (mains / genset)'),
+    ];
+
+/// Fix round 3 (O3) — the genset's mode line names its transfer switch and
+/// the board(s) it transfers (`Standby - ATS ke PP-E`).
+String _gensetModeLine(
+    String mode, ({String label, List<String> boards})? transfer) {
+  if (transfer == null) return mode;
+  final to = transfer.boards.isEmpty ? '' : ' ke ${transfer.boards.join(', ')}';
+  return '$mode - ${transfer.label}$to';
 }
 
 /// Build the hybrid power one-line ([PowerOneLine]) as an [SldSheet] on the
@@ -5219,6 +5401,20 @@ void _polSymLabel(
 /// only the main panel (the load side) is `normal`, so a renderer's role-colour
 /// split reads the supply chain as one.
 SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
+  // Fix round 3 (S1/S2) — the extra caption lines a box node's wrapped
+  // sub-label prints below the node's sub strip (symbol captions wrap inside
+  // the node's own height).
+  int extraSubLines(PowerNode n) {
+    final sub = n.sub;
+    if (sub == null || sub.isEmpty) return 0;
+    final sym = n.kind == PowerNodeKind.utility ||
+        n.kind == PowerNodeKind.generator ||
+        n.kind == PowerNodeKind.transformer ||
+        n.kind == PowerNodeKind.capacitor;
+    if (sym) return 0;
+    return wrapPowerOneLineCaption(sub, 7, _polBoxSubW).length - 1;
+  }
+
   final nodes = oneLine.nodes;
   final byId = {for (final n in nodes) n.id: n};
 
@@ -5282,7 +5478,7 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
         l: pos[n.id]!.x,
         t: pos[n.id]!.y,
         r: pos[n.id]!.x + _polW,
-        b: pos[n.id]!.y + _polH + _polSubStrip,
+        b: pos[n.id]!.y + _polH + _polSubStrip + 9.0 * extraSubLines(n),
       ),
   ];
   final placedLabels = <_PolBox>[];
@@ -5442,26 +5638,34 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       case PowerNodeKind.utility:
         final symX = at.x + _polSymR + 8;
         _emitBowtie(prims, symX, cy, _polSymR, role);
-        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role,
+            maxW: _polSymCaptionW);
       case PowerNodeKind.generator:
         final symX = at.x + _polSymR + 8;
         _emitGenerator(prims, symX, cy, _polSymR, role);
-        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role,
+            maxW: _polSymCaptionW);
       // Fix round F7 — the MV service transformer and the LV-bus capacitor
       // bank draw as their single-line symbols, as on E-301's spine.
       case PowerNodeKind.transformer:
         final symX = at.x + _polSymR + 8;
         _emitTransformer(prims, symX, at.y, _polH, role);
-        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role,
+            maxW: _polSymCaptionW);
       case PowerNodeKind.capacitor:
         final symX = at.x + _polSymR + 8;
         _emitCapacitor(prims, symX, cy, role);
-        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role,
+            maxW: _polSymCaptionW);
       default:
         _emitPanelBox(prims, cx, cy, _polW, _polH, n.label, role);
         if (n.sub != null && n.sub!.isNotEmpty) {
-          prims.add(SldLabel(at.x + 5, at.y + _polH + 11, n.sub!,
-              size: 7, role: role));
+          final lines = wrapPowerOneLineCaption(n.sub!, 7, _polBoxSubW);
+          for (var k = 0; k < lines.length; k++) {
+            prims.add(SldLabel(at.x + 5, at.y + _polH + 11 + 9.0 * k,
+                lines[k],
+                size: 7, role: role));
+          }
         }
     }
   }
