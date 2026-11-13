@@ -336,7 +336,9 @@ void main() {
         expect(plot, isNotNull);
         // occupiedPx = 4 off-frame strips + title block + north + legend +
         // scale bar: every in-frame reservation must be clear of every run.
-        final inFrame = plot!.occupiedPx.skip(4).toList();
+        // Drawing-review D5: the LAST box is the overlap-stamp text line, a
+        // label-only keep-out (runs may pass under it), so it is skipped.
+        final inFrame = plot!.occupiedPx.skip(4).toList()..removeLast();
         expect(inFrame.length, greaterThanOrEqualTo(4), reason: 'w $w');
         for (final e in net.edges) {
           final a = net.nodeById(e.fromId)!, c = net.nodeById(e.toId)!;

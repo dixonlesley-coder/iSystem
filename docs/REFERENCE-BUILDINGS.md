@@ -212,3 +212,38 @@ _(empty)_
 - **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 304.10 Pa; the drawn-duct fan duty gives 326.44 Pa (office backlog a).
 - **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
 - **(i) Downstream-VD raise always enlarges the feeder.** The T3 raise for a board's cumulative drop always grows the FEEDER (PP-Lt30 ends at 95 mm² over 131 m), even where raising the short final way that owns most of the drop would cost far less. No least-cost split between feeder and final way is attempted.
+
+## Drawing review (2026-11-13)
+
+The five drawing sets were exported (`test/reference_drawing_set_export_test.dart`,
+`REF_EXPORT=1`) and checked against `docs/DRAFTING-CHECKLIST.md` with
+`tool/ref_drawings_precheck.py` plus a visual pass on the PNGs. Fixes D1-D7 are in
+the §15 log; this is the per-sheet-type result (all five buildings).
+
+| Sheet type | Before | After |
+|---|---|---|
+| Front matter (cover / Daftar Gambar / notes + legend) | FAIL 1, 23 (no DWG NO); tower list printed at 6.8 pt | PASS — G-001..G-003, listed first; a long register continues on extra G-002 pages |
+| Mechanical plan (M-1xx) | FAIL 6, 8, 11 (fan of rotated labels, long crossing leaders, "N label bertumpuk" on 51 sheets); FAIL 25 (`-` for `·`, scale row) | PASS 25; item 6 PASS on shophouse and house L2, labels legal or keyed into a PIPE KEY table; residual stamps on dense fixture groups (see backlog) |
+| Electrical layout plan (E-1xx) | PASS visual; FAIL 25 (DXF lacked PROJECT/TITLE, LEGENDA, scale bar) | PASS |
+| Mechanical riser SLD (M-201) | FAIL 5 (5.2-6.1 pt), 6, 8 on every building; FAIL 25 | PASS 5 except tower p12 (6.92 pt); PASS 25; item 6 PASS on house and office, residual stamps elsewhere |
+| Electrical SLD (E-201) | PASS visual; FAIL 25 (DXF one sheet "1 of 1") | PASS (paginated DXF twin) |
+| Building single-line (E-301) | PASS visual; FAIL 25 | PASS |
+| Electrical riser (E-401) | PASS visual; FAIL 25 (DXF whole sheet: FFL / feeder strings) | PASS |
+| Power one-line (E-501) | FAIL 25 (PROJECT / TITLE) | PASS |
+| Equipment schedule | FAIL 1, 3, 23 (no title block, no number, not listed) | PASS — M-601, drawing title block on every page, listed |
+| Panel schedules | FAIL 2 (reused E-201 + SLD title); apartment / tower refused (zero-length guard) | PASS — E-601 `JADWAL PANEL / PANEL SCHEDULES`, issued in the package and listed; all five export |
+
+### Backlog (not cured in this pass)
+- Item 6 on dense fixture groups: where a whole toilet group plots inside a few
+  centimetres (office 1:100, apartment and tower 1:250 — the shared set scale) even
+  the key circles cannot all clear each other, so the sheet keeps its honest
+  "N label bertumpuk" stamp (office 2-4 per plan, apartment 8-12, tower 11-19,
+  house L1 1). Cure needs an enlarged toilet-core detail / callout sheet, or a
+  larger plot scale per sheet.
+- Riser key circles: apartment 6-10 per page, tower 3-7 on the ground / roof pages,
+  shophouse p2 4 — same density limit on the stack junctions.
+- Tower riser p12 (lowest floor + plant + key table) prints at 6.92 pt: the
+  paginator's relaxed target for a floor that cannot reach 7 pt alone. Cure: move
+  the key table / extras of that page to a continuation sheet.
+- Standalone (non-package) riser / electrical DXF exports still write one sheet;
+  only the submittal package issues the paginated DXF twins.
