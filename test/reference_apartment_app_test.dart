@@ -966,4 +966,152 @@ void main() {
       print(_out.toString());
     }
   });
+
+  // ── Hand-derived pins (reviewer pass 2, 2026-11-13) ─────────────────────
+  group('hand values (app providers)', () {
+    late ProviderContainer before;
+    late ProviderContainer c;
+    setUpAll(() async {
+      before = await _loadApartment(buildApartment(prvFloor: null));
+      c = await _loadApartment(buildApartment());
+    });
+    tearDownAll(() {
+      before.dispose();
+      c.dispose();
+    });
+
+    test(
+      'movers: TP transfer 43.194 m, BS booster 22.230 m on floors 10-11',
+      () {
+        final duties = c.read(supplyMoverDutiesProvider);
+        expect(c.read(transferPumpNodeIdsProvider), {'TP'});
+        // TP: Q = the 180-UBAP peak 4.39333 L/s; lift RT 42.0 − GT 0.0 =
+        // 42.000 + friction 0.025947 x 46.0 m of DN65 (6.2 + 1.0 + 4.2 + 11 x
+        // 3.5 + 2.3 … the GT → RT path) = 1.194 ⇒ 43.194 m; hydraulic 9810 x
+        // 4.39333e-3 x 43.194 = 1861.6 W; shaft / 0.70 = 2659.4 W ⇒ 3.0 kW.
+        final tp = duties['TP']!;
+        expect(tp.flow.inLitersPerSecond, closeTo(4.39333, 5e-5));
+        expect(tp.head.meters, closeTo(43.194, 5e-4));
+        expect(tp.hydraulicPower.watts, closeTo(1861.6, 0.05));
+        expect(tp.shaftPower.watts, closeTo(2659.4, 0.05));
+        expect(tp.selectedMotor.inKiloWatts, closeTo(3.0, 1e-9));
+        // BS: Q = A → BS 1.07333 L/s; H = (225 − 6.921) / 9.81 = 22.230 m;
+        // hydraulic 9810 x 1.07333e-3 x 22.230 = 234.1 W ⇒ 0.37 kW.
+        final bs = duties['BS']!;
+        expect(bs.flow.inLitersPerSecond, closeTo(1.07333, 5e-5));
+        expect(bs.head.meters, closeTo(22.230, 5e-4));
+        expect(bs.hydraulicPower.watts, closeTo(234.1, 0.05));
+        expect(bs.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+        expect(c.read(primarySupplyPumpNodeProvider), 'BS');
+        // BS serves only floors 10-11 (16 fixtures).
+        final net = c.read(sizingNetworkProvider);
+        final m = supplyMovers(
+          net,
+          c.read(sizingProvider),
+          excludeEdgeIds: c.read(parallelLegEdgeIdsProvider),
+          rootFlowOf: (_) => const FlowRate(0),
+        ).firstWhere((x) => x.nodeId == 'BS');
+        final fx = [
+          for (final id in m.served)
+            if (net.nodeById(id)!.role == NodeRole.fixture) net.nodeById(id)!,
+        ];
+        expect(fx.length, 16);
+        expect({for (final n in fx) n.floorIndex}, {10, 11});
+      },
+    );
+
+    test(
+      'delivered field: boosted floors at target, KSb9 the critical node',
+      () {
+        final del = c.read(downfeedDeliveredProvider)!;
+        // KSb11 = 6.921 + 22.230 x 9.81 = 225.000.
+        expect(
+          del.residualPressure['KSb11']!.inKiloPascals,
+          closeTo(225.0, 2e-3),
+        );
+        // KSb9 is gravity-fed (74.735) and the delivered critical node.
+        expect(del.criticalNodeId, 'KSb9');
+        expect(
+          del.residualPressure['KSb9']!.inKiloPascals,
+          closeTo(74.735, 2e-3),
+        );
+        // Deliberate finding: below the 225 kPa target, above the SNI 49.033
+        // minimum ⇒ the INFO `downfeed-below-target`.
+        final hits = [
+          for (final i in c.read(designIssuesProvider))
+            if (i.kind == 'downfeed-below-target') i,
+        ];
+        expect(hits.length, 1);
+        expect(hits.single.severity, IssueSeverity.info);
+        expect(hits.single.locate?.nodeId, 'KSb9');
+      },
+    );
+
+    test('PRV: zones [1-11, 0-0]; 8 over-pressure warnings BEFORE, none '
+        'AFTER; one station', () {
+      for (final x in [before, c]) {
+        expect(
+          [
+            for (final z in x.read(zonesProvider))
+              (z.bottomFloorIndex, z.topFloorIndex),
+          ],
+          [(1, 11), (0, 0)],
+        );
+        final st = x.read(zoneStaticsProvider);
+        // Tank-fed zone: bottom (42.0 − 4.6) x 9.81 = 366.894; PRV zone:
+        // 255 + (3.2 − 1.1) x 9.81 = 275.601.
+        expect(st[0].bottomStatic.inKiloPascals, closeTo(366.894, 2e-3));
+        expect(st[0].viaPrv, isFalse);
+        expect(st[1].topResidual.inKiloPascals, closeTo(255.0, 1e-6));
+        expect(st[1].bottomStatic.inKiloPascals, closeTo(275.601, 2e-3));
+        expect(st[1].viaPrv, isTrue);
+      }
+      int over(ProviderContainer x) => [
+        for (final i in x.read(designIssuesProvider))
+          if (i.kind.startsWith('downfeed-over-pressure:')) i,
+      ].length;
+      expect(over(before), 8);
+      expect(before.read(downfeedOverPressureProvider).length, 8);
+      for (final o in before.read(downfeedOverPressureProvider)) {
+        expect(o.noFlow.inKiloPascals, closeTo(401.229, 2e-3));
+      }
+      expect(over(c), 0);
+      expect(c.read(downfeedOverPressureProvider), isEmpty);
+      final del = c.read(downfeedDeliveredProvider)!;
+      expect(
+        del.noFlowStaticPressure['WCa0']!.inKiloPascals,
+        closeTo(275.601, 2e-3),
+      );
+      // Floor 1 stays on the tank head.
+      expect(
+        del.noFlowStaticPressure['WCa1']!.inKiloPascals,
+        closeTo(366.894, 2e-3),
+      );
+      final prv = [
+        for (final l in c.read(componentTakeoffProvider))
+          if (l.component == NodeComponent.prv) l,
+      ];
+      expect(prv.single.count, 1);
+      expect([
+        for (final i in c.read(designIssuesProvider))
+          if (i.kind.startsWith('pressure-zone')) i,
+      ], isEmpty);
+    });
+
+    test('rooms: 6400 BTU/h → 0.75 PK, 683.8 W per split AC', () {
+      for (final r in c.read(roomAreasProvider)) {
+        // 12 m² x 500 x 3.2 / 3.0 = 6400 BTU/h.
+        final load = c.read(roomCoolingLoadProvider(r.id))!;
+        expect(r.ceilingHeightM, closeTo(3.2, 1e-9));
+        expect(load.btuPerHr, closeTo(6400, 1e-6));
+        expect(load.recommended.pk, 0.75);
+        expect(load.recommended.nominalBtuPerHr, 7000);
+      }
+      final fed = c.read(nodeFedLoadsProvider);
+      for (final id in kAptAcNodeIds) {
+        // 7000 / 3.412141633 / 3.0 = 683.8 W.
+        expect(fed[id]!.input, closeTo(683.83, 5e-3));
+      }
+    });
+  });
 }
