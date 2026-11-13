@@ -141,8 +141,20 @@ class SldSheet {
 
 /// Round 43 — the legibility warning a sheet carrying
 /// [SldSheet.belowMinLabelPt] prints (EN + ID, ASCII). Null ⇒ nothing.
-String? sldLegibilityWarning(double? pt, {double minPt = 7}) => pt == null
+///
+/// Fix round F3 (2026-11-13) — the stamp fires only when the size it PRINTS
+/// (one decimal) is strictly below [minPt]: a page fitted to 6.9995 pt reads
+/// "7.0 pt", which is the floor, never "7.0 pt (< 7 pt)".
+String? sldLegibilityWarning(double? pt, {double minPt = 7}) =>
+    pt == null || !sldPrintsBelowMinPt(pt, minPt: minPt)
     ? null
     : 'PERHATIAN: label tercetak ${pt.toStringAsFixed(1)} pt (< ${minPt.toStringAsFixed(0)} pt) / '
         'labels print below ${minPt.toStringAsFixed(0)} pt - gunakan kertas lebih besar '
         'atau pecah lembar / use a larger sheet or split';
+
+/// Fix round F3 (2026-11-13) — true when [pt], rounded to the one decimal
+/// [sldLegibilityWarning] prints, is strictly below [minPt]. The one test
+/// every pagination flag and the stamp share, so a sheet is never stamped
+/// with a size that reads as the floor itself.
+bool sldPrintsBelowMinPt(double pt, {double minPt = 7}) =>
+    double.parse(pt.toStringAsFixed(1)) < minPt;

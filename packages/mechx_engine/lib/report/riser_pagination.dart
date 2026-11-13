@@ -62,7 +62,9 @@ List<SldSheet> paginatedRiserSheets({
   // printing ~1.7 pt tags.
   SldSheet flagged(SldSheet p) {
     final pt = minPt(p);
-    return pt < kMinPlotLabelPt - 1e-9 ? p.withBelowMinLabelPt(pt) : p;
+    return sldPrintsBelowMinPt(pt, minPt: kMinPlotLabelPt)
+        ? p.withBelowMinLabelPt(pt)
+        : p;
   }
 
   final whole = build(null);

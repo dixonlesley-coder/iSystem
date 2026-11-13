@@ -458,6 +458,14 @@ def run_building(root, b):
             emit(5, 'N-A', lab, 'no text')
             continue
         mn = min(s for _, s in pg['words'])
+        # Fix round F3 - a sheet stamping the legibility warning is a
+        # mark-up on an issued sheet: FAIL it whatever the measured size.
+        st = re.search(r'PERHATIAN:\s*label tercetak\s*([\d.]+)\s*pt',
+                       pg['text'].replace('\n', ' '))
+        if st:
+            emit(5, 'FAIL', lab, f'sheet stamps the legibility warning '
+                 f'"label tercetak {st.group(1)} pt" (min {mn:.2f} pt)')
+            continue
         small = sorted({(round(s, 2), -len(t), t) for t, s in pg['words']
                         if s < MIN_PT - 1e-6})
         if small:

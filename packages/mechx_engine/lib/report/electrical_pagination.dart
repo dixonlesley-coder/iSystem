@@ -438,7 +438,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
 
   SldSheet flagged(SldSheet p) {
     final pt = minPt(p);
-    return pt < kMinPlotLabelPt - kRiserLegibleTolerancePt
+    return pt < kMinPlotLabelPt - kRiserLegibleTolerancePt &&
+            sldPrintsBelowMinPt(pt, minPt: kMinPlotLabelPt)
         ? p.withBelowMinLabelPt(pt)
         : p;
   }
