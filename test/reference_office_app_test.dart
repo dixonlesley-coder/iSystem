@@ -454,7 +454,7 @@ void _dumpHvac(ProviderContainer c) {
     }
   }
   _p('fixture stamped airflow: SD each ${_f(kOfficeRoomAirflow.inLitersPerSecond / 4, 4)} L/s, '
-      'RG1, RG2 each ${_f(kOfficeRoomAirflow.inLitersPerSecond / 2, 4)} L/s');
+      'RG1 ${_f(kOfficeRoomAirflow.inLitersPerSecond, 4)} L/s');
   _p('## APP air terminals (node | comp | airflow L/s | face mm)');
   for (final n in net.nodes) {
     if (n.airflow == null && n.component != NodeComponent.fcu) continue;
@@ -848,30 +848,39 @@ void main() {
       expect(b.sprinklerPointHeadM, closeTo(chk.requiredHeadM, 1e-12));
     });
 
-    test('HVAC: fan static (supply + return + FCU internal) 122.97 Pa', () {
+    test('HVAC: fan static (supply + return + FCU internal) 121.25 Pa', () {
       // Supply: (0.4462 + 0.4405 + 0.6651 + 1.0342) x 3 x 1.3 + 30 = 40.09;
-      // backlog F-2 — two return grilles (RG2 → RG1 → FCU1, 2.0 m each):
-      // return (0.6651 [DN355 at 462.5 L/s] + 0.4462) x 2 x 1.3 + 30 = 32.89
-      // (one grille read 0.4462 x 2 x 1.3 + 30 = 31.16); + 50 internal =
-      // 122.97 Pa (was 121.25). Air 0.925 x 122.97 = 113.75 W; shaft
-      // / 0.65 = 175.00 W; motor still 0.37 kW.
+      // return 0.4462 x 2 x 1.3 + 30 = 31.16; + 50 internal = 121.25 Pa.
       final fan = c.read(supplyFanDutiesByRootProvider)[kOfficeFcuId]!;
       expect(fan.airflow.cubicMetersPerSecond, closeTo(0.925, 1e-9));
-      expect(c.read(airSystemsProvider(ServiceType.returnAir)).single.stat
-          .pascals, closeTo(32.89, 0.005));
-      expect(fan.totalStaticPressure.pascals, closeTo(122.97, 0.005));
-      expect(fan.airPower.watts, closeTo(113.75, 0.005));
-      expect(fan.shaftPower.watts, closeTo(175.00, 0.005));
+      expect(fan.totalStaticPressure.pascals, closeTo(121.25, 0.005));
+      expect(fan.airPower.watts, closeTo(112.15, 0.005));
+      expect(fan.shaftPower.watts, closeTo(172.54, 0.005));
       expect(fan.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
       final sz = c.read(sizingProvider);
       for (final (id, dn) in [
         ('e_sa_FCU1_SD1', 500), ('e_sa_SD1_SD2', 450), ('e_sa_SD2_SD3', 355),
-        ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), ('e_ra_RG2_RG1', 355),
+        ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), //
       ]) {
         expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
       }
-      expect(c.read(airVelocityChecksProvider).values
-          .where((v) => v.verdict != VelocityBandVerdict.ok), isEmpty);
+      // Backlog F-2 — RG1 (925 L/s on 600 x 600 = 0.925 / 0.288 = 3.212
+      // m/s) is judged against the office return limit min(3.0, 4.0) = 3.0
+      // m/s, the value the room's own return bank is counted on (ceil(0.925
+      // / 0.864) = 2 grilles): too high. Every diffuser is inside 3.0.
+      final checks = c.read(airVelocityChecksProvider);
+      expect(checks[kOfficeReturnGrilleId]!.verdict,
+          VelocityBandVerdict.tooHigh);
+      expect(checks[kOfficeReturnGrilleId]!.actual.metersPerSecond,
+          closeTo(3.212, 5e-4));
+      expect(checks[kOfficeReturnGrilleId]!.max.metersPerSecond, 3.0);
+      expect(
+          checks.entries
+              .where((e) => e.value.verdict != VelocityBandVerdict.ok)
+              .map((e) => e.key),
+          [kOfficeReturnGrilleId]);
+      final room = c.read(roomAreasProvider).single;
+      expect(c.read(roomSizingProvider)[room.id]!.return_.count, 2);
     });
 
     test('drawing backlog C-2: the riser stands every board on its own floor '
@@ -968,6 +977,9 @@ void main() {
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('electrical:life-safety-feeder-cable')));
       expect(kinds.where((k) => k.startsWith('air-terminal-unsized')), isEmpty);
+      // Backlog F-2 — the one return grille is flagged against the office
+      // return limit (3.212 > 3.0 m/s; the room recommends two).
+      expect(count('terminal-velocity'), 1);
       expect(kinds.where((k) => k.startsWith('unfed-panel')), isEmpty);
       expect(kinds.where((k) => k.startsWith('pressure-zone')), isEmpty);
       // Backlog A-3 — churn 1.4 x 98.536 = 137.951 m; x 9.81 = 1353.3 kPa:
