@@ -249,7 +249,7 @@ void main() {
       addTearDown(c.dispose);
       final kinds = {for (final i in c.read(designIssuesProvider)) i.kind};
       expect(kinds, isNot(contains('unconnected-orphan:SPLIT')));
-      expect(kinds, isNot(contains('unconnected-orphan:${kShopAcNodeId}')));
+      expect(kinds, isNot(contains('unconnected-orphan:$kShopAcNodeId')));
       expect(kinds, contains('unconnected-orphan:DUCTED'));
       expect(kinds, contains('unconnected-orphan:FCU'));
     });
