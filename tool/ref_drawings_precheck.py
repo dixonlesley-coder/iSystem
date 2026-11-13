@@ -227,7 +227,10 @@ def key_table_hits(pdf):
                 txt = ''.join(c['text'] for c in cs)
                 for m in re.finditer('KETERANGAN PIPA', txt):
                     titles.append(cs[m.start()])
-            hits = []
+            # Pass 1: every key-table block's box and own glyph rows. A
+            # split table's blocks may abut (one table, continued): a glyph
+            # owned by ANY block is never an intruder.
+            tables = []
             for t in titles:
                 ts = t['bottom'] - t['top']
                 hz = [l for l in pg.lines if abs(l['x0'] - t['x0']) < 1.0
@@ -246,33 +249,36 @@ def key_table_hits(pdf):
                 cols = sorted({l['x0'] for l in vt})
                 strict = (t['x0'] - 0.5, t['top'] - 0.2 * ts - 0.5,
                           x1 + 0.5, bot + 0.5)
-                m = 0.5 * ts
-                infl = (strict[0] - m, strict[1] - m, strict[2] + m,
-                        strict[3] + m)
 
-                def meets(b, r):
-                    return (b[0] < r[2] and r[0] < b[2] and b[1] < r[3]
-                            and r[1] < b[3])
-
-                def within(c):
-                    return (c['x0'] >= strict[0] and c['x1'] <= strict[2]
-                            and c['top'] >= strict[1]
-                            and c['bottom'] <= strict[3])
-                # The table's own rows: the title row + every row that has a
-                # glyph starting a column (KEY / SIZE / LENGTH cell text).
+                def within(c, st=strict):
+                    return (c['x0'] >= st[0] and c['x1'] <= st[2]
+                            and c['top'] >= st[1] and c['bottom'] <= st[3])
                 own_tops = {round(t['top'], 1)}
                 for c in up:
                     if within(c) and any(abs(c['x0'] - (x + 0.5 * ts)) < 1.0
                                          for x in cols):
                         own_tops.add(round(c['top'], 1))
+                tables.append((ts, strict, within, own_tops))
+
+            def owned(c):
+                return c.get('upright', True) and any(
+                    w(c) and round(c['top'], 1) in tops
+                    for _, _, w, tops in tables)
+
+            def meets(b, r):
+                return (b[0] < r[2] and r[0] < b[2] and b[1] < r[3]
+                        and r[1] < b[3])
+            hits = []
+            for ts, strict, _, _ in tables:
+                m = 0.5 * ts
+                infl = (strict[0] - m, strict[1] - m, strict[2] + m,
+                        strict[3] + m)
                 bad = []
                 for c in pg.chars:
                     b = (c['x0'], c['top'], c['x1'], c['bottom'])
                     if not meets(b, infl) or not c['text'].strip():
                         continue
-                    own = (c.get('upright', True) and within(c) and
-                           round(c['top'], 1) in own_tops)
-                    if not own:
+                    if not owned(c):
                         bad.append(c['text'])
                 if bad:
                     hits.append(''.join(bad)[:40])

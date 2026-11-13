@@ -239,8 +239,8 @@ block and of each other (co-located loads stack, leadered; an unplaceable tag is
 counted in the stamped overlap warning) and list only the legend rows they draw
 (F1, F2, F5); the legibility stamp fires only below the printed 7 pt (F3); the pipe-key
 table keeps one text height of clear paper (F4); a detail sheet keys only its windows'
-services and symbols (F6); the power one-line draws the declared MV main, rated
-transformer and capacitor bank from the same arrangement E-301 draws (F7). The
+services and symbols (F6); the power one-line draws the declared MV supply + MV main,
+rated transformer and capacitor bank from the same arrangement E-301 draws (F7). The
 pre-check now FAILs a stamped legibility warning (item 5) and a pipe-key table touched
 by drawing text (item 6).
 

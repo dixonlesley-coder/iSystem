@@ -182,7 +182,7 @@ round F1-F7"). PNG paths are relative to the same `drawings/` root.
 | F4 | `placePlanKeyTable` keeps one text height of clear paper from every mark, marker text, label and run; the pre-check FAILs item 6 when drawing text comes within half a text height of a pipe-key table. | `shophouse/png/Ruko Contoh-plan-2-Lantai 2-p1.png` (also plan-1, plan-3) |
 | F5 | `electricalPlanLegendRows`: the layout legend (PDF + DXF) lists only Panel / Beban / Kabel rows the sheet draws. | `tower/png/Menara Contoh 30-elec-plan-1-Lantai 1-p1.png` |
 | F6 | `planDetailLegendChrome`: a detail sheet's legend keeps only the services of its clipped runs and the symbols of its visible nodes. | `apartment/png/Apartemen Contoh-plan-12-Lantai 12-detail-p1.png` |
-| F7 | `serviceArrangementOf` is the one declared source arrangement: E-301's spine and E-501's power one-line both draw PLN -> MV main -> TRANSFORMER 1600 kVA -> LV bus and the 250 kvar capacitor bank from it. | `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png` |
+| F7 | `serviceArrangementOf` is the one declared source arrangement: E-301's spine and E-501's power one-line both draw the MV supply + MV main, TRANSFORMER 1600 kVA, the LV bus and the 250 kvar capacitor bank from it (E-501: PLN head `MV supply + MV main` -> transformer -> bus, the bank beside the bus; generator + ATS as before). | `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png` |
 
 Observations 1, 3, 4 and 2 are recorded in the Backlog of `docs/REFERENCE-BUILDINGS.md`
 ("Drawing review").

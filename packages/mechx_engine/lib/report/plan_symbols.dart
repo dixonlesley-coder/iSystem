@@ -908,7 +908,19 @@ PlanKeyTable? placePlanKeyTable(
   // "DN / UP" mark or a label never TOUCHES the table even where the glyph
   // estimate runs short. The margin-free test is the last resort only.
   var margin = kPlanKeyTableMarginFactor * ts;
+  // The blocks of THIS table chosen so far: they may abut (a split table
+  // reads as one, continued), never overlap; the margin is kept from the
+  // drawing only.
+  final own = <LabelBox>[];
   bool clear(LabelBox b) {
+    for (final o in own) {
+      if (b.minX < o.maxX - 1e-9 &&
+          o.minX < b.maxX - 1e-9 &&
+          b.minY < o.maxY - 1e-9 &&
+          o.minY < b.maxY - 1e-9) {
+        return false;
+      }
+    }
     final g = (
       minX: b.minX - margin,
       minY: b.minY - margin,
@@ -920,9 +932,12 @@ PlanKeyTable? placePlanKeyTable(
         !layout.hitsGrid(b);
   }
 
+  // The scan steps one text height; the tight-margin pass steps a quarter
+  // of one, so a band with only a few points of slack is not stepped over.
+  var xStep = ts;
   (double, double)? spot(double h) {
     for (var yTop = bounds.maxY; yTop - h >= bounds.minY; yTop -= ts) {
-      for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += ts) {
+      for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += xStep) {
         if (clear((minX: x0, minY: yTop - h, maxX: x0 + tableW, maxY: yTop))) {
           return (x0, yTop);
         }
@@ -938,10 +953,11 @@ PlanKeyTable? placePlanKeyTable(
   for (var pass = 0; pass < 3 && plan == null; pass++) {
     // A tighter (0.6 text height) margin before the margin-free resort.
     if (pass > 0) margin = pass == 1 ? 0.6 * ts : 0;
+    if (pass > 0) xStep = ts / 4;
     for (var k = 1; k <= 4 && plan == null; k++) {
       final per = (rows.length / k).ceil();
       final chosen = <(double, double, int, int)>[];
-      final boxes = <LabelBox>[];
+      own.clear();
       var ok = true;
       for (var i = 0; i < rows.length; i += per) {
         final n = math.min(per, rows.length - i);
@@ -953,13 +969,10 @@ PlanKeyTable? placePlanKeyTable(
         }
         final box =
             (minX: at.$1, minY: at.$2 - h, maxX: at.$1 + tableW, maxY: at.$2);
-        layout.addBox(box);
-        boxes.add(box);
+        own.add(box);
         chosen.add((at.$1, at.$2, i, n));
       }
-      for (final bx in boxes) {
-        layout.boxes.remove(bx);
-      }
+      own.clear();
       if (ok) plan = chosen;
     }
   }
