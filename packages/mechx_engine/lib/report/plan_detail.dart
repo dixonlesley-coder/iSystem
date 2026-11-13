@@ -17,7 +17,8 @@ library;
 
 import 'dart:math' as math;
 
-import 'drawing_chrome.dart' show LabelBox, kPlanScaleLadder;
+import 'drawing_chrome.dart'
+    show LabelBox, helveticaTextWidth, kPlanScaleLadder;
 
 /// The enlarged standard scales a detail may plot at, LARGEST drawing first
 /// (the pick takes the first that fits).
@@ -508,17 +509,22 @@ List<List<int>> planDetailBins({
 /// The divided scale bar of a detail at `1 : [n]`: a round real length whose
 /// bar spans 30..80 paper mm, as a [PlanMarks] whose positions are paper mm
 /// (y-down) from ([x0], baseline [y0]) and whose text is [textMm] high.
+/// Fix round 3 — the paper length (mm) of [planDetailScaleBar]'s bar at
+/// 1 : [n] (its first round length of at least 30 mm).
+double planDetailScaleBarLength(int n) => _scaleBarMetres(n) * 1000 / n;
+
+double _scaleBarMetres(int n) {
+  const options = [0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0];
+  for (final o in options) {
+    if (o * 1000 / n >= 30) return o;
+  }
+  return options.last;
+}
+
 PlanMarks planDetailScaleBar(
     {required int n, required double x0, required double y0,
     required double textMm}) {
-  const options = [0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0];
-  var m = options.last;
-  for (final o in options) {
-    if (o * 1000 / n >= 30) {
-      m = o;
-      break;
-    }
-  }
+  final m = _scaleBarMetres(n);
   final len = m * 1000 / n; // paper mm
   const h = 1.5;
   final lines = <PlanMarkLine>[
@@ -533,7 +539,8 @@ PlanMarks planDetailScaleBar(
   final ty = y0 + textMm * 1.4;
   return PlanMarks(lines: lines, texts: [
     PlanMarkText(x0, ty, textMm, '0'),
-    PlanMarkText(x0 + len - fig(m).length * textMm * 0.55, ty, textMm, fig(m)),
+    PlanMarkText(x0 + len - helveticaTextWidth(fig(m), textMm), ty, textMm,
+        fig(m)),
   ]);
 }
 

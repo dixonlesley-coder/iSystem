@@ -336,9 +336,17 @@ PlanDetailSheetPlot planDetailSheetPlot({
     texts.add(PlanMarkText(frame.minX, capY, 5, title));
     final scaleText = 'SKALA 1 : $n';
     texts.add(PlanMarkText(frame.minX, capY + 1.6 * ts, ts, scaleText));
-    final barX = frame.minX +
-        math.max(title.length * 5 * 0.55, scaleText.length * ts * 0.55) +
-        8;
+    // Fix round 3 — measured (Helvetica) caption widths, and a bar that
+    // would run past its frame's right edge (out of the sheet) is
+    // right-aligned to the frame when that still clears the caption.
+    final capEnd = frame.minX +
+        math.max(helveticaTextWidth(title, 5) * 1.06,
+            helveticaTextWidth(scaleText, ts));
+    var barX = capEnd + 8;
+    final barLen = planDetailScaleBarLength(n);
+    if (barX + barLen > frame.maxX && frame.maxX - barLen >= capEnd + 4) {
+      barX = frame.maxX - barLen;
+    }
     final bar = planDetailScaleBar(
         n: n, x0: barX, y0: capY - 1.5, textMm: kMinPlotTextMm);
     lines.addAll(bar.lines);
