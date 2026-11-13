@@ -642,6 +642,7 @@ Uint8List electricalSldSheetsToPdf({
   List<String>? diagramTitles,
   DrawingChrome? chrome,
   String projectName = 'Untitled project',
+  List<String>? drawingNumbers,
 }) {
   if (sheets.isEmpty) {
     const blank = SldSheet(
@@ -674,7 +675,12 @@ Uint8List electricalSldSheetsToPdf({
         diagramTitle: (diagramTitles != null && i < diagramTitles.length)
             ? diagramTitles[i]
             : diagramTitle,
-        chrome: chrome,
+        // Drawing-review D1 — a set of DISTINCT drawings (the front matter)
+        // stamps each page's own number.
+        chrome: (drawingNumbers != null && i < drawingNumbers.length)
+            ? (chrome ?? const DrawingChrome())
+                .withDrawingNumber(drawingNumbers[i])
+            : chrome,
         sheetIndexOverride: i + 1,
         sheetTotalOverride: sheets.length,
       ),

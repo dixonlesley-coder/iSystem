@@ -45,6 +45,8 @@ Uint8List sldSheetToPdf({
 /// the per-page title-block heading, else every page carries [diagramTitle].
 /// The optional [chrome]'s other fields (drawing number, client, date, scale…)
 /// stamp every page; its own sheet counter is superseded page-by-page.
+/// [drawingNumbers] (drawing-review D1) gives page i its own number — a set
+/// of distinct drawings such as the front matter (`G-001`..`G-003`).
 Uint8List sldSheetsToPdf(
   List<SldSheet> sheets, {
   String title = 'iSystem single-line',
@@ -52,8 +54,10 @@ Uint8List sldSheetsToPdf(
   List<String>? diagramTitles,
   DrawingChrome? chrome,
   String? projectName,
+  List<String>? drawingNumbers,
 }) =>
     electricalSldSheetsToPdf(
+      drawingNumbers: drawingNumbers,
       sheets: sheets,
       title: title,
       diagramTitle: diagramTitle,

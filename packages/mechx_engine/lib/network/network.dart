@@ -1179,3 +1179,31 @@ Length edgeLength(
       runVerticalLeg(edge, net, building: building, mounting: mounting).meters;
   return Length(horizontal + vertical);
 }
+
+/// Drawing-review D7 (2026-11-13) — does [edge] count against the export
+/// ZERO-LENGTH guard? The guard exists to catch work drawn on an UNCALIBRATED
+/// sheet (every run there resolves to 0 m). A deliberate SPLICE — a run whose
+/// two ends coincide (0 px) on a CALIBRATED sheet, e.g. the 0 m link joining a
+/// PRV node into a riser — is a real, honestly-zero run and is NOT counted. A
+/// riser keeps its elevation-delta rule (a 0 m riser still blocks). Pure; the
+/// ONE predicate every export path's guard uses.
+bool edgeBlocksExportAsZeroLength(
+  NetEdge edge,
+  Network net, {
+  required Map<String, ScaleCalibration> calibrationBySheet,
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final len = edgeLength(edge, net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting);
+  if (len.meters > 0) return false;
+  if (edge.kind == EdgeKind.riser) return true;
+  final a = net.nodeById(edge.fromId);
+  final b = net.nodeById(edge.toId);
+  if (a == null || b == null) return false;
+  final calibrated = calibrationBySheet[a.sheetId] != null &&
+      calibrationBySheet[b.sheetId] != null;
+  return !(calibrated && runPixelLength(edge, net) == 0);
+}

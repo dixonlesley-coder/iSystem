@@ -153,6 +153,28 @@ class DrawingChrome {
         scaleText: scaleText,
       );
 
+  /// Drawing-review D1 — a copy stamping [number] as the drawing number
+  /// (every other field kept): one PAGE of a front-matter set carries its own
+  /// `G-00x` number.
+  DrawingChrome withDrawingNumber(String? number) => DrawingChrome(
+        drawingNumber: number,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
   /// Round 33 — a copy with [notes] appended to [legendNotes] (every other
   /// field kept); no notes ⇒ this same object (byte-identical).
   DrawingChrome withLegendNotes(List<String> notes) => notes.isEmpty
@@ -233,13 +255,23 @@ class DrawingChrome {
 /// detail `E-2xx`, the building overview single-line `E-3xx`, the floor-by-floor
 /// riser `E-4xx`, the power one-line `E-5xx`.
 enum DrawingSeries {
+  /// Drawing-review D1 (2026-11-13) — the GENERAL front matter (cover, Daftar
+  /// Gambar, general notes + legend): `G-001`..`G-003`.
+  general('G', 0),
   mechanicalPlan('M', 1),
   mechanicalRiser('M', 2),
   electricalLayout('E', 1),
   electricalDetail('E', 2),
   electricalOverview('E', 3),
   electricalRiser('E', 4),
-  electricalPowerOneLine('E', 5);
+  electricalPowerOneLine('E', 5),
+
+  /// Drawing-review D2 — the equipment schedule (`M-601`).
+  equipmentSchedule('M', 6),
+
+  /// Drawing-review D3 — the per-board panel-schedule set (`E-601`), its own
+  /// drawing, never the electrical SLD's `E-201`.
+  panelSchedule('E', 6);
 
   const DrawingSeries(this.disciplinePrefix, this.hundreds);
 
@@ -261,6 +293,9 @@ String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
   final name = sheetName?.trim() ?? '';
   String withName(String t) => name.isEmpty ? t : '$t - $name';
   return switch (series) {
+    // The front-matter sheet's own title IS its [sheetName] (kFrontMatter-
+    // DiagramTitles), so register == title block.
+    DrawingSeries.general => name.isEmpty ? 'GENERAL' : name,
     DrawingSeries.mechanicalPlan => withName('PLAN'),
     DrawingSeries.mechanicalRiser =>
       'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
@@ -270,6 +305,8 @@ String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
       'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
     DrawingSeries.electricalRiser => 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
     DrawingSeries.electricalPowerOneLine => 'DIAGRAM DAYA / POWER ONE-LINE',
+    DrawingSeries.equipmentSchedule => 'JADWAL PERALATAN / EQUIPMENT SCHEDULE',
+    DrawingSeries.panelSchedule => 'JADWAL PANEL / PANEL SCHEDULES',
   };
 }
 

@@ -19,7 +19,10 @@ import 'package:mechx_engine/report/electrical_dxf_export.dart'
 import 'package:mechx_engine/report/electrical_pagination.dart'
     show electricalOverviewToPdf, electricalRiserToPdf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
-    show electricalSldDetailToPdf, electricalSldToPdf;
+    show
+        electricalSldDetailToPdf,
+        electricalSldToPdf,
+        electricalSldToPdfPaginated;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
@@ -795,6 +798,12 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
       strings: reportStringsFor(ref),
+      sheetTitleBlock: equipmentScheduleTitleBlock(
+          doc,
+          project.name.isEmpty
+              ? reportStringsFor(ref)(RptStringKey.untitledProject)
+              : project.name,
+          data.date),
     );
     final base = project.name.isEmpty ? 'project' : project.name;
     final full = await pickExportSave(
@@ -1537,6 +1546,24 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   return true;
 }
 
+/// Drawing-review D2 — the standard drawing title block of the equipment
+/// schedule (number M-601 in the set's scheme, revision, sign-off, NTS) that
+/// [reportBlocksToPdf] stamps on every page, so the schedule is a drawing of
+/// the set like every other sheet.
+ReportSheetTitleBlock equipmentScheduleTitleBlock(
+        DocumentControl doc, String projectName, String date) =>
+    ReportSheetTitleBlock(
+      projectName: projectName,
+      title: drawingSeriesTitle(DrawingSeries.equipmentSchedule),
+      drawingNumber: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.equipmentSchedule),
+      revision: doc.revisionTag,
+      date: date,
+      drawnBy: doc.preparedBy,
+      checkedBy: doc.checkedBy,
+      approvedBy: doc.approvedBy,
+    );
+
 /// D1 — the TYPESET PDF equipment schedule: the SAME live solved equipment as
 /// the MD/CSV export ([exportEquipmentSchedule]), rendered to a submittable
 /// A4-portrait PDF with the document-control identity on the cover.
@@ -2039,7 +2066,24 @@ Future<bool> writeSubmittalPackageToDir(
     );
   }
 
-  final drawingList = <DrawingListEntry>[];
+  // Drawing-review D1 — the three front-matter sheets are drawings of the set
+  // too: G-001 cover, G-002 Daftar Gambar, G-003 notes + legend, each stamped
+  // in its own title block and listed first on the register.
+  final frontMatterNumbers = [
+    for (var i = 1; i <= kFrontMatterDiagramTitles.length; i++)
+      sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.general, index: i),
+  ];
+  final drawingList = <DrawingListEntry>[
+    for (var i = 0; i < kFrontMatterDiagramTitles.length; i++)
+      DrawingListEntry(
+        number: frontMatterNumbers[i],
+        title: drawingSeriesTitle(DrawingSeries.general,
+            sheetName: kFrontMatterDiagramTitles[i]),
+        revision: rev,
+        date: today,
+      ),
+  ];
   for (final s in sheetsFm.sheets) {
     final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
     final planChromeFm = issuableChrome(ref, sheetId: s.id, floorIndex: fIdx);
@@ -2133,6 +2177,26 @@ Future<bool> writeSubmittalPackageToDir(
     }
   }
 
+  // Drawing-review D2 / D3 — the equipment schedule (M-601) and the panel-
+  // schedule set (E-601, only with a solved electrical system) are issued in
+  // the package, so they are drawings on the register.
+  drawingList.add(DrawingListEntry(
+    number: sheetDrawingNumber(
+        base: doc.documentNumber, series: DrawingSeries.equipmentSchedule),
+    title: drawingSeriesTitle(DrawingSeries.equipmentSchedule),
+    revision: rev,
+    date: today,
+  ));
+  if (eResultFm.order.isNotEmpty) {
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.panelSchedule),
+      title: drawingSeriesTitle(DrawingSeries.panelSchedule),
+      revision: rev,
+      date: today,
+    ));
+  }
+
   // Cable families the electrical set actually specifies; fall back to the
   // conventional NYY/NYM defaults only when panels exist but none are typed.
   final specifiedCables = <String>{
@@ -2144,7 +2208,7 @@ Future<bool> writeSubmittalPackageToDir(
     projectName: base,
     drawings: drawingList,
     clientName: doc.clientName,
-    coverDrawingNumber: doc.documentNumber,
+    coverDrawingNumber: frontMatterNumbers.first,
     revision: doc.revisionTag,
     date: today,
     preparedBy: doc.preparedBy,
@@ -2164,8 +2228,8 @@ Future<bool> writeSubmittalPackageToDir(
       frontMatter,
       title: 'iSystem MEP submittal',
       diagramTitles: kFrontMatterDiagramTitles,
-      // No per-set DWG NO on the shared block (each front-matter sheet is a
-      // distinct page — the cover carries the project number in its own register).
+      // Drawing-review D1 — each front-matter page stamps its OWN number.
+      drawingNumbers: frontMatterNumbers,
       chrome: DrawingChrome(
         revisionNumber: doc.revisionTag,
         clientName: doc.clientName,
@@ -2278,8 +2342,30 @@ Future<bool> writeSubmittalPackageToDir(
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
       strings: reportStringsFor(ref),
+      // Drawing-review D2 — the schedule is a drawing of the set: the
+      // standard title block (number M-601) on every page.
+      sheetTitleBlock: equipmentScheduleTitleBlock(doc, base, today),
     ),
   );
+
+  // ── Panel schedules (PDF) — drawing-review D3: its own number (E-601) and
+  // title, issued in the package and listed on the register. ───────────────
+  if (eResultFm.order.isNotEmpty) {
+    await File(out('panel-schedules.pdf')).writeAsBytes(
+      electricalSldToPdfPaginated(
+        project: eProjectFm,
+        result: eResultFm,
+        title: 'iSystem electrical panel schedules',
+        diagramTitle: drawingSeriesTitle(DrawingSeries.panelSchedule),
+        projectName: base,
+        chrome: sldChrome(DrawingSeries.panelSchedule),
+        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+        breakerKaByCircuitId: breakerKaByCircuit(ref),
+        adsFailedCircuitIds: adsFailedCircuitIds(ref),
+        containmentByCircuitId: containmentByCircuit(ref),
+      ),
+    );
+  }
 
   // ── BOM (CSV) + costed quotation (MD) — the unified M+E+P pipeline ───────────
   final mechCost = ref.read(mechanicalCostProvider);

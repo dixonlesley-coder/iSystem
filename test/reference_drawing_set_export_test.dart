@@ -30,6 +30,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/design_issues_store.dart'
+    show exportHasZeroLengthEdgesProvider;
 import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/electrical_feed.dart';
 import 'package:mechx/store/electrical_store.dart';
@@ -276,6 +278,11 @@ void main() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
       dir.createSync(recursive: true);
 
+      // Drawing-review D7 — the package path applies the SAME zero-length
+      // guard [runExportGuarded] applies to every other export (the folder
+      // picker in front of it cannot run headless).
+      expect(c.read(exportHasZeroLengthEdgesProvider), isFalse,
+          reason: 'zero-length guard would refuse the submittal package');
       final ok = await tester
           .runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
       expect(ok, isTrue);

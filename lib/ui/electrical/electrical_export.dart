@@ -407,9 +407,12 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
           project: project,
           result: result,
           title: 'iSystem electrical panel schedules',
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
+          // Drawing-review D3 — its own drawing: JADWAL PANEL / PANEL
+          // SCHEDULES, number E-601 (never the SLD's E-201).
+          diagramTitle: drawingSeriesTitle(DrawingSeries.panelSchedule),
           projectName: electricalSheetProjectName(ref),
-          chrome: electricalExportChrome(ref),
+          chrome: electricalExportChrome(ref,
+              series: DrawingSeries.panelSchedule),
           // The C5 device-notation kA (from the fault study) rides the schedule
           // set too, matching the single-sheet detail export.
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),

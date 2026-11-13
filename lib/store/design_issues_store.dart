@@ -1984,14 +1984,16 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
   var count = 0;
   for (final e in net.edges) {
     if (!sizing.containsKey(e.id)) continue;
-    final len = edgeLength(
+    // Drawing-review D7 — a 0 px splice on a calibrated sheet is not counted.
+    if (edgeBlocksExportAsZeroLength(
       e,
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
       mounting: project.mounting,
-    );
-    if (len.meters <= 0) count++;
+    )) {
+      count++;
+    }
   }
   return count;
 });
@@ -2017,14 +2019,15 @@ final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
   final seen = <String>{};
   for (final e in net.edges) {
     if (!sizing.containsKey(e.id)) continue;
-    final len = edgeLength(
+    if (!edgeBlocksExportAsZeroLength(
       e,
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
       mounting: project.mounting,
-    );
-    if (len.meters > 0) continue;
+    )) {
+      continue;
+    }
     final sheetId = net.nodeById(e.fromId)?.sheetId;
     if (sheetId == null) continue;
     if (seen.add(sheetId)) out.add(sheetId);

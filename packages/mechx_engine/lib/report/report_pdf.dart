@@ -30,7 +30,7 @@ const double _margin = 48.0;
 const double _contentW = _pageW - 2 * _margin;
 
 /// Bottom limit for flowed content — the strip below is the footer's.
-const double _bottomLimit = _margin + 18.0;
+const double _kBottomLimit = _margin + 18.0;
 
 // ── Helvetica AFM character widths (units per 1000, chars 0x20–0x7E) ─────────
 // Standard Adobe AFM metrics for the base-14 Helvetica / Helvetica-Bold fonts
@@ -411,7 +411,12 @@ class _Typesetter {
   final List<StringBuffer> pages = [];
   double _y = 0;
 
-  _Typesetter() {
+  /// The lowest baseline content may reach (raised above a drawing title
+  /// block when the document is issued as a set sheet — drawing-review D2).
+  final double _bottomLimit;
+
+  _Typesetter({double bottomLimit = _kBottomLimit})
+      : _bottomLimit = bottomLimit {
     _newPage();
   }
 
@@ -467,7 +472,7 @@ class _Typesetter {
   RptBlock? next;
 
   /// Full flowed height of a fresh content page.
-  static const double _pageFlowH = _pageH - _margin - _bottomLimit;
+  double get _pageFlowH => _pageH - _margin - _bottomLimit;
 
   /// Round 23 (report-pdf-orphan-headings) — the minimum height [b] needs to
   /// START on the current page (a table's header band + first row, a figure's
@@ -701,7 +706,7 @@ class _Typesetter {
       SldSheet sheet) {
     final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
     final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
-    const fullH = _pageFlowH - 4 - 10 - 14; // fresh page minus caption room
+    final fullH = _pageFlowH - 4 - 10 - 14; // fresh page minus caption room
     var s = math.min(1.0, _contentW / spanX);
     if (!s.isFinite || s <= 0) s = 1.0;
     if (spanY * s <= fullH) {
@@ -1011,6 +1016,95 @@ Uint8List _assemblePdf(List<String> pageContents) {
   return out.toBytes();
 }
 
+/// Drawing-review D2 (2026-11-13) — the standard DRAWING title block a
+/// report-typeset document carries when it is issued as a sheet of a drawing
+/// set (the equipment schedule): the same fields every drawing's block has —
+/// PROJECT / TITLE / DWG NO / REV / SCALE / DATE / DRAWN / CHECKED / APPROVED
+/// / SHEET i of n. Unset sign-offs print `-` (the cell is present, never
+/// invented).
+class ReportSheetTitleBlock {
+  final String projectName;
+  final String title;
+  final String drawingNumber;
+  final String? revision;
+  final String? date;
+  final String scale;
+  final String? drawnBy;
+  final String? checkedBy;
+  final String? approvedBy;
+  const ReportSheetTitleBlock({
+    required this.projectName,
+    required this.title,
+    required this.drawingNumber,
+    this.revision,
+    this.date,
+    this.scale = 'NTS',
+    this.drawnBy,
+    this.checkedBy,
+    this.approvedBy,
+  });
+}
+
+/// Rows / pitch of the report sheet title block (two columns of five rows).
+const double _kSheetBlockRowH = 12.0;
+const double _kSheetBlockH = 5 * _kSheetBlockRowH;
+
+/// The ruled two-column title block of page [index] of [total], bottom of the
+/// page above the running footer. Each column is written top-to-bottom as its
+/// own run sequence, so a text extractor reads one `LABEL value` per line.
+String _sheetTitleBlockOps(ReportSheetTitleBlock b, int index, int total) {
+  final cs = StringBuffer();
+  const top = _margin + 4 + _kSheetBlockH;
+  const bottom = _margin + 4;
+  const leftW = _contentW * 0.62;
+  const labelW = 46.0;
+  cs.writeln('$_inkRule RG 0.8 w ${_n(_margin)} ${_n(bottom)} '
+      '${_n(_contentW)} ${_n(_kSheetBlockH)} re S');
+  cs.writeln('$_inkRule RG 0.5 w ${_n(_margin + leftW)} ${_n(top)} m '
+      '${_n(_margin + leftW)} ${_n(bottom)} l S');
+  for (var r = 1; r < 5; r++) {
+    final y = top - r * _kSheetBlockRowH;
+    cs.writeln('$_inkRule RG 0.3 w ${_n(_margin)} ${_n(y)} m '
+        '${_n(_margin + _contentW)} ${_n(y)} l S');
+  }
+  String v(String? s) =>
+      (s == null || s.trim().isEmpty) ? '-' : _ascii(s.trim());
+  void column(double x, double w, List<(String, String)> rows) {
+    for (var r = 0; r < rows.length; r++) {
+      final (k, val) = rows[r];
+      final base = top - r * _kSheetBlockRowH - 9;
+      var text = val;
+      final maxW = w - labelW - 6;
+      if (_textWidth(text, 7.5) > maxW) {
+        while (text.isNotEmpty && _textWidth('$text...', 7.5) > maxW) {
+          text = text.substring(0, text.length - 1);
+        }
+        text = '$text...';
+      }
+      cs.writeln('BT /F1 7 Tf $_inkMuted rg ${_n(x + 3)} ${_n(base)} Td '
+          '(${_esc(k)}) Tj ET');
+      cs.writeln('BT /F1 7.5 Tf $_inkBody rg ${_n(x + labelW)} ${_n(base)} '
+          'Td (${_esc(text)}) Tj ET');
+    }
+  }
+
+  column(_margin, leftW, [
+    ('PROJECT', v(b.projectName)),
+    ('TITLE', v(b.title)),
+    ('DWG NO', v(b.drawingNumber)),
+    ('REV', v(b.revision)),
+    ('SCALE', v(b.scale)),
+  ]);
+  column(_margin + leftW, _contentW - leftW, [
+    ('DATE', v(b.date)),
+    ('DRAWN', v(b.drawnBy)),
+    ('CHECKED', v(b.checkedBy)),
+    ('APPROVED', v(b.approvedBy)),
+    ('SHEET', '$index of $total'),
+  ]);
+  return cs.toString();
+}
+
 /// Typeset [blocks] into a submittable A4-portrait PDF report.
 ///
 /// Page 1 is a cover (title, project, standards line, date, document number /
@@ -1035,9 +1129,14 @@ Uint8List reportBlocksToPdf(
   String? checkedBy,
   String? approvedBy,
   ReportStrings strings = const ReportStrings.en(),
+  ReportSheetTitleBlock? sheetTitleBlock,
 }) {
   // Lay the content out first — the footer needs the final page count.
-  final ts = _Typesetter();
+  // Drawing-review D2 — with a sheet title block the flow stops above it.
+  final ts = _Typesetter(
+      bottomLimit: sheetTitleBlock == null
+          ? _kBottomLimit
+          : _kBottomLimit + _kSheetBlockH + 8);
   for (var i = 0; i < blocks.length; i++) {
     ts.next = i + 1 < blocks.length ? blocks[i + 1] : null;
     ts.block(blocks[i]);
@@ -1072,6 +1171,9 @@ Uint8List reportBlocksToPdf(
     final footer = '$footerBase - ${pageOf(i + 1)}';
     cs.writeln('BT /F1 8 Tf $_inkMuted rg ${_n(_margin)} ${_n(_margin - 20)} '
         'Td (${_esc(footer)}) Tj ET');
+    if (sheetTitleBlock != null) {
+      cs.write(_sheetTitleBlockOps(sheetTitleBlock, i + 2, total + 1));
+    }
     contentPages.add(cs.toString());
   }
 
@@ -1087,6 +1189,9 @@ Uint8List reportBlocksToPdf(
     approvedBy: approvedBy,
     strings: strings,
   );
+  final coverWithBlock = sheetTitleBlock == null
+      ? cover
+      : cover + _sheetTitleBlockOps(sheetTitleBlock, 1, total + 1);
 
-  return _assemblePdf([cover, ...contentPages]);
+  return _assemblePdf([coverWithBlock, ...contentPages]);
 }
