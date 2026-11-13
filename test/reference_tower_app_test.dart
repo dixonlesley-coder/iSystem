@@ -1400,7 +1400,10 @@ void main() {
       // ignore: avoid_print
       print(_out.toString());
     }
-  });
+    // Drawing backlog C-2 — two full tower loads (each now also setting the
+    // 32 board floors through the store intent) overrun the default 30 s
+    // under a parallel suite.
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
   group('hand values (app providers, pass 3)', () {
