@@ -428,6 +428,22 @@ class ElectricalPlanRiserLayout {
       this.riser, this.x1, this.y1, this.x2, this.y2, this.label);
 }
 
+typedef _Bx = ({double minX, double minY, double maxX, double maxY});
+
+/// Fix round F1/F2 (2026-11-13) — one node's placed tag block (output units,
+/// y-up, left-aligned baselines): the tag line at ([tagX], [tagY]), the
+/// sub line (when the node has one) at ([tagX], [subY]), and a [leader] from
+/// the symbol to the block when the block was stacked off the symbol's row.
+class ElectricalPlanNodeTag {
+  final double tagX, tagY, subY;
+  final ({double x1, double y1, double x2, double y2})? leader;
+
+  /// The block's footprint (the box every other annotation avoids).
+  final ({double minX, double minY, double maxX, double maxY}) box;
+  const ElectricalPlanNodeTag(
+      this.tagX, this.tagY, this.subY, this.leader, this.box);
+}
+
 /// The placed annotations of one electrical layout sheet (output units).
 class ElectricalPlanAnnotations {
   /// Route index -> its placed length label (absent = unlabelled route).
@@ -436,8 +452,13 @@ class ElectricalPlanAnnotations {
 
   /// Annotations that could only be placed overprinting something.
   final int overlapCount;
+
+  /// Fix round F1/F2 (2026-11-13) — node index -> its placed tag / sub-tag
+  /// (output units). Empty only for the legacy positional constructor.
+  final Map<int, ElectricalPlanNodeTag> nodeTags;
   const ElectricalPlanAnnotations(
-      this.routeLabels, this.risers, this.overlapCount);
+      this.routeLabels, this.risers, this.overlapCount,
+      [this.nodeTags = const {}]);
 }
 
 /// Round 24 — lay out the electrical plan's route length labels and the
@@ -451,6 +472,9 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
   ElectricalPlanData data, {
   required ({double x, double y}) Function(double xPx, double yPx) map,
   required ElectricalPlanSizes sizes,
+  ({double minX, double minY, double maxX, double maxY})? area,
+  List<({double minX, double minY, double maxX, double maxY})> keepOut =
+      const [],
 }) {
   final z = sizes;
   final layout = PlanLabelLayout();
@@ -459,39 +483,96 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     final a = map(r.x1, r.y1), b = map(r.x2, r.y2);
     layout.addRun('r$i', a.x, a.y, b.x, b.y);
   }
-  void textBox(double x, double y, String t, double size) => layout.addBox((
-        minX: x,
-        minY: y - 0.25 * size,
-        maxX: x + t.length * size * 0.55,
-        maxY: y + size,
-      ));
+  // Fix round F1/F2 (2026-11-13) — every node's tag block is PLACED, not
+  // pinned to the symbol's right: it tries the right, then the left of its
+  // symbol, then stacks a block height down / up (leadered back), and takes
+  // the first slot that stays inside [area] (the drawing frame, clear of the
+  // title block) and clear of every symbol, every earlier tag block and every
+  // [keepOut] box. A block with no clear slot keeps the in-frame default and
+  // COUNTS toward [ElectricalPlanAnnotations.overlapCount] (the sheet's
+  // stamped overlap warning), so a co-located pair never silently overprints.
+  bool hit(_Bx a, _Bx b) =>
+      a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+  bool inside(_Bx b) =>
+      area == null ||
+      (b.minX >= area.minX &&
+          b.maxX <= area.maxX &&
+          b.minY >= area.minY &&
+          b.maxY <= area.maxY);
+  double textW(String t, double size) => t.length * size * 0.55;
+  final symbols = <_Bx>[];
   for (final nd in data.nodes) {
     final p = map(nd.x, nd.y);
-    if (nd.kind == ElectricalPlanNodeKind.panel) {
-      layout.addBox((
-        minX: p.x - z.panelW / 2,
-        minY: p.y - z.panelH / 2,
-        maxX: p.x + z.panelW / 2,
-        maxY: p.y + z.panelH / 2,
-      ));
-      final tx = p.x + z.panelW / 2 + z.panelTagGap;
-      textBox(tx, p.y + z.panelTagDy, nd.tag, z.panelTagSize);
-      if (nd.sub != null) {
-        textBox(tx, p.y + z.panelSubDy, nd.sub!, z.panelSubSize);
-      }
-    } else {
-      layout.addBox((
-        minX: p.x - z.loadR,
-        minY: p.y - z.loadR,
-        maxX: p.x + z.loadR,
-        maxY: p.y + z.loadR,
-      ));
-      final tx = p.x + z.loadTagGap;
-      textBox(tx, p.y + z.loadTagDy, nd.tag, z.loadTagSize);
-      if (nd.sub != null) {
-        textBox(tx, p.y + z.loadSubDy, nd.sub!, z.loadSubSize);
-      }
+    final panel = nd.kind == ElectricalPlanNodeKind.panel;
+    final hw = panel ? z.panelW / 2 : z.loadR;
+    final hh = panel ? z.panelH / 2 : z.loadR;
+    final b = (minX: p.x - hw, minY: p.y - hh, maxX: p.x + hw, maxY: p.y + hh);
+    symbols.add(b);
+    layout.addBox(b);
+  }
+  final placedTags = <_Bx>[];
+  final nodeTags = <int, ElectricalPlanNodeTag>{};
+  var tagOverlaps = 0;
+  for (var i = 0; i < data.nodes.length; i++) {
+    final nd = data.nodes[i];
+    final p = map(nd.x, nd.y);
+    final panel = nd.kind == ElectricalPlanNodeKind.panel;
+    final tS = panel ? z.panelTagSize : z.loadTagSize;
+    final sS = panel ? z.panelSubSize : z.loadSubSize;
+    final tDy = panel ? z.panelTagDy : z.loadTagDy;
+    final sDy = panel ? z.panelSubDy : z.loadSubDy;
+    final gapR = panel ? z.panelW / 2 + z.panelTagGap : z.loadTagGap;
+    final hw = panel ? z.panelW / 2 : z.loadR;
+    final w = math.max(textW(nd.tag, tS), nd.sub == null ? 0.0 : textW(nd.sub!, sS));
+    final top = tDy + tS;
+    final bot = nd.sub == null ? tDy - 0.25 * tS : sDy - 0.25 * sS;
+    final h = top - bot;
+    ElectricalPlanNodeTag at(bool right, double shift) {
+      final x0 = right ? p.x + gapR : p.x - gapR - w;
+      final box = (
+        minX: x0,
+        minY: p.y + bot + shift,
+        maxX: x0 + w,
+        maxY: p.y + top + shift,
+      );
+      final lead = shift == 0
+          ? null
+          : (
+              x1: right ? p.x + hw : p.x - hw,
+              y1: p.y,
+              x2: right ? x0 : x0 + w,
+              y2: p.y + tDy + shift + 0.3 * tS,
+            );
+      return ElectricalPlanNodeTag(
+          x0, p.y + tDy + shift, p.y + sDy + shift, lead, box);
     }
+
+    ElectricalPlanNodeTag? chosen;
+    final step = h + 0.3 * tS;
+    for (final k in const [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+      for (final right in const [true, false]) {
+        final c = at(right, -k * step);
+        if (!inside(c.box)) continue;
+        if (symbols.any((b) => hit(b, c.box)) ||
+            placedTags.any((b) => hit(b, c.box)) ||
+            keepOut.any((b) => hit(b, c.box))) {
+          continue;
+        }
+        chosen = c;
+        break;
+      }
+      if (chosen != null) break;
+    }
+    if (chosen == null) {
+      tagOverlaps++;
+      // The in-frame default: the right-hand slot, flipped left when it
+      // would cross the frame's right edge.
+      final r = at(true, 0);
+      chosen = inside(r.box) || area == null ? r : at(false, 0);
+    }
+    nodeTags[i] = chosen;
+    placedTags.add(chosen.box);
+    layout.addBox(chosen.box);
   }
 
   // Off-sheet feeder stubs first (they are linework): the k-th mark at one
@@ -573,8 +654,33 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     risers.add(ElectricalPlanRiserLayout(rs, x1, y1, x2, y2, label));
   }
   return ElectricalPlanAnnotations(
-      routeLabels, risers, layout.unresolvedCount);
+      routeLabels, risers, layout.unresolvedCount + tagOverlaps, nodeTags);
 }
+
+/// Fix round F5 (2026-11-13) — the electrical layout legend's rows.
+enum ElectricalPlanLegendRow {
+  panel('Panel'),
+  load('Beban / titik'),
+  cable('Kabel');
+
+  final String text;
+  const ElectricalPlanLegendRow(this.text);
+}
+
+/// The legend rows of one electrical layout sheet: exactly the device kinds
+/// the sheet DRAWS (a panel row only with a placed panel, a cable row only
+/// with a drawn route or off-sheet feeder stub). Both renderers read it, so
+/// the PDF and the DXF twin list the same rows. Pure.
+List<ElectricalPlanLegendRow> electricalPlanLegendRows(
+        ElectricalPlanData data) =>
+    [
+      if (data.nodes.any((n) => n.kind == ElectricalPlanNodeKind.panel))
+        ElectricalPlanLegendRow.panel,
+      if (data.nodes.any((n) => n.kind == ElectricalPlanNodeKind.load))
+        ElectricalPlanLegendRow.load,
+      if (data.routes.isNotEmpty || data.risers.isNotEmpty)
+        ElectricalPlanLegendRow.cable,
+    ];
 
 // ── PDF renderer ─────────────────────────────────────────────────────────────
 
@@ -845,8 +951,71 @@ Uint8List electricalPlanToPdf({
 
   // Round 24 — the route figures + off-sheet feeder marks are placed by the
   // shared plan label placer (along the route, clear of every line / glyph).
+  // Fix round F1 (2026-11-13) — the drawing frame the annotations stay in:
+  // inside the sheet frame, above the title-block band, clear of the north
+  // arrow, the device legend and the corner notes (laid out first, in
+  // columns that never run into the title-block band).
+  final frameArea = (
+    minX: margin + 2,
+    minY: pageH - margin - availH,
+    maxX: pageW - margin - 2,
+    maxY: pageH - margin - 2,
+  );
+  var notesTop = pageH - margin - (hasChrome ? 14.0 : 30.0);
+  const noteLine = 11.0, overlapLine = 13.0;
+  final notesFloor = math.max(frameArea.minY, margin + 80.0) + 4;
+  // (column x, first baseline) of every unplaced line, header first;
+  // the block is laid out as if the overlap warning heads it, so the reserve
+  // holds whether or not the sheet stamps one.
+  final noteCols = <List<String>>[];
+  if (data.unplaced.isNotEmpty) {
+    final perCol = math.max(
+        1, ((notesTop - overlapLine - notesFloor) / noteLine).floor());
+    final rows = ['BELUM DITEMPATKAN:', for (final u in data.unplaced) '- $u'];
+    for (var i = 0; i < rows.length; i += perCol) {
+      noteCols.add(rows.sublist(i, math.min(rows.length, i + perCol)));
+    }
+  }
+  double colW(List<String> c) =>
+      c.fold<int>(0, (m, t) => math.max(m, t.length)) * 8 * 0.55 + 12;
+  final keepOut = <_Bx>[
+    (
+      minX: margin,
+      minY: margin,
+      maxX: margin + 130,
+      maxY: margin + 72,
+    ),
+    if (hasChrome)
+      (
+        minX: pageW - margin - 44,
+        minY: pageH - margin - 70,
+        maxX: pageW - margin,
+        maxY: pageH - margin,
+      ),
+  ];
+  {
+    var cx = margin + 4;
+    for (final c in noteCols) {
+      keepOut.add((
+        minX: cx - 2,
+        minY: notesTop - overlapLine - c.length * noteLine - 3,
+        maxX: cx + colW(c),
+        maxY: notesTop + 10,
+      ));
+      cx += colW(c);
+    }
+    keepOut.add((
+      minX: margin + 2,
+      minY: notesTop - 4,
+      maxX: margin + 4 + 330,
+      maxY: notesTop + 10,
+    ));
+  }
   final ann = layoutElectricalPlanAnnotations(data,
-      map: (x, y) => (x: tx(x), y: ty(y)), sizes: kElectricalPlanPdfSizes);
+      map: (x, y) => (x: tx(x), y: ty(y)),
+      sizes: kElectricalPlanPdfSizes,
+      area: frameArea,
+      keepOut: keepOut);
   void placedLabel(LeaderedLabelPlacement p, double size) {
     final lead = p.leaderAnchor, end = p.leaderEnd;
     if (lead != null && end != null) {
@@ -877,28 +1046,33 @@ Uint8List electricalPlanToPdf({
     circle(rl.x2, rl.y2, kElectricalPlanPdfSizes.riserR);
   }
 
-  // Nodes on top.
-  for (final nd in data.nodes) {
+  // Nodes on top; each tag block where the shared layout placed it (F1/F2).
+  for (var i = 0; i < data.nodes.length; i++) {
+    final nd = data.nodes[i];
     final px = tx(nd.x), py = ty(nd.y);
+    final t = ann.nodeTags[i]!;
     setInk(nd.essential ? _kEssentialInk : _kNormalInk);
     cs.writeln('1.4 w');
-    if (nd.kind == ElectricalPlanNodeKind.panel) {
+    final panel = nd.kind == ElectricalPlanNodeKind.panel;
+    if (panel) {
       // A panel: a small stroked box with a diagonal (distribution-board glyph).
       const w = 20.0, h = 12.0;
       cs.writeln('${_n(px - w / 2)} ${_n(py - h / 2)} ${_n(w)} ${_n(h)} re S');
       cs.writeln('${_n(px - w / 2)} ${_n(py - h / 2)} m '
           '${_n(px + w / 2)} ${_n(py + h / 2)} l S');
-      label(px + w / 2 + 4, py + 1, nd.tag, size: 9);
-      // drafting-6: sub-labels at the minimum plotted size.
-      if (nd.sub != null) {
-        label(px + w / 2 + 4, py - 9, nd.sub!, size: kMinPlotLabelPt);
-      }
     } else {
       // A load / outlet: a small circle.
       circle(px, py, 5);
-      label(px + 8, py + 1, nd.tag, size: 7);
-      if (nd.sub != null) label(px + 8, py - 8, nd.sub!, size: kMinPlotLabelPt);
     }
+    final lead = t.leader;
+    if (lead != null) {
+      cs.writeln('0.30 0.30 0.30 RG 0.5 w');
+      cs.writeln('${_n(lead.x1)} ${_n(lead.y1)} m '
+          '${_n(lead.x2)} ${_n(lead.y2)} l S');
+    }
+    label(t.tagX, t.tagY, nd.tag, size: panel ? 9 : 7);
+    // drafting-6: sub-labels at the minimum plotted size.
+    if (nd.sub != null) label(t.tagX, t.subY, nd.sub!, size: kMinPlotLabelPt);
   }
 
   // Every placed figure LAST, over all the linework.
@@ -913,42 +1087,59 @@ Uint8List electricalPlanToPdf({
   // position (never invented). Top-left, below the loose title line.
   // Round 24 — preceded by the overlap warning when labels had to overprint.
   final overlapNote = planOverlapWarning(ann.overlapCount);
-  var notesTop = pageH - margin - (hasChrome ? 14.0 : 30.0);
   if (overlapNote != null) {
     cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
         '${_n(margin + 4)} ${_n(notesTop)} Td (${_pdfText(overlapNote)}) Tj ET');
-    notesTop -= 13;
+    notesTop -= overlapLine;
   }
-  if (data.unplaced.isNotEmpty) {
-    var ny = notesTop;
-    cs.writeln('BT /F1 8 Tf 0.55 0.12 0.12 rg '
-        '${_n(margin + 4)} ${_n(ny)} Td (${_pdfText('BELUM DITEMPATKAN:')}) Tj ET');
-    for (final u in data.unplaced) {
-      ny -= 11;
-      cs.writeln('BT /F1 7 Tf 0.30 0.30 0.30 rg '
-          '${_n(margin + 4)} ${_n(ny)} Td (${_pdfText('- $u')}) Tj ET');
+  // Fix round F1 — the list wraps into columns above the title-block band.
+  {
+    var cx = margin + 4;
+    var first = true;
+    for (final c in noteCols) {
+      var ny = notesTop;
+      for (final row in c) {
+        if (first) {
+          cs.writeln('BT /F1 8 Tf 0.55 0.12 0.12 rg '
+              '${_n(cx)} ${_n(ny)} Td (${_pdfText(row)}) Tj ET');
+          first = false;
+        } else {
+          cs.writeln('BT /F1 7 Tf 0.30 0.30 0.30 rg '
+              '${_n(cx)} ${_n(ny)} Td (${_pdfText(row)}) Tj ET');
+        }
+        ny -= noteLine;
+      }
+      cx += colW(c);
     }
   }
 
   // A compact device legend (bottom-left): Panel / Load / Feeder — a plan
   // carries its own symbol key (the mechanical service legend doesn't apply to
   // an electrical layout).
-  {
+  // Fix round F5 (2026-11-13) — it lists EXACTLY what the sheet draws
+  // ([electricalPlanLegendRows]): no "Panel" / "Kabel" row on a sheet whose
+  // boards are all unplaced.
+  final legendRows = electricalPlanLegendRows(data);
+  if (legendRows.isNotEmpty) {
     const lx = margin + 6;
     var ly = margin + 44;
     cs.writeln('BT /F1 9 Tf 0 0 0 rg '
         '${_n(lx)} ${_n(ly + 14)} Td (${_pdfText('LEGENDA')}) Tj ET');
     setInk(_kNormalInk);
     cs.writeln('1.4 w');
-    // Panel swatch.
-    cs.writeln('${_n(lx)} ${_n(ly + 2)} 12 8 re S');
-    label(lx + 18, ly + 2, 'Panel', size: 8);
-    ly -= 13;
-    circle(lx + 6, ly + 6, 4);
-    label(lx + 18, ly + 2, 'Beban / titik', size: 8);
-    ly -= 13;
-    cs.writeln('${_n(lx)} ${_n(ly + 6)} m ${_n(lx + 12)} ${_n(ly + 6)} l S');
-    label(lx + 18, ly + 2, 'Kabel', size: 8);
+    for (final row in legendRows) {
+      switch (row) {
+        case ElectricalPlanLegendRow.panel:
+          cs.writeln('${_n(lx)} ${_n(ly + 2)} 12 8 re S');
+        case ElectricalPlanLegendRow.load:
+          circle(lx + 6, ly + 6, 4);
+        case ElectricalPlanLegendRow.cable:
+          cs.writeln(
+              '${_n(lx)} ${_n(ly + 6)} m ${_n(lx + 12)} ${_n(ly + 6)} l S');
+      }
+      label(lx + 18, ly + 2, row.text, size: 8);
+      ly -= 13;
+    }
   }
 
   // Chrome (opt-in; byte-identical when null).
@@ -1155,25 +1346,31 @@ String electricalPlanToDxf({
   }
 
   // Nodes (symbols are paper-sized annotation, placed at world positions).
-  for (final nd in data.nodes) {
+  for (var i = 0; i < data.nodes.length; i++) {
+    final nd = data.nodes[i];
     final col = redIf(nd.essential);
     final nx = gx(nd.x), ny = gx(nd.y);
-    if (nd.kind == ElectricalPlanNodeKind.panel) {
+    // Fix round F2 — the tag block where the shared layout placed it (the
+    // layout space is y-up; [text] / [line] take screen y, hence the minus).
+    final t = ann.nodeTags[i]!;
+    final panel = nd.kind == ElectricalPlanNodeKind.panel;
+    if (panel) {
       final w = a(40.0), h = a(24.0);
       box(layers.device, nx - w / 2, ny - h / 2, w, h, color: col);
       line(layers.device, nx - w / 2, ny - h / 2, nx + w / 2, ny + h / 2,
           color: col);
-      text(layers.text, nx + w / 2 + a(6), ny, nd.tag,
-          size: a(12), color: col);
-      if (nd.sub != null) {
-        text(layers.text, nx + w / 2 + a(6), ny + a(16), nd.sub!, size: a(8));
-      }
     } else {
       dxfCircle(layers.device, nx, ny, a(10), color: col);
-      text(layers.text, nx + a(14), ny, nd.tag, size: a(9), color: col);
-      if (nd.sub != null) {
-        text(layers.text, nx + a(14), ny + a(12), nd.sub!, size: a(7));
-      }
+    }
+    final lead = t.leader;
+    if (lead != null) {
+      line(layers.text, lead.x1, -lead.y1, lead.x2, -lead.y2);
+    }
+    text(layers.text, t.tagX, -t.tagY, nd.tag,
+        size: panel ? a(12) : a(9), color: col);
+    if (nd.sub != null) {
+      text(layers.text, t.tagX, -t.subY, nd.sub!,
+          size: panel ? a(8) : a(7));
     }
   }
 
@@ -1227,19 +1424,25 @@ String electricalPlanToDxf({
 
   // Drawing-review D6 — the device LEGENDA the PDF prints (Panel / Beban /
   // titik / Kabel), right of the title block, same symbols and strings.
-  {
+  // Fix round F5 — the same rows the PDF lists (what the sheet draws).
+  final legendRows = electricalPlanLegendRows(data);
+  if (legendRows.isNotEmpty) {
     final lx = a(380.0);
     var ly = frameTop + a(14);
     text(layers.frame, lx, ly, 'LEGENDA', size: a(9));
-    ly += a(16);
-    box(layers.device, lx, ly - a(8), a(12), a(8));
-    text(layers.frame, lx + a(18), ly, 'Panel', size: a(8));
-    ly += a(13);
-    dxfCircle(layers.device, lx + a(6), ly - a(4), a(4));
-    text(layers.frame, lx + a(18), ly, 'Beban / titik', size: a(8));
-    ly += a(13);
-    line(layers.feeder, lx, ly - a(4), lx + a(12), ly - a(4));
-    text(layers.frame, lx + a(18), ly, 'Kabel', size: a(8));
+    ly += a(3);
+    for (final row in legendRows) {
+      ly += a(13);
+      switch (row) {
+        case ElectricalPlanLegendRow.panel:
+          box(layers.device, lx, ly - a(8), a(12), a(8));
+        case ElectricalPlanLegendRow.load:
+          dxfCircle(layers.device, lx + a(6), ly - a(4), a(4));
+        case ElectricalPlanLegendRow.cable:
+          line(layers.feeder, lx, ly - a(4), lx + a(12), ly - a(4));
+      }
+      text(layers.frame, lx + a(18), ly, row.text, size: a(8));
+    }
   }
   // … and the SAME honest scale bar (a real-metre rung at the plotted 1 : N,
   // `0` / `X/2 m` / `X m`) — only on a real plotted scale, like the PDF.
