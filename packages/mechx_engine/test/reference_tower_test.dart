@@ -501,4 +501,248 @@ void main() {
       _p('- ${e.key} x${e.value}');
     }
   });
+
+  // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
+  // Flush-VALVE branch of SNI 8153 Gambar 1 (`_demandValve`), linear between
+  // the charted points (UBAP → L/s).
+  double valve(double u) {
+    const pts = [
+      (0.0, 0.0), (10.0, 0.88333), (25.0, 1.51667), (50.0, 2.58333), //
+      (100.0, 4.03333), (200.0, 5.93333), (500.0, 8.96667),
+      (1000.0, 13.11667),
+    ];
+    for (var i = 1; i < pts.length; i++) {
+      if (u <= pts[i].$1) {
+        final (x0, y0) = pts[i - 1];
+        final (x1, y1) = pts[i];
+        return y0 + (u - x0) / (x1 - x0) * (y1 - y0);
+      }
+    }
+    throw StateError('off the chart');
+  }
+
+  group('hand values — cold water (public, flush-valve curve)', () {
+    late Map<String, EdgeSizing> sz;
+    late Map<String, double> fu;
+    late Network net;
+    setUpAll(() {
+      net = buildTowerNetwork(prvFloors: kTowerPrvFloors);
+      sz = size(net);
+      fu = Map.of(fuOut);
+    });
+    void check(String id, double u, double q, int dn, [double? v]) {
+      expect(fu[id], closeTo(u, 1e-9), reason: id);
+      expect(sz[id]!.flow.inLitersPerSecond, closeTo(q, 5e-5), reason: id);
+      expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+      if (v != null) {
+        expect(sz[id]!.velocity.metersPerSecond, closeTo(v, 5e-4), reason: id);
+      }
+    }
+
+    test('the curve read-offs: 24 UBAP per floor (each lavatory its total)',
+        () {
+      // WC valve 10 + 10, urinal 2, lavatories 1 + 1 = 24 per floor.
+      expect(valve(24), closeTo(1.47445, 5e-5)); // 0.88333 + 14/15 x 0.63334
+      expect(valve(48), closeTo(2.49800, 5e-5));
+      expect(valve(72), closeTo(3.22133, 5e-5));
+      // 240: 5.93333 + 40/300 x 3.03334 = 6.33778.
+      expect(valve(240), closeTo(6.33778, 5e-5));
+      expect(valve(480), closeTo(8.76445, 5e-5));
+      // 624: 8.96667 + 124/500 x 4.15 = 9.99587; 720: + 220/500 x 4.15.
+      expect(valve(624), closeTo(9.99587, 5e-5));
+      expect(valve(648), closeTo(10.19507, 5e-5));
+      expect(valve(720), closeTo(10.79267, 5e-5));
+    });
+
+    test('fill line, top main and the boosted branch', () {
+      // 30 floors = 720 UBAP ⇒ 10.79267 L/s, DN100 at 1.374 m/s.
+      for (final id in [
+        'e_cw_WM_GT', 'e_cw_GT_TP', 'e_cw_TP_U0', 'e_cw_GT_TPS', //
+        'e_cw_TPS_U0', 'e_cw_U29_RT', 'e_cw_RT_A',
+        for (var f = 1; f < kTowerFloors; f++) 'e_cw_U${f - 1}_U$f',
+      ]) {
+        check(id, 720, valve(720), 100, 1.374);
+      }
+      // Boosted: 3 x 24 = 72 on the combined path (the lavatories' cold and
+      // hot shares rejoin), then 2 x 23.5 and 23.5 (0.75 cold per lavatory).
+      check('e_cw_A_BS', 72, valve(72), 50);
+      check('e_cw_BS_BR29', 72, valve(72), 50);
+      check('e_cw_BR29_BR28', 47, valve(47), 40);
+      check('e_cw_BR28_BR27', 23.5, valve(23.5), 32);
+      // Gravity riser head: 27 floors = 648 ⇒ 10.19507 L/s DN100.
+      check('e_cw_A_GR29', 648, valve(648), 100);
+    });
+
+    test('every gravity riser edge carries the floors below it', () {
+      int dnFor(double u) => u <= 24
+          ? 32
+          : u <= 48
+              ? 40
+              : u <= 96
+                  ? 50
+                  : u <= 264
+                      ? 65
+                      : u <= 624
+                          ? 80
+                          : 100;
+      for (var f = kTowerFloors - 1; f >= 1; f--) {
+        final floors = f >= 27 ? 27 : f;
+        final u = 24.0 * floors;
+        final k = f - 1;
+        final ids = kTowerPrvFloors.contains(k)
+            ? ['e_cw_GR${f}_PRV$k', 'e_cw_PRV${k}_GR$k']
+            : ['e_cw_GR${f}_GR$k'];
+        for (final id in ids) {
+          check(id, u, valve(u), dnFor(u));
+        }
+      }
+      // 26 floors: DN80 at 1.989 m/s; 27: DN100.
+      check('e_cw_GR26_GR25', 624, 9.99587, 80, 1.989);
+      check('e_cw_GR27_GR26', 648, 10.19507, 100);
+    });
+  });
+
+  group('hand values — gravity downfeed, BEFORE / AFTER the PRVs', () {
+    DownfeedSolution solve(Network net) {
+      final sizing = size(net);
+      final target =
+          SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
+      return solveDownfeed(
+        net: net,
+        service: ServiceType.coldWater,
+        tankId: 'RT',
+        edgeFlows: {
+          for (final e in net.edges)
+            if (e.service == ServiceType.coldWater && sizing[e.id] != null)
+              e.id: sizing[e.id]!.flow,
+        },
+        sizing: sizing,
+        calibrationBySheet: tower.calibrations,
+        building: tower.building,
+        targetResidual: target,
+        mounting: tower.mounting,
+        prvSetpoint: defaultPrvSetpoint(
+          targetResidual: target,
+          maxFixtureStatic: profile.maxFixtureStaticPressure.value,
+        ),
+      );
+    }
+
+    double kpa(Map<String, Pressure> m, String id) => m[id]!.inKiloPascals;
+
+    test('WCb29 critical 13.831 kPa, booster 21.526 m; WCb26 134.370 kPa', () {
+      final sol = solve(buildTowerNetwork(prvFloors: kTowerPrvFloors));
+      // WCb29: static (120.0 − 117.1) x 9.81 = 28.449; friction 0.016819 x
+      // 2.3 (DN100 @ 10.7927) + 0.052414 x 9.4 (DN50 @ 3.22133) + 0.105497
+      // x 3.0 (DN32 @ 1.4533) + 0.139615 x 4.6 (DN25 @ 0.88333) = 1.4901 m
+      // = 14.618 kPa ⇒ 13.831.
+      expect(sol.criticalNodeId, 'WCb29');
+      expect(kpa(sol.noFlowStaticPressure, 'WCb29'), closeTo(28.449, 2e-3));
+      expect(kpa(sol.residualPressure, 'WCb29'), closeTo(13.831, 2e-3));
+      // (225 − 13.831) / 9.81 = 21.526 m.
+      expect(sol.boosterHeadRequired.meters, closeTo(21.526, 5e-4));
+      // WCb26: static (120.0 − 105.1) x 9.81 = 146.169; friction 0.03868 +
+      // 0.015135 x 13.0 (DN100 @ 10.1951) + 0.108357 x 3.0 + 0.64223 =
+      // 1.2027 m ⇒ 134.370 kPa ≥ the 98.067 flush-valve floor.
+      expect(kpa(sol.noFlowStaticPressure, 'WCb26'), closeTo(146.169, 2e-3));
+      expect(kpa(sol.residualPressure, 'WCb26'), closeTo(134.370, 2e-3));
+    });
+
+    test('BEFORE: floors 0..19 over 392.266; AFTER: held by seven PRVs', () {
+      final before = solve(buildTowerNetwork());
+      // WCb19: (120.0 − 77.1) x 9.81 = 420.849 > 392.266; WCb0 (120.0 −
+      // 1.1) x 9.81 = 1166.409.
+      expect(kpa(before.noFlowStaticPressure, 'WCb19'), closeTo(420.849, 2e-3));
+      expect(kpa(before.noFlowStaticPressure, 'WCb0'), closeTo(1166.409, 2e-3));
+      expect(kpa(before.noFlowStaticPressure, 'WCb20'), lessThan(392.266));
+      final after = solve(buildTowerNetwork(prvFloors: kTowerPrvFloors));
+      for (final k in kTowerPrvFloors) {
+        // Top floor of a PRV zone: 255 + (3.7 − 1.1) x 9.81 = 280.506.
+        expect(kpa(after.noFlowStaticPressure, 'WCb$k'), closeTo(280.506, 2e-3),
+            reason: 'WCb$k');
+        expect(kpa(after.noFlowStaticPressure, 'PRV$k'), closeTo(255.0, 1e-6));
+      }
+      // Bottom of a 3-floor zone: 255 + 10.6 x 9.81 = 358.986.
+      for (final f in [17, 14, 11, 8, 5, 2]) {
+        expect(kpa(after.noFlowStaticPressure, 'WCb$f'), closeTo(358.986, 2e-3),
+            reason: 'WCb$f');
+      }
+      // Zone 0-1: 255 + 6.6 x 9.81 = 319.746; WCb20 unreduced 381.609.
+      expect(kpa(after.noFlowStaticPressure, 'WCb0'), closeTo(319.746, 2e-3));
+      expect(kpa(after.noFlowStaticPressure, 'WCb20'), closeTo(381.609, 2e-3));
+      final net = buildTowerNetwork(prvFloors: kTowerPrvFloors);
+      expect(
+          net.nodes.where((n) => n.component == NodeComponent.prv).length, 7);
+    });
+  });
+
+  group('hand values — hot water, drainage, vent, rainwater', () {
+    late Map<String, EdgeSizing> sz;
+    late Map<String, double> fu;
+    late Network net;
+    setUpAll(() {
+      net = buildTowerNetwork(prvFloors: kTowerPrvFloors);
+      sz = size(net);
+      fu = Map.of(fuOut);
+    });
+
+    test('hot water: 0.75 UBAP per lavatory on the flush-TANK branch', () {
+      // Tank branch 0 → 10 UBAP: 0.05 L/s per UBAP.
+      for (final (id, u, q) in [
+        ('e_hw_WH_HW29', 4.5, 0.225),
+        ('e_hw_HW29_HW28', 3.0, 0.150),
+        ('e_hw_HW28_HW27', 1.5, 0.075),
+        for (final f in kTowerBoostedFloors) ...[
+          ('e_hw_HW${f}_LAVa$f', 0.75, 0.0375),
+          ('e_hw_HW${f}_LAVb$f', 0.75, 0.0375),
+        ],
+      ]) {
+        expect(fu[id], closeTo(u, 1e-9), reason: id);
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(q, 5e-5), reason: id);
+        expect(sz[id]!.diameter.inMillimeters, 15, reason: id);
+      }
+    });
+
+    test('drainage: 22 DFU per floor, graduated stack, DN200 drain', () {
+      // WC 8 + 8, urinal 4, lavatories 1 + 1 = 22 DFU per floor.
+      for (var f = kTowerFloors - 1; f >= 1; f--) {
+        final id = 'e_dr_D${f}_D${f - 1}';
+        final dfu = 22.0 * (kTowerFloors - f);
+        expect(fu[id], dfu, reason: id);
+        // Stack table: <= 42 DN75 (the WC floor), <= 240 DN100, then DN125
+        // and DN150 at the base (638).
+        final dn = dfu <= 22
+            ? 75
+            : dfu <= 240
+                ? 100
+                : dfu <= 528
+                    ? 125
+                    : 150;
+        expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+      }
+      expect(fu['e_dr_D1_D0'], 638);
+      expect(fu['e_dr_D0_OUT'], 660);
+      expect(sz['e_dr_D0_OUT']!.diameter.inMillimeters, 200);
+      // Stack vent: 660 DFU ⇒ DN150; 120.0 − 115.7 = 4.3 m.
+      const v = 'e_vt_D29_VTR';
+      expect(sz[v]!.diameter.inMillimeters, 150);
+      expect(lengthOf(net, net.edgeById(v)!), closeTo(4.3, 1e-9));
+    });
+
+    test('rainwater: 4 x 0.9 x 200 x 200 / 3.6e6 = 4 x 10 L/s', () {
+      for (final id in ['RDa', 'RDb', 'RDc', 'RDd']) {
+        final e = 'e_rw_${id}_RW29';
+        expect(sz[e]!.flow.inLitersPerSecond, closeTo(10.0, 1e-9));
+        expect(sz[e]!.diameter.inMillimeters, 200);
+      }
+      for (var f = kTowerFloors - 1; f >= 1; f--) {
+        final e = 'e_rw_RW${f}_RW${f - 1}';
+        expect(sz[e]!.flow.inLitersPerSecond, closeTo(40.0, 1e-9));
+        expect(sz[e]!.diameter.inMillimeters, 200);
+      }
+      // Outlet: DN250 half-full 38.65 < 40 L/s ⇒ DN300.
+      expect(sz['e_rw_RW0_RWOUT']!.flow.inLitersPerSecond, closeTo(40.0, 1e-9));
+      expect(sz['e_rw_RW0_RWOUT']!.diameter.inMillimeters, 300);
+    });
+  });
 }
