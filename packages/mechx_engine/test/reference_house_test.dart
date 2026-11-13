@@ -370,10 +370,14 @@ void main() {
         expect(lengthOf(id), closeTo(x.l, 1e-9));
       });
     }
-    test('vent: 7 DFU → DN40 (>= ½ × DN75 = 37.5 → 40); M1 stack vent '
+    // Shophouse F3: the stack vent vents the WHOLE stack — the through-DFU
+    // at the stack base D0 -> OUT: 2 × (WC 4 + LAV 1 + SH 2) + KS 2 = 16 DFU
+    // (it was the top junction's 7). UPC 703.2: 8 < 16 <= 24 ⇒ DN50 (the
+    // ½-drain floor is ½ × DN75 = 37.5 → 40, below the table).
+    test('vent: 16 DFU → DN50 (stack base); M1 stack vent '
         '3.2 → 7.0 = 3.8 m', () {
-      expect(fuOut['e_vt_D1_VTR'], closeTo(7, 1e-9));
-      expect(sz['e_vt_D1_VTR']!.diameter.inMillimeters, closeTo(40, 1e-9));
+      expect(fuOut['e_vt_D1_VTR'], closeTo(16, 1e-9));
+      expect(sz['e_vt_D1_VTR']!.diameter.inMillimeters, closeTo(50, 1e-9));
       expect(lengthOf('e_vt_D1_VTR'), closeTo(3.8, 1e-9));
       // The node inspector reads the same riser-end datums.
       expect(

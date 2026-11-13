@@ -3129,14 +3129,50 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     final ventSeeds = <String, double>{};
     if (service == ServiceType.vent && drainageThroughDfu.isNotEmpty) {
       final ties = nodes.where(drainageThroughDfu.containsKey).toSet();
-      for (final t in ties) {
-        ventSeeds[t] = drainageThroughDfu[t]!;
+      // Reference shophouse F3 (2026-11-13) — the root-most tie of a soil
+      // STACK (no tie below it in the drainage tree) vents the whole stack:
+      // the air of every storey below rises through the stack to it, so its
+      // seed is the through-DFU at the stack's BASE (walked root-ward over
+      // drainage RISER edges), never only its own floor's (a stack vent off
+      // the top junction of a 3-storey stack sized on the top floor's 5 DFU
+      // -> DN40 instead of the stack's 17 -> DN50). A stack tied at every
+      // floor is unchanged (its foot tie is its base); a fixture's own vent
+      // (its drain a run) keeps its own through-DFU.
+      bool drainRiserBetween(String a, String b) => net.edges.any((e) =>
+          e.service == ServiceType.drainage &&
+          e.kind == EdgeKind.riser &&
+          ((e.fromId == a && e.toId == b) || (e.fromId == b && e.toId == a)));
+      String stackBase(String t) {
+        var cur = t;
+        final seen = <String>{t};
+        while (true) {
+          final next = drainageParentNode[cur];
+          if (next == null ||
+              !drainageThroughDfu.containsKey(next) ||
+              !drainRiserBetween(cur, next) ||
+              !seen.add(next)) {
+            return cur;
+          }
+          cur = next;
+        }
       }
-      for (final t in ties) {
+
+      String? rootWardTie(String t) {
         var up = drainageParentNode[t];
-        while (up != null && !ties.contains(up)) {
+        final seen = <String>{t};
+        while (up != null && !ties.contains(up) && seen.add(up)) {
           up = drainageParentNode[up];
         }
+        return up != null && ties.contains(up) ? up : null;
+      }
+
+      for (final t in ties) {
+        ventSeeds[t] = rootWardTie(t) == null
+            ? drainageThroughDfu[stackBase(t)]!
+            : drainageThroughDfu[t]!;
+      }
+      for (final t in ties) {
+        final up = rootWardTie(t);
         if (up != null) ventSeeds[up] = ventSeeds[up]! - drainageThroughDfu[t]!;
       }
       // Round 25 (drainage-4-3) — a tie whose net seed is 0 (the soil-stack
@@ -4593,6 +4629,73 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               }
             }
           }
+          // Reference shophouse F2 (2026-11-13) — the MAINS FEED of a root
+          // storage tank: a demand-free chain from the root tank (through
+          // degree-2 bare / inline nodes) to a degree-1 WATER METER is the
+          // pipe that refills the tank. The tree left it at zero units (it
+          // is upstream of the root, nothing beyond it draws), sized DN15 at
+          // 0 L/s; it carries what the tank delivers — the units on the
+          // tank's loaded outgoing edges, read once off the demand curve —
+          // flowing from the meter INTO the tank. `// VERIFY notAnSniClause`
+          // (the fill is taken at the system's diversified peak, not a
+          // separate tank fill rate).
+          final mainsFeedFrom = <String, String>{};
+          if (service == ServiceType.coldWater) {
+            final rn = net.nodeById(root);
+            if (rn != null &&
+                (rn.component == NodeComponent.groundTank ||
+                    rn.component == NodeComponent.roofTank)) {
+              List<NetEdge> svcAt(String id) => [
+                    for (final e in net.edgesAt(id))
+                      if (e.service == service) e,
+                  ];
+              var delivered = 0.0;
+              final stubs = <NetEdge>[];
+              for (final e in svcAt(root)) {
+                final u = edgeUnits[e.id] ?? 0.0;
+                if (u > 0) {
+                  if (edgeParents[e.id] == root) delivered += u;
+                } else {
+                  stubs.add(e);
+                }
+              }
+              if (delivered > 0) {
+                for (final first in stubs) {
+                  final chain = <(String, String)>[]; // (edge, far node)
+                  var cur = root;
+                  var edge = first;
+                  final seen = <String>{root};
+                  var meter = false;
+                  while (true) {
+                    final next = edge.fromId == cur ? edge.toId : edge.fromId;
+                    if (!seen.add(next)) break;
+                    chain.add((edge.id, next));
+                    final nn = net.nodeById(next);
+                    final links = svcAt(next);
+                    if (nn == null) break;
+                    if (links.length == 1) {
+                      meter = nn.component == NodeComponent.waterMeter;
+                      break;
+                    }
+                    if (links.length != 2 ||
+                        nn.role != NodeRole.main ||
+                        (nn.component != null &&
+                            !isInlineDeviceComponent(nn.component))) {
+                      break;
+                    }
+                    cur = next;
+                    edge = links.firstWhere((e) => e.id != edge.id);
+                  }
+                  if (!meter) continue;
+                  for (final (id, far) in chain) {
+                    if ((edgeUnits[id] ?? 0.0) > 0) continue;
+                    edgeUnits[id] = delivered;
+                    mainsFeedFrom[id] = far;
+                  }
+                }
+              }
+            }
+          }
           fixtureUnitsOut?.addAll(edgeUnits);
           for (final entry in edgeUnits.entries) {
             allFlows[entry.key] = profile.probableFlowForFixtureUnits(
@@ -4604,8 +4707,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               demandExtrapolatedEdges.add(entry.key);
             }
             // Supply flows AWAY from the source root, so it comes FROM the
-            // root-side (parent) endpoint.
-            final parent = edgeParents[entry.key];
+            // root-side (parent) endpoint — a mains feed (F2) INTO the tank
+            // from its meter side.
+            final parent = mainsFeedFrom[entry.key] ?? edgeParents[entry.key];
             if (parent != null) edgeFlowFrom[entry.key] = parent;
           }
         } else {

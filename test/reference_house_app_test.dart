@@ -417,7 +417,7 @@ void main() {
         'drainage/riser/75': 3.2,
         'rainwater/run/100': 8.8, // 4.8 + 4.0
         'rainwater/riser/100': 3.2,
-        'vent/riser/40': 3.8, // M1: 7.0 − 3.2
+        'vent/riser/50': 3.8, // M1: 7.0 − 3.2; F3: 16 DFU at the stack base ⇒ DN50
       };
       expect(m.keys.toSet(), expected.keys.toSet());
       for (final MapEntry(:key, :value) in expected.entries) {
