@@ -158,7 +158,38 @@ class SupplyDesign {
   });
 
   bool get isMv => lvOrMv == SupplyLevel.mv;
+
+  /// A copy with [note] replaced and every number / verdict carried through.
+  SupplyDesign withNote(String note) => SupplyDesign(
+        lvOrMv: lvOrMv,
+        demandKva: demandKva,
+        lvVoltage: lvVoltage,
+        mvVoltage: mvVoltage,
+        transformerKva: transformerKva,
+        units: units,
+        ladderExceeded: ladderExceeded,
+        declaredBelowDemand: declaredBelowDemand,
+        declared: declared,
+        impedancePct: impedancePct,
+        primaryFlc: primaryFlc,
+        secondaryFlc: secondaryFlc,
+        note: note,
+        verifyItems: verifyItems,
+      );
 }
+
+/// Reference house M2 (2026-11-13, regression-single-phase-service-note-
+/// quotes-three-phase-basis) — the LV supply note of an ALL-single-phase PLN
+/// service whose recommended daya is a single-phase step: the plain demand,
+/// the LV limit and that step. The Round 39 worst-phase basis (√3·400·I, a
+/// 3φ transformer-line figure) still decides the LV / MV verdict, but it means
+/// nothing to a 1φ customer, so it is not quoted. Text only — no number or
+/// verdict changes.
+String singlePhaseLvSupplyNote(
+        {required double demandKva, required double dayaVa}) =>
+    'Within the ${_fmtKva(lvSupplyLimitKva)} kVA low-voltage limit — direct '
+    'PLN LV connection (no transformer needed). Single-phase service: demand '
+    '${_fmtKva(demandKva)} kVA, recommended 1-phase daya ${formatDaya(dayaVa)}.';
 
 // ── Supply determination ─────────────────────────────────────────────────────
 

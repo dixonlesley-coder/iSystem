@@ -279,6 +279,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Audit round 8 (2026-10-18) — fire/HVAC, advanced electrical, costing, MEP coupling**: judge-only sprinkler-vs-fire-pump Review warnings (`sprinkler-flow-exceeds-fire-pump` / `sprinkler-head-exceeds-fire-pump` via `sprinklerPumpCheckProvider`), the AC-load basis relabelled 'Internal gains (no envelope)' + a `cooling-internal-gains-only` advisory, life-safety electrical checks (`life-safety-cable`, `life-safety-not-essential`), the drawn plant node and its solved duty bound to ONE electrical way (`mepDutyBindingProvider`), material/W×H-aware mechanical price keys + `elec:` price keys for every electrical BOM line, and a locale-aware money input (`ui/commercial/money_input.dart` `parseMoneyInput`). See the §15 row for the full list + recorded residuals.
 
+**Reference buildings (2026-11-13)**: fixed fixtures replace open-ended audits — `packages/mechx_engine/test/reference/` (house done), pinned to hand-derived values in `reference_house_test.dart` (engine) + `test/reference_house_app_test.dart` (app); see `docs/REFERENCE-BUILDINGS.md` and the drawing review `docs/DRAFTING-CHECKLIST.md`.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

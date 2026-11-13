@@ -123,7 +123,8 @@ import 'supply_design.dart'
         minimalMaxSectionLoad,
         recommendedDaya,
         sectionAssignment,
-        serviceSections;
+        serviceSections,
+        singlePhaseLvSupplyNote;
 import 'ups.dart' show kUpsInputFactor;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
@@ -1599,6 +1600,27 @@ double servicePerPhaseBasisVa(
                   minimalMaxSectionLoad(futureRootVa, serviceSections(project)))
               : 0.0,
           basisLabel: 'future-load (headroom) basis');
+    }
+  }
+  // Reference house M2 — an all-1φ PLN LV service whose recommended daya is
+  // a 1φ step (the SAME rule [computeAdvancedStudy] recommends on: the 1φ
+  // ladder on max(demand VA, worst-phase VA)) prints the plain note, never
+  // the 3φ worst-phase basis. Note text only.
+  final rootSystems = [
+    for (final id in originPanelIds)
+      project.panels.where((p) => p.id == id).firstOrNull?.system,
+  ];
+  if (rootSystems.isNotEmpty &&
+      rootSystems.every((s) => s == ElectricalSystem.singlePhase) &&
+      supply.lvOrMv == SupplyLevel.lv &&
+      !supply.declared &&
+      project.supplyKind == SupplyKind.pln) {
+    final daya = recommendedDaya(
+        ApparentPower(math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+        ElectricalSystem.singlePhase);
+    if (daya != null && daya.system == ElectricalSystem.singlePhase) {
+      supply = supply.withNote(singlePhaseLvSupplyNote(
+          demandKva: supply.demandKva, dayaVa: daya.va));
     }
   }
   return (

@@ -5165,7 +5165,8 @@ class _EditSchematicPainter extends CustomPainter {
         // BOM / report / exported riser), so a gravity stack never prints
         // its old ceiling-datum length here.
         final lengthM =
-            riserElevationDelta(edge, a, b, building, mounting).meters;
+            riserElevationDelta(edge, a, b, building, mounting, network)
+                .meters;
         final s = sizing[edge.id];
         final lenStr = '${lengthM.toStringAsFixed(1)} m';
         final label = s != null ? '${_sizeLabel(s)} · $lenStr' : lenStr;
@@ -5817,7 +5818,8 @@ class RiserSystemSummary extends ConsumerWidget {
       final b = network.nodeById(e.toId);
       if (a == null || b == null) continue;
       riserEdgeCount++;
-      totalRiserM += riserElevationDelta(e, a, b, building, mounting).meters;
+      totalRiserM +=
+          riserElevationDelta(e, a, b, building, mounting, network).meters;
     }
 
     return Column(

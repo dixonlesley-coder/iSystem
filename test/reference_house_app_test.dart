@@ -323,4 +323,120 @@ void main() {
       print(_out.toString());
     }
   });
+
+
+  // ══ Hand-derived values the APP owns (reference review 2026-11-13) ════════
+  // The engine-level pins live in packages/mechx_engine/test/
+  // reference_house_test.dart; these assert the same verdicts through the
+  // providers every printed surface reads.
+  group('hand values (app)', () {
+    late ProviderContainer c;
+    setUp(() async {
+      c = await _loadHouse(buildHouse());
+      addTearDown(c.dispose);
+    });
+
+    test('downfeed verdict: critical WC1 at (2.4 − 0.1771 − 0.5807 − 0.1393) '
+        '× 9.81 = 14.74 kPa, booster 225/9.81 − 1.503 = 21.43 m, no pump duty',
+        () {
+      final d = c.read(downfeedDeliveredProvider)!;
+      expect(d.criticalNodeId, 'WC1');
+      expect(d.minResidual.inKiloPascals, closeTo(14.74, 0.05));
+      expect(d.boosterHeadRequired.meters, closeTo(21.43, 0.005));
+      // No pump / booster is drawn ⇒ no duty is derived.
+      expect(c.read(pumpDutyProvider), isNull);
+      // Faucet floor 0.5 kgf/cm² = 49.03 kPa (no flush valve on any path).
+      expect(c.read(downfeedSniMinimumResidualProvider)!.inKiloPascals,
+          closeTo(49.03, 0.05));
+    });
+
+    test('issues: the downfeed WARNING, the service-capacity warning, 5 laid-'
+        'steeper + 1 trap-arm (KS0 2.0 m > 1.8 m) + 1 cleanout advisory, and '
+        '5 // VERIFY', () {
+      final issues = c.read(designIssuesProvider);
+      final open = [for (final i in issues) if (!i.isVerify) i];
+      final kinds = [for (final i in open) i.kind]..sort();
+      expect(kinds, [
+        'downfeed-below-target',
+        'drainage-cleanout',
+        'drainage-laid-steeper', 'drainage-laid-steeper',
+        'drainage-laid-steeper', 'drainage-laid-steeper',
+        'drainage-laid-steeper',
+        'drainage-length',
+        'electrical:service-capacity-below-demand',
+      ]);
+      // Every delivery node is below its SNI floor ⇒ a WARNING, not info.
+      expect(open.firstWhere((i) => i.kind == 'downfeed-below-target').severity,
+          IssueSeverity.warning);
+      // The laid-steeper runs are exactly the DN40 / DN50 runs (<= DN65 lay
+      // at 1:50, the project fall is 1:100).
+      expect(
+          {
+            for (final i in open)
+              if (i.kind == 'drainage-laid-steeper') i.locate!.edgeId,
+          },
+          {
+            'e_dr_LAV1_D1', 'e_dr_SH1_D1', 'e_dr_LAV0_D0', 'e_dr_SH0_D0',
+            'e_dr_KS0_D0', //
+          });
+      expect(open.firstWhere((i) => i.kind == 'drainage-length').locate!.edgeId,
+          'e_dr_KS0_D0');
+      expect(
+          open.firstWhere((i) => i.kind == 'drainage-cleanout').locate!.nodeId,
+          'D0');
+      expect(issues.where((i) => i.isVerify).length, 5);
+    });
+
+    test('compliance rows', () {
+      final rows = {
+        for (final it in c.read(complianceSummaryProvider).items)
+          it.category: it.pass,
+      };
+      expect(rows['Velocity'], isTrue);
+      expect(rows['Sheet calibration'], isTrue);
+      expect(rows['Supply pressure'], isFalse);
+      expect(rows['Electrical circuit sizing'], isFalse);
+    });
+
+    test('BOM metres (§10 lengths summed per service / kind / DN)', () {
+      final m = <String, double>{
+        for (final b in c.read(bomProvider))
+          '${b.service.name}/${b.kind.name}/${b.diameterMm}':
+              b.totalLength.meters,
+      };
+      final expected = {
+        // CW DN15 runs: L2 3.0 + 3.1 + 3.6 + 4.1, L1 3.1 + 3.6 + 4.1 + 3.0
+        // + 3.1 + 7.1 = 37.8.
+        'coldWater/run/15': 37.8,
+        'coldWater/run/20': 4.0, // A0→B0
+        'coldWater/run/25': 2.3, // RT→A1 2.0 + 0.3 leg
+        'coldWater/riser/20': 3.5, // 6.7 − 3.2
+        'drainage/run/40': 5.0, // LAV1 1.5 + LAV0 1.5 + KS0 2.0
+        'drainage/run/50': 3.0, // SH1 + SH0
+        'drainage/run/75': 9.0, // WC1 + WC0 + D0→OUT 6.0
+        'drainage/riser/75': 3.2,
+        'rainwater/run/100': 8.8, // 4.8 + 4.0
+        'rainwater/riser/100': 3.2,
+        'vent/riser/40': 3.8, // M1: 7.0 − 3.2
+      };
+      expect(m.keys.toSet(), expected.keys.toSet());
+      for (final MapEntry(:key, :value) in expected.entries) {
+        expect(m[key], closeTo(value, 1e-6), reason: key);
+      }
+    });
+
+    test('electrical: one warning, incomer 40 A 2P 6 kA, daya 7700 VA 1φ, '
+        'plain 1φ supply note (M2)', () {
+      final w = c.read(electricalAllWarningsProvider);
+      expect([for (final x in w) x.code], ['service-capacity-below-demand']);
+      final p = c.read(electricalResultProvider).panels[kHousePanelId]!;
+      expect(p.incomer.breaker.ratingA.amperes, 40);
+      expect(p.incomer.poles, 2);
+      final adv = c.read(electricalAdvancedProvider);
+      expect(adv.fault.panels[kHousePanelId]!.incomerKa, 6.0);
+      expect(adv.recommendedDayaVa, 7700);
+      expect(adv.recommendedDayaThreePhase, isFalse);
+      expect(adv.supply.note, isNot(contains('worst-phase')));
+    });
+  });
 }

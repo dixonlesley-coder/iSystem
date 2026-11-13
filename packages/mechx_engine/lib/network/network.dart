@@ -800,11 +800,21 @@ Length nodeElevation(
 /// then roof − foot datum, not one storey short. Drainage / rainwater keep the
 /// under-slab datum. `// VERIFY` notAnSniClause (the VTR is taken at the roof
 /// slab; the upstand above it is not modelled).
+///
+/// Reference house M1 (2026-11-13, regression-stack-vent-from-soil-stack-top-
+/// zero-length) — only a VENT-ONLY bare junction on the top storey is the
+/// VTR. A vent-riser end that is ALSO a node of a DRAINAGE edge (given [net]:
+/// the soil-stack top a stack vent rises from) is where the vent leaves the
+/// soil stack, so it keeps its DRAINAGE under-slab datum: a stack vent drawn
+/// from the top-floor drainage junction to a roof VTR measured 0 m (both
+/// ends at the roof) instead of roof − under-slab. Without [net] the Round 22
+/// rule applies unchanged.
 Length gravityRiserEndElevation(
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
   ServiceType? service,
+  Network? net,
 ]) {
   final bareJunction = node.elevation == null &&
       node.mountHeight == null &&
@@ -815,7 +825,11 @@ Length gravityRiserEndElevation(
   final f = node.floorIndex.clamp(0, building.levelCount - 1);
   if (service == ServiceType.vent &&
       building.levelCount > 1 &&
-      f == building.levelCount - 1) {
+      f == building.levelCount - 1 &&
+      !(net != null &&
+          net
+              .edgesAt(node.id)
+              .any((e) => e.service == ServiceType.drainage))) {
     return building.roofElevation;
   }
   if (f == 0) return building.elevationOf(0);
@@ -833,15 +847,18 @@ Length gravityRiserEndElevation(
 /// diffuser / grille / sprinkler head at the ceiling, exactly the datum a RUN
 /// leg uses — so one physical duct measures the same whether it is drawn as a
 /// single riser or as a run + riser. [nodeElevation] stays the STATIC datum
-/// of the pressure solves.
+/// of the pressure solves. Pass [net] so a vent riser's soil-stack-top end
+/// reads its drainage datum (see [gravityRiserEndElevation]); every length
+/// consumer that holds the network does.
 Length riserEndElevation(
   NetEdge edge,
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
+  Network? net,
 ]) =>
     edge.service.regime == FlowRegime.gravity
-        ? gravityRiserEndElevation(node, building, mounting, edge.service)
+        ? gravityRiserEndElevation(node, building, mounting, edge.service, net)
         : runConnectionElevation(node, building, mounting);
 
 /// The elevation a node is SHOWN at (inspector readout, hover FFL chip): a
@@ -862,27 +879,29 @@ Length displayedNodeElevation(
       continue;
     }
     if (e.service.regime == FlowRegime.gravity) {
-      return riserEndElevation(e, node, building, mounting);
+      return riserEndElevation(e, node, building, mounting, net);
     }
     pressurized ??= e;
   }
   if (pressurized != null) {
-    return riserEndElevation(pressurized, node, building, mounting);
+    return riserEndElevation(pressurized, node, building, mounting, net);
   }
   return nodeElevation(node, building, mounting);
 }
 
 /// The vertical length of a riser [edge] between its ends [a] and [b]
-/// (`|Δ` [riserEndElevation]`|`) — never measured from the PDF.
+/// (`|Δ` [riserEndElevation]`|`) — never measured from the PDF. Pass [net]
+/// (see [riserEndElevation]).
 Length riserElevationDelta(
   NetEdge edge,
   NetNode a,
   NetNode b,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
+  Network? net,
 ]) =>
-    Length((riserEndElevation(edge, b, building, mounting).meters -
-            riserEndElevation(edge, a, building, mounting).meters)
+    Length((riserEndElevation(edge, b, building, mounting, net).meters -
+            riserEndElevation(edge, a, building, mounting, net).meters)
         .abs());
 
 /// A pipe/duct/riser segment between two nodes, carrying one [service].
@@ -1151,7 +1170,7 @@ Length edgeLength(
   final b = net.nodeById(edge.toId);
   if (a == null || b == null) return const Length(0);
   if (edge.kind == EdgeKind.riser) {
-    return riserElevationDelta(edge, a, b, building, mounting);
+    return riserElevationDelta(edge, a, b, building, mounting, net);
   }
   final cal = calibrationBySheet[a.sheetId];
   if (cal == null) return const Length(0);
