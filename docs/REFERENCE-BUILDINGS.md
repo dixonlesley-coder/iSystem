@@ -224,9 +224,8 @@ the §15 log; this is the per-sheet-type result (all five buildings).
 |---|---|---|
 | Front matter (cover / Daftar Gambar / notes + legend) | FAIL 1, 23 (no DWG NO); tower list printed at 6.8 pt | PASS — G-001..G-003, listed first; a long register continues on extra G-002 pages |
 | Mechanical plan (M-1xx) | FAIL 6, 8, 11 (fan of rotated labels, long crossing leaders, "N label bertumpuk" on 51 sheets); FAIL 25 (`-` for `·`, scale row) | PASS 6 on every plan of the five buildings (R1): dense groups are boxed with a dashed DETAIL boundary + `DETAIL A - LIHAT M-5nn` bubble and labelled on the detail sheet; PASS 25 |
-| Mechanical detail (M-5xx, R1) | — (new) | 47 sheets (house 1, office 4, apartment 12, tower 30): 1:20 / 1:25 / 1:50, own scale text + bar per detail, AS SHOWN, listed; PASS 1/2/3/5/23/25; item 6 PASS except tower L16 (3) and L30 (6, plant room + core at 1:50) |
-| Electrical layout plan (E-1xx) | PASS visual; FAIL 25 (DXF lacked PROJECT/TITLE, LEGENDA, scale bar) | PASS |
-| Mechanical riser SLD (M-201) | FAIL 5 (5.2-6.1 pt), 6, 8 on every building; FAIL 25 | PASS 5 everywhere (R2: exact 7 pt floor, tower plant extras on a continuation sheet); PASS 25; item 6 PASS on house, office and every typical page; stamps remain on 5 dense ground / roof pages (see backlog) |
+| Mechanical detail (M-5xx, R1/S1) | — (new) | 55 sheets (house 1, office 4, apartment 12, tower 38): 1:20 / 1:25 / 1:50 (one tower L16 piece 1:100), own scale text + bar per detail, AS SHOWN, listed; PASS 1/2/3/5/23/25; PASS 6 on every detail sheet (S1: tower L16 over 4 sheets, L30 over 6, split pieces joined by MATCH LINEs) |
+| Mechanical riser SLD (M-201) | FAIL 5 (5.2-6.1 pt), 6, 8 on every building; FAIL 25 | PASS 5 everywhere (R2: exact 7 pt floor); PASS 25; item 6 PASS on house, office, tower and every typical page (S2: crowded floors alone on a page, taller lone-floor band, key rows); stamps remain on 2 ground-floor pages (apartment 4, shophouse 1; see backlog) |
 | Electrical SLD (E-201) | PASS visual; FAIL 25 (DXF one sheet "1 of 1") | PASS (paginated DXF twin) |
 | Building single-line (E-301) | PASS visual; FAIL 25 | PASS |
 | Electrical riser (E-401) | PASS visual; FAIL 25 (DXF whole sheet: FFL / feeder strings) | PASS |
@@ -235,14 +234,12 @@ the §15 log; this is the per-sheet-type result (all five buildings).
 | Panel schedules | FAIL 2 (reused E-201 + SLD title); apartment / tower refused (zero-length guard) | PASS — E-601 `JADWAL PANEL / PANEL SCHEDULES`, issued in the package and listed; all five export |
 
 ### Backlog (not cured in this pass)
-- Riser item 6 on the densest ground / roof plant floors (R2 re-spacing cured
-  the typical floors): apartment p1 1 and p5 5, shophouse p2 2, tower p1 1 and
-  p12 1 — the key circles of the drainage fan / plant junctions cannot all
-  clear the stacked sub-lanes of a combined sheet. Cure needs per-floor band
-  height (vertical lane pitch) on crowded floors, or a per-service riser page.
-- Tower detail sheets L16 (3) and L30 (6): the L30 plant room + toilet core box
-  plots at 1:50 (too large for 1:25 on one A3 detail sheet). Cure: allow a
-  second detail sheet per plan, or split a plant-room detail from a core.
+- Riser item 6 on the GROUND floor page of the apartment (4) and the
+  shophouse (1): after S2 (own page, 2x band, key rows) the unresolved key
+  circles sit inside the stacked parallel lanes of the ground plant
+  (transfer / gravity / drainage), where every key-row leader crosses another
+  leader. Cure: split that floor's plant and fixture groups over two pages
+  with LANJUT marks.
 - Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
   detail sheet; it keeps the honest overlap stamp. Only the submittal package
   issues detail sheets.
