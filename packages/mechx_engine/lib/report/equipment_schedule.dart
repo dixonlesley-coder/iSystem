@@ -154,6 +154,13 @@ class FanScheduleItem {
   /// under "Air-handling" rather than "Fans".
   final bool airHandling;
 
+  /// Backlog F-3 — the duty is a room-air ESTIMATE (`sizeRoomAir`: an assumed
+  /// 15 m run), not a drawn-duct solve: [FanDutyBasis.estimateNoDucts] when
+  /// no drawn system serves the room, [FanDutyBasis.estimateRoomOnly] when
+  /// ducts from a unit outside the room serve it. The duty cell says so.
+  /// Null (default) ⇒ a solved duty, byte-identical.
+  final FanDutyBasis? estimate;
+
   const FanScheduleItem({
     required this.duty,
     required this.service,
@@ -161,7 +168,20 @@ class FanScheduleItem {
     this.modelSpec,
     this.qty = 1,
     this.airHandling = false,
+    this.estimate,
   });
+}
+
+/// Backlog F-3 — which room-air ESTIMATE a scheduled fan duty is (see
+/// [FanScheduleItem.estimate]).
+enum FanDutyBasis {
+  /// No drawn duct system serves the room: the 15 m assumed-run estimate is
+  /// the only statement of its air handling.
+  estimateNoDucts,
+
+  /// Drawn ducts reach the room from a unit outside it; the room's own unit
+  /// is still costed on the room estimate.
+  estimateRoomOnly,
 }
 
 /// One placed AC unit (cassette / split-wall / ducted) to schedule — the same
@@ -346,7 +366,14 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       tag: tag,
       service: item.service,
       duty: '${_fmt(d.airflow.inLitersPerSecond, dp: 0)} L/s @ '
-          '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa',
+          '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa'
+          '${switch (item.estimate) {
+        null => '',
+        FanDutyBasis.estimateNoDucts =>
+          ' · ${strings(RptStringKey.esRoomEstimateNoDucts)}',
+        FanDutyBasis.estimateRoomOnly =>
+          ' · ${strings(RptStringKey.esRoomEstimateRoomOnly)}',
+      }}',
       size: strings.format(RptStringKey.esMotorSize,
           {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',

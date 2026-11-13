@@ -44,6 +44,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
+import 'package:mechx/store/room_air_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show
@@ -1640,6 +1641,23 @@ void main() {
       final ef = c.read(exhaustFanDutiesByRootProvider)[kTowerExhaustFanId]!;
       expect(ef.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
       expect(ef.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+      // Backlog F-3 — the Rooms inspector's ONE headline is the drawn duty
+      // (the room estimate 250 + 0.20128 x 15 x 1.3 + 50 = 303.93 Pa is not
+      // printed beside it); the schedule carries no room-estimate row.
+      final rooms = c.read(roomAreasProvider);
+      final heads = c.read(roomAirHeadlineProvider);
+      final kantor = heads[rooms.firstWhere((r) => r.name == 'Kantor').id]!;
+      expect(kantor.drawn, isTrue);
+      expect(kantor.unitId, kTowerAhuId);
+      expect(kantor.duty.totalStaticPressure.pascals, closeTo(327.68, 5e-3));
+      final toilet = heads[rooms.firstWhere((r) => r.name == 'Toilet').id]!;
+      expect(toilet.drawn, isTrue);
+      expect(toilet.unitId, kTowerExhaustFanId);
+      expect(toilet.duty.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
+      expect(
+          c.read(roomSizingProvider)[rooms.first.id]!.equipment
+              .totalStaticPressure.pascals,
+          closeTo(303.93, 5e-3));
     });
 
     test('drawing backlog C-2: the riser stands every board on its own floor '

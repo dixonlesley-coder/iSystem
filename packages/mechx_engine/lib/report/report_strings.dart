@@ -322,6 +322,8 @@ enum RptStringKey {
   esPanelDuty, // {kw}
   esPanelSize, // {a}
   esMotorSize, // {kw}
+  esRoomEstimateNoDucts, // backlog F-3 — room-air duty with no drawn system
+  esRoomEstimateRoomOnly, // backlog F-3 — room-air duty, ducts from elsewhere
   esAcDuty, // {btu} {pk}
   esAcSize, // {kw}
   esTransformerService,
@@ -830,6 +832,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esPanelDuty: '{kw} kW demand',
   RptStringKey.esPanelSize: '{a} A incomer',
   RptStringKey.esMotorSize: '{kw} kW motor',
+  RptStringKey.esRoomEstimateNoDucts: 'estimate (no ducts drawn)',
+  RptStringKey.esRoomEstimateRoomOnly: 'estimate (room only)',
   RptStringKey.esAcDuty: '{btu} BTU/h cooling ({pk} PK)',
   RptStringKey.esAcSize: '{kw} kW input',
   RptStringKey.esTransformerService: 'Distribution transformer',
@@ -1368,6 +1372,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esPanelDuty: 'Permintaan {kw} kW',
   RptStringKey.esPanelSize: 'Pemutus masuk {a} A',
   RptStringKey.esMotorSize: 'Motor {kw} kW',
+  RptStringKey.esRoomEstimateNoDucts: 'estimasi (belum ada ducting)',
+  RptStringKey.esRoomEstimateRoomOnly: 'estimasi (ruang saja)',
   RptStringKey.esAcDuty: 'Pendinginan {btu} BTU/h ({pk} PK)',
   RptStringKey.esAcSize: 'Daya masuk {kw} kW',
   RptStringKey.esTransformerService: 'Transformator distribusi',

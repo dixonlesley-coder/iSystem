@@ -117,6 +117,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/reference_line_store.dart';
+import '../../store/room_air_store.dart';
 import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
@@ -1358,6 +1359,11 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final sizedEdgeIds = ref.read(sizingProvider).keys.toSet();
   final roomAirUnits = ref.read(roomAirUnitDutiesProvider);
   final roomSizing = ref.read(roomSizingProvider);
+  // Backlog F-3 — a room row prints the room-air ESTIMATE; its duty cell says
+  // which (no drawn system at all, or ducts from a unit outside the room).
+  final roomHeadlines = ref.read(roomAirHeadlineProvider);
+  FanDutyBasis estimateOf(String roomId) =>
+      roomHeadlines[roomId]?.estimate ?? FanDutyBasis.estimateRoomOnly;
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
     final sizing = roomSizing[r.id];
@@ -1377,6 +1383,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
           service: r.name,
           tag: tag,
           modelSpec: specs[tag],
+          estimate: estimateOf(r.id),
         ),
       );
       continue;
@@ -1419,6 +1426,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
         tag: tag,
         modelSpec: specs[tag],
         airHandling: true,
+        estimate: estimateOf(r.id),
       ),
     );
   }
@@ -4405,6 +4413,7 @@ class _RoomsSection extends ConsumerWidget {
     final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
     final ducts = ref.watch(ductSettingsProvider);
     final roomSizing = ref.watch(roomSizingProvider);
+    final roomHeadlines = ref.watch(roomAirHeadlineProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
     final nodes = ref.watch(sizingNetworkProvider).nodes;
     // E6: the open master-detail row is the shared canvas selection.
@@ -4589,23 +4598,47 @@ class _RoomsSection extends ConsumerWidget {
                           const SizedBox(height: MechXSpacing.xs),
                           // M11: an equipment duty past the largest standard motor
                           // frame is a CLAMP, not a selection — flag it.
-                          ResultCard(
-                            headline:
-                                '${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
-                            label:
-                                '${airEquipmentLabel(s.equipmentKind)} · '
-                                '${s.equipment.totalStaticPressure.pascals.round()} Pa'
-                                '${s.equipment.motorOversized ? ' · above standard frame' : ''}',
-                            verdict: s.equipment.motorOversized
-                                ? 'over frame'
-                                : s.trunkOverCapacity
-                                    ? 'duct over capacity'
-                                    : 'sized',
-                            verdictColor: s.equipment.motorOversized ||
-                                    s.trunkOverCapacity
-                                ? colors.danger
-                                : colors.success,
-                          ),
+                          // Backlog F-3 — ONE headline duty: the drawn system's
+                          // solved duty once ducts root at the room's unit, else
+                          // the room estimate, labelled as such (never both as
+                          // peers).
+                          ...() {
+                            final head = roomHeadlines[r.id];
+                            final duty = head?.duty ?? s.equipment;
+                            final basis = switch (head?.estimate) {
+                              _ when head == null => '',
+                              null => ' · drawn ducts',
+                              FanDutyBasis.estimateNoDucts =>
+                                ' · estimate (no ducts drawn)',
+                              FanDutyBasis.estimateRoomOnly =>
+                                ' · estimate (room only)',
+                            };
+                            // The room trunk is the estimate's own; it says
+                            // nothing about a drawn system's ducts.
+                            final trunkOver = (head?.drawn ?? false)
+                                ? false
+                                : s.trunkOverCapacity;
+                            return <Widget>[
+                              ResultCard(
+                                headline:
+                                    '${duty.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
+                                label:
+                                    '${airEquipmentLabel(s.equipmentKind)} · '
+                                    '${duty.totalStaticPressure.pascals.round()} Pa'
+                                    '$basis'
+                                    '${duty.motorOversized ? ' · above standard frame' : ''}',
+                                verdict: duty.motorOversized
+                                    ? 'over frame'
+                                    : trunkOver
+                                        ? 'duct over capacity'
+                                        : 'sized',
+                                verdictColor:
+                                    duty.motorOversized || trunkOver
+                                        ? colors.danger
+                                        : colors.success,
+                              ),
+                            ];
+                          }(),
                         ],
                         // Cooling (AC) — shown only when an AC indoor unit sits in
                         // the room. Auto-computes the BTU/h + PK requirement and a

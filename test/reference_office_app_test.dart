@@ -35,6 +35,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
+import 'package:mechx/store/room_air_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show originPanelIdsOf, rootServiceBasisVa, servicePerPhaseBasisVa;
@@ -881,6 +882,16 @@ void main() {
           [kOfficeReturnGrilleId]);
       final room = c.read(roomAreasProvider).single;
       expect(c.read(roomSizingProvider)[room.id]!.return_.count, 2);
+      // Backlog F-3 — the Rooms inspector's ONE headline is the drawn FCU
+      // duty 121.25 Pa (the room estimate 108.70 Pa is not printed beside it).
+      final head = c.read(roomAirHeadlineProvider)[room.id]!;
+      expect(head.drawn, isTrue);
+      expect(head.unitId, kOfficeFcuId);
+      expect(head.duty.totalStaticPressure.pascals, closeTo(121.25, 0.005));
+      expect(
+          c.read(roomSizingProvider)[room.id]!.equipment.totalStaticPressure
+              .pascals,
+          closeTo(108.70, 0.005));
     });
 
     test('drawing backlog C-2: the riser stands every board on its own floor '
