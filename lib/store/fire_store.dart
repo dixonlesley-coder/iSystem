@@ -23,6 +23,7 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show EdgeSizing, fireHopSources;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
+import 'package:mechx_engine/sizing/fire_water_reserve.dart';
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
@@ -1717,4 +1718,76 @@ final sprinklerPumpCheckProvider = Provider<
     }
   }
   return worst;
+});
+
+/// Backlog A-2 (2026-11-13, reference office backlog b) — the fire-water
+/// reserve of one FIRE TANK: a ground tank on a fire service
+/// ([NodeComponent.groundTank] incident to a sprinkler / hydrant pipe) that
+/// belongs to a drawn, wet fire system. [reserve] is the system's rated demand
+/// flow x the required duration ([fireWaterReserve]); [capacityLitres] the
+/// tank node's OWN entered capacity (null when unset — never fabricated).
+class FireTankReserve {
+  final String tankId;
+  final String sheetId;
+  final FireSystemBasis basis;
+  final FireWaterReserve reserve;
+  final double? capacityLitres;
+  final FireTankVerdict verdict;
+  const FireTankReserve({
+    required this.tankId,
+    required this.sheetId,
+    required this.basis,
+    required this.reserve,
+    required this.capacityLitres,
+    required this.verdict,
+  });
+
+  double get requiredLitres => reserve.volumeLitres;
+}
+
+/// Backlog A-2 — every fire tank and its required reserve (JUDGE-ONLY: the
+/// Review raises `fire-tank-undersized` / `fire-tank-capacity-unset`, the Fire
+/// inspector and the calc report print the requirement; nothing is resized).
+/// A tank on several systems takes the largest requirement. A dry (brigade-
+/// fed) or transfer-only system holds no reserve of its own. Sorted by id.
+final fireTankReservesProvider = Provider<List<FireTankReserve>>((ref) {
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isEmpty) return const [];
+  final net = ref.watch(sizingNetworkProvider);
+  final hazard = ref.watch(fireHazardProvider);
+  final best = <String, FireTankReserve>{};
+  for (final b in bases) {
+    if (b.dry || b.transfer || b.flow.cubicMetersPerSecond <= 0) continue;
+    final r = fireWaterReserve(
+      ratedFlow: b.flow,
+      standpipe: b.system.hasHoseOutlet(net),
+      sprinkler: b.system.hasSprinklerHead(net),
+      hazard: hazard,
+    );
+    if (r == null) continue;
+    for (final id in b.system.nodeIds) {
+      final n = net.nodeById(id);
+      if (n == null || n.component != NodeComponent.groundTank) continue;
+      final onFire = net.edgesAt(id).any((e) =>
+          e.service == ServiceType.fireSprinkler ||
+          e.service == ServiceType.fireHydrant);
+      if (!onFire) continue;
+      final prev = best[id];
+      if (prev != null && prev.requiredLitres >= r.volumeLitres - 1e-9) {
+        continue;
+      }
+      best[id] = FireTankReserve(
+        tankId: id,
+        sheetId: n.sheetId,
+        basis: b,
+        reserve: r,
+        capacityLitres: n.tankCapacityLitres,
+        verdict: judgeFireTank(
+            capacityLitres: n.tankCapacityLitres,
+            requiredLitres: r.volumeLitres),
+      );
+    }
+  }
+  final ids = best.keys.toList()..sort(naturalIdCompare);
+  return [for (final id in ids) best[id]!];
 });

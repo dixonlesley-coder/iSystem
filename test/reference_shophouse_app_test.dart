@@ -746,6 +746,9 @@ void main() {
       expect(kinds.where((k) => k.startsWith('unconnected-orphan')), isEmpty);
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('downfeed-below-target')));
+      // Backlog A-4 — two 2.5 PK cassettes = 48 000 >= 44 400 BTU/h.
+      expect(kinds.where((k) => k.startsWith('room-cooling-undersized')),
+          isEmpty);
     });
 
     test('MEP board: auto-wired from PP Ruko, 3-phase 400 V; pump and '

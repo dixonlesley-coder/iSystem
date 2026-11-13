@@ -28,6 +28,7 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
 import 'package:mechx/store/air_warnings_store.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
@@ -1736,6 +1737,13 @@ void main() {
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
       expect(n('fire-system-over-pressure:FP'), 1);
+      // Backlog A-2 — FT 120 000 L >= 47.3176 L/s x 1800 s = 85 172 L.
+      expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
+      final ft = c.read(fireTankReservesProvider).single;
+      expect(ft.tankId, 'FT');
+      expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
+      expect(ft.capacityLitres, 120000);
+      expect(ft.verdict, FireTankVerdict.ok);
       expect(n('standpipe-outlet-over-pressure:FP:0-29'), 1);
       expect(n('electrical:cable-raised-for-ads'), 6);
       expect(n('electrical:fire-pump-protection'), 3);

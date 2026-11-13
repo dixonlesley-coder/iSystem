@@ -651,6 +651,20 @@ class SniProfile implements StandardsProfile {
               'split into vertical pressure zones. Judge-only. Confirm vs '
               'SNI 03-1745.',
         ),
+        // Backlog A-2 — `kFireReserveStandpipeMin` /
+        // `kFireReserveLightHazardMin` (fire_water_reserve.dart).
+        const StandardValue<Object?>(
+          30.0,
+          unit: 'min',
+          citation: 'NFPA 14 9.2 / NFPA 13 — fire-water reserve duration: '
+              'standpipe 30 min, light-hazard sprinkler 30 min (ordinary '
+              '60, extra 90) (NOT confirmed vs SNI 03-1745 / 03-3989)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire tank must hold the governing fire system\'s rated '
+              'demand flow for the required duration (V = Q x t). Judge-only: '
+              'a set capacity below it warns, an unset capacity states the '
+              'requirement. Confirm the durations vs SNI 03-1745 / 03-3989.',
+        ),
         const StandardValue<Object?>(
           25.0,
           unit: 'mm',

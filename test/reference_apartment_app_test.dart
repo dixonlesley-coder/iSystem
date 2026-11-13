@@ -24,6 +24,7 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/compliance_store.dart';
@@ -1562,6 +1563,13 @@ void main() {
       final kinds = [for (final i in issues) i.kind];
       int count(String k) => kinds.where((x) => x == k).length;
       expect(count('fire-system-over-pressure:FP'), 1);
+      // Backlog A-2 — FT 60 000 L >= 31.545 L/s x 1800 s = 56 781 L.
+      expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
+      final ft = c.read(fireTankReservesProvider).single;
+      expect(ft.tankId, 'FT');
+      expect(ft.requiredLitres, closeTo(31.5451 * 1800, 0.5));
+      expect(ft.capacityLitres, 60000);
+      expect(ft.verdict, FireTankVerdict.ok);
       expect(count('standpipe-outlet-over-pressure:FP:0-11'), 1);
       expect(count('electrical:non-selective'), 2);
       expect(count('electrical:enclosure-temp-rise-exceeded'), 1);

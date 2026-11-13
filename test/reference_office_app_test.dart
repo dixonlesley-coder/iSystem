@@ -916,6 +916,10 @@ void main() {
       expect(count('electrical:life-safety-not-essential'), 1);
       expect(count('electrical:non-selective'), 5);
       expect(count('fire-system-over-pressure:FP'), 1);
+      // Backlog A-2 — FT has no capacity: the reserve 31.5451 L/s x 1800 s
+      // = 56 781 L is stated as an info, never a fabricated capacity.
+      expect(count('fire-tank-capacity-unset:FT'), 1);
+      expect(kinds.where((k) => k.startsWith('fire-tank-undersized')), isEmpty);
       expect(count('standpipe-outlet-over-pressure:FP:0-3'), 1);
       expect(count('electrical:fire-pump-protection'), 1);
       // Consequence of the 164 kVA service floor (incomer 250 A): recorded.

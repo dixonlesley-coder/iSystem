@@ -21,9 +21,13 @@ import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
+import 'package:mechx_engine/sizing/cooling_load.dart'
+    show roomCoolingCheck, standardAcCapacities;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show firePumpsDrawnBackwards, moversDrawnBackwards;
+import 'package:mechx_engine/sizing/fire_water_reserve.dart'
+    show FireTankVerdict;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -36,7 +40,14 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
-import 'annotation_store.dart' show roomAreasProvider, roomSizingProvider, roomTerminalOwnerOf;
+import 'annotation_store.dart'
+    show
+        RoomArea,
+        roomAreasProvider,
+        roomCoolingLoadProvider,
+        roomSizingProvider,
+        roomTerminalOwnerOf,
+        roomUnitOwnerId;
 import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
@@ -46,6 +57,7 @@ import 'fire_store.dart'
         fireOverPressureProvider,
         firePumpDutyProvider,
         fireSystemBasesProvider,
+        fireTankReservesProvider,
         kMinFireStageHeadM,
         sprinklerPumpCheckProvider,
         sprinklerRemoteAreaProvider,
@@ -1431,6 +1443,41 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 5a-bis-2. Fire-water reserve of every fire tank (backlog A-2) ───────
+  // Judge-only, located on the tank: a set capacity below the reserve
+  // (rated demand flow x duration) warns; an unset capacity raises an info
+  // stating the requirement (never a fabricated capacity).
+  final fireTankTags = equipmentNodeTags(net);
+  for (final t in ref.watch(fireTankReservesProvider)) {
+    final args = {
+      'tank': fireTankTags[t.tankId] ?? t.tankId,
+      'need': t.requiredLitres.toStringAsFixed(0),
+      'flow': t.reserve.ratedFlow.inLitersPerSecond.toStringAsFixed(2),
+      'min': t.reserve.durationMin.toStringAsFixed(0),
+      'cap': (t.capacityLitres ?? 0).toStringAsFixed(0),
+    };
+    switch (t.verdict) {
+      case FireTankVerdict.ok:
+        break;
+      case FireTankVerdict.undersized:
+        warnings.add(DesignIssue(
+          severity: IssueSeverity.warning,
+          kind: 'fire-tank-undersized:${t.tankId}',
+          title: str(StringKey.issueFireTankUndersizedTitle),
+          message: str.format(StringKey.issueFireTankUndersizedMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+      case FireTankVerdict.unset:
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-tank-capacity-unset:${t.tankId}',
+          title: str(StringKey.issueFireTankUnsetTitle),
+          message: str.format(StringKey.issueFireTankUnsetMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+    }
+  }
+
   // ── 5a-ter. Combined fire system whose sprinkler sets the head (info) ─────
   // Reference apartment A1 (supersedes Round 37 r2) — a combined sprinkler +
   // hydrant pump is rated at the LARGER flow and the LARGER head of the two
@@ -1706,6 +1753,42 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'velocity': sizing.supplyDuctVelocity.metersPerSecond.toStringAsFixed(1),
       }),
       locate: IssueLocation(r.sheetId),
+    ));
+  }
+
+  // ── 5a-sexies. Too few / too small AC units (backlog A-4) ─────────────────
+  // Judge-only, located on the room (its sheet + its first AC unit): the AC
+  // indoor units a room OWNS give a combined nominal capacity below its
+  // cooling load (a share above the largest standard unit). A room with NO
+  // AC unit is un-designed, not undersized: no finding.
+  for (final r in rooms) {
+    final acs = [
+      for (final n in net.nodes)
+        if (RoomArea.isAcComponent(n.component) &&
+            roomUnitOwnerId(n, rooms) == r.id)
+          n,
+    ]..sort((a, b) => naturalIdCompare(a.id, b.id));
+    if (acs.isEmpty) continue;
+    final load = ref.watch(roomCoolingLoadProvider(r.id));
+    if (load == null) continue;
+    final chk =
+        roomCoolingCheck(loadBtuPerHr: load.btuPerHr, unitCount: acs.length);
+    if (chk == null || !chk.undersized) continue;
+    final (topPk, topBtu) = standardAcCapacities.last;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-cooling-undersized:${r.id}',
+      title: str(StringKey.issueRoomCoolingUndersizedTitle),
+      message: str.format(StringKey.issueRoomCoolingUndersizedMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'load': chk.loadBtuPerHr.toStringAsFixed(0),
+        'count': chk.unitCount,
+        'installed': chk.installedBtuPerHr.toStringAsFixed(0),
+        'top': topBtu.toStringAsFixed(0),
+        'needed': chk.unitsNeeded,
+        'topPk': topPk.toStringAsFixed(topPk == topPk.roundToDouble() ? 0 : 1),
+      }),
+      locate: IssueLocation(r.sheetId, nodeId: acs.first.id),
     ));
   }
 

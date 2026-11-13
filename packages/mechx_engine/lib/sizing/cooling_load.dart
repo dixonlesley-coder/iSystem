@@ -121,6 +121,42 @@ AcSelection selectAc(double requiredBtuPerHr) {
       pk: last.$1, nominalBtuPerHr: last.$2, exceedsRange: true);
 }
 
+/// Backlog A-4 (2026-11-13, reference shophouse backlog b) — the JUDGE-ONLY
+/// check of the AC indoor units installed in a room against its cooling load.
+/// Each of the [unitCount] units takes an equal share and is the ladder unit
+/// [selectAc] picks for it (the unit the Rooms inspector, the schedule and the
+/// panel feed name), so the installed nominal capacity is
+/// `unitCount x selectAc(load / unitCount).nominalBtuPerHr`. The room is
+/// UNDERSIZED when that is below the load — which happens exactly when a
+/// share exceeds the largest standard size ([AcSelection.exceedsRange]).
+/// [unitsNeeded] = ceil(load / the largest standard nominal). Null when no
+/// unit is installed (an un-designed room, not an undersized one) or the load
+/// is not positive. Never resizes. Pure.
+({
+  double loadBtuPerHr,
+  double installedBtuPerHr,
+  int unitCount,
+  AcSelection perUnit,
+  int unitsNeeded,
+  bool undersized,
+})? roomCoolingCheck({
+  required double loadBtuPerHr,
+  required int unitCount,
+}) {
+  if (unitCount <= 0 || loadBtuPerHr <= 0) return null;
+  final perUnit = selectAc(loadBtuPerHr / unitCount);
+  final installed = unitCount * perUnit.nominalBtuPerHr;
+  final largest = standardAcCapacities.last.$2;
+  return (
+    loadBtuPerHr: loadBtuPerHr,
+    installedBtuPerHr: installed,
+    unitCount: unitCount,
+    perUnit: perUnit,
+    unitsNeeded: (loadBtuPerHr / largest - 1e-9).ceil(),
+    undersized: perUnit.exceedsRange || installed + 1e-9 < loadBtuPerHr,
+  );
+}
+
 /// Full cooling-load result for a room: the requirement plus the recommended AC.
 final class CoolingLoad {
   /// Estimated cooling load (BTU/h).

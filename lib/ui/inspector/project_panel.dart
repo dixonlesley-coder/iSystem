@@ -61,6 +61,7 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
     show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
+import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
 import 'package:mechx_engine/sizing/fire_standpipe.dart'
     show
         drawnStandpipeRiserCount,
@@ -406,6 +407,20 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
                 minKpa: o.minKpa,
                 limitKpa: o.limitKpa,
                 residual: o.residual,
+              ),
+          ]
+        : const [],
+    // Backlog A-2 — every fire tank's fire-water reserve (the list the
+    // Review judges).
+    fireTankReserves: fireDrawn
+        ? [
+            for (final t in ref.read(fireTankReservesProvider))
+              FireTankReportLine(
+                tag: nodeTagMap[t.tankId] ?? t.tankId,
+                flowLps: t.reserve.ratedFlow.inLitersPerSecond,
+                durationMin: t.reserve.durationMin,
+                requiredLitres: t.requiredLitres,
+                capacityLitres: t.capacityLitres,
               ),
           ]
         : const [],
@@ -5439,6 +5454,16 @@ class _FireSection extends ConsumerWidget {
             kv(
               'Standpipe flow',
               '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s',
+            ),
+          // Backlog A-2 — each drawn fire tank's fire-water reserve (rated
+          // demand flow x duration) beside its entered capacity.
+          for (final t in ref.watch(fireTankReservesProvider))
+            kv(
+              'Fire reserve ${equipmentNodeTags(ref.watch(sizingNetworkProvider))[t.tankId] ?? t.tankId}',
+              '${t.requiredLitres.toStringAsFixed(0)} L '
+                  '(${t.reserve.ratedFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'
+                  ' x ${t.reserve.durationMin.toStringAsFixed(0)} min)'
+                  '${t.capacityLitres == null ? ' · capacity not set' : t.verdict == FireTankVerdict.undersized ? ' · tank ${t.capacityLitres!.toStringAsFixed(0)} L short' : ' · tank OK'}',
             ),
           const SizedBox(height: MechXSpacing.xs),
           Row(

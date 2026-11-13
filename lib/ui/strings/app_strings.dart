@@ -810,6 +810,12 @@ enum StringKey {
   issueCoolingInternalOnlyMessage,
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
+  issueRoomCoolingUndersizedTitle,
+  issueRoomCoolingUndersizedMessage,
+  issueFireTankUndersizedTitle,
+  issueFireTankUndersizedMessage,
+  issueFireTankUnsetTitle,
+  issueFireTankUnsetMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
   issueFireGravityHeadMessage, // {avail} {need}
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
@@ -2435,6 +2441,18 @@ const Map<StringKey, String> _en = {
       'static lift to the top head + remote-head pressure + the sized index '
       'friction, at least the 15 m allowance basis) but the fire pump head is '
       '{pump} m.',
+  StringKey.issueRoomCoolingUndersizedTitle:
+      'Room AC capacity below its cooling load',
+  StringKey.issueRoomCoolingUndersizedMessage:
+      '{room} needs {load} BTU/h but its {count} AC unit(s) give {installed} BTU/h (largest standard unit {top} BTU/h). Install at least {needed} x {topPk} PK units or larger units.',
+  StringKey.issueFireTankUndersizedTitle:
+      'Fire tank below the fire-water reserve',
+  StringKey.issueFireTankUndersizedMessage:
+      'Fire tank {tank} holds {cap} L, below the {need} L fire-water reserve ({flow} L/s for {min} min). Enlarge the tank or add storage.',
+  StringKey.issueFireTankUnsetTitle:
+      'Fire tank capacity not set',
+  StringKey.issueFireTankUnsetMessage:
+      'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
       'reaches {churn} kPa, above the {limit} kPa (175 psi) rating of standard '
@@ -4120,6 +4138,18 @@ const Map<StringKey, String> _id = {
       'angkat statis ke kepala teratas + tekanan kepala terjauh + gesekan '
       'indeks terukur, minimal basis tambahan 15 m) tetapi head pompa '
       'kebakaran {pump} m.',
+  StringKey.issueRoomCoolingUndersizedTitle:
+      'Kapasitas AC ruang di bawah beban pendinginannya',
+  StringKey.issueRoomCoolingUndersizedMessage:
+      '{room} membutuhkan {load} BTU/h tetapi {count} unit AC-nya memberi {installed} BTU/h (unit standar terbesar {top} BTU/h). Pasang minimal {needed} x unit {topPk} PK atau unit yang lebih besar.',
+  StringKey.issueFireTankUndersizedTitle:
+      'Tangki kebakaran di bawah cadangan air kebakaran',
+  StringKey.issueFireTankUndersizedMessage:
+      'Tangki kebakaran {tank} berisi {cap} L, di bawah cadangan air kebakaran {need} L ({flow} L/s selama {min} menit). Perbesar tangki atau tambah penyimpanan.',
+  StringKey.issueFireTankUnsetTitle:
+      'Kapasitas tangki kebakaran belum diisi',
+  StringKey.issueFireTankUnsetMessage:
+      'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
       'rating) mencapai {churn} kPa, di atas rating {limit} kPa (175 psi) '

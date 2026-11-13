@@ -148,6 +148,25 @@ class StandpipeOutletReportLine {
   });
 }
 
+/// Backlog A-2 (2026-11-13) — one fire tank's fire-water reserve (the app's
+/// `fireTankReservesProvider`, the list the Review judges): the rated demand
+/// flow x the required duration, beside the tank's own entered capacity
+/// (null = not set; never fabricated). Empty list ⇒ no line.
+class FireTankReportLine {
+  final String tag;
+  final double flowLps;
+  final double durationMin;
+  final double requiredLitres;
+  final double? capacityLitres;
+  const FireTankReportLine({
+    required this.tag,
+    required this.flowLps,
+    required this.durationMin,
+    required this.requiredLitres,
+    this.capacityLitres,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -199,6 +218,9 @@ class CalcReportData {
 
   /// Round 76 — hose outlets above the NFPA 14 hose-connection limits.
   final List<StandpipeOutletReportLine> standpipeOutletOverPressure;
+
+  /// Backlog A-2 — the fire-water reserve of every fire tank.
+  final List<FireTankReportLine> fireTankReserves;
 
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
@@ -314,6 +336,7 @@ class CalcReportData {
     this.firePumpRating,
     this.fireOverPressure = const [],
     this.standpipeOutletOverPressure = const [],
+    this.fireTankReserves = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
     this.fireDry = const [],
@@ -939,6 +962,26 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   'min': o.minKpa.toStringAsFixed(0),
                   'limit': o.limitKpa.toStringAsFixed(0),
                 })
+          ),
+        // Backlog A-2 — the fire-water reserve per fire tank (printed only
+        // when a fire tank is drawn ⇒ byte-identical otherwise).
+        for (final t in d.fireTankReserves)
+          (
+            strings.format(RptStringKey.fireTankReserveKey, {'tank': t.tag}),
+            strings.format(RptStringKey.fireTankReserveValue, {
+              'flow': t.flowLps.toStringAsFixed(2),
+              'min': t.durationMin.toStringAsFixed(0),
+              'need': t.requiredLitres.toStringAsFixed(0),
+              'm3': (t.requiredLitres / 1000).toStringAsFixed(1),
+              'cap': t.capacityLitres == null
+                  ? strings(RptStringKey.fireTankReserveUnset)
+                  : '${t.capacityLitres!.toStringAsFixed(0)} L',
+              'verdict': t.capacityLitres == null
+                  ? ''
+                  : t.capacityLitres! + 1e-9 < t.requiredLitres
+                      ? strings(RptStringKey.fireTankReserveShort)
+                      : strings(RptStringKey.fireTankReserveOk),
+            })
           ),
         // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
         // Round 52 r2 — also a LONE line when no project rating block is

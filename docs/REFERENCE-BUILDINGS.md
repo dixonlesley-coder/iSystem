@@ -70,13 +70,16 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Several separately metered service entrances.** One project with several unfed service boards is not modelled consistently: the service study treats every unfed board as a root (`originPanelIdsOf`, the multi-root daya judge), while the Review flags all but the first as `unfed-panel` (`electricalConnectivityDefects`). This is why the fixture now uses one service board.
-- **(b) Too few / too small AC units.** There is no Review warning when the AC units installed in a room are fewer or smaller than its cooling load (`selectAc` `exceedsRange`). One cassette in this room would need 44 400 BTU/h from a 27 000 BTU/h top unit, silently.
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
 - **(e) Transfer pump label.** The transfer pump's electrical source reads "supply pump" (`_sourceFor` maps every pump to `supplyPump`).
 - **(f) Feeder discrimination.** Every feeder way on `PP Ruko` (and the auto-wired MEP feeder) raises `non-selective`: the feeder breaker is already at the largest rung its auto-sized cable protects. The fixture was not tuned to hide it.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
 - **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
+
+### Backlog closed (2026-11-13)
+
+- **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
 
 
 ## 3. Office (kantor 4 lantai)
@@ -102,6 +105,7 @@ _(empty)_
 - `fire-system-over-pressure:FP`: churn 1353.3 kPa > 1210.
 - `standpipe-outlet-over-pressure:FP:0-3`: every hose valve's static is above 1207 kPa.
 - `fire-pump-protection` info.
+- `fire-tank-capacity-unset:FT` info: the fire-water reserve 31.5451 L/s x 1800 s = 56 781 L (backlog A-2).
 - The NFPA 20 standby-pump recommendation.
 - `enclosure-temp-rise-exceeded` on LVMDP: the 250 A incomer on the 164 kVA service floor.
 - 12 × `drainage-laid-steeper` and `drainage-cleanout` at D0.
@@ -119,7 +123,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Duct friction basis.** The room-air equipment estimate uses galvanised duct roughness (0.09 mm), while the drawn network uses the PU product (0.03 mm): 109.13 Pa vs 121.25 Pa for one FCU.
-- **(b) Fire tank volume.** No fire-water tank volume is computed anywhere.
 - **(c) Urinal type.** There is no flush-valve urinal type.
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
 - **(e) Churn over-pressure.** The Class I 690 kPa residual drives a churn over-pressure in a 4-storey building, with no pressure-restricting device modelled.
@@ -128,6 +131,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
+- **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
 - **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m).
 
 ## 4. Apartment (rumah susun 12 lantai)
@@ -154,7 +158,7 @@ _(empty)_
 - Infos: `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
 - Before the PRV is drawn: 8 x `downfeed-over-pressure` (Lantai 1, 401.229 kPa static).
 
-**Expected absent:** any critical or error, `combined-fire-sprinkler-governs` (since tower T2), `ads-disconnection-on-genset`, `life-safety-*`, `service-capacity-below-demand`, `pressure-zone`, `downfeed-over-pressure` (after the PRV), `unfed-panel`.
+**Expected absent:** any critical or error, `combined-fire-sprinkler-governs` (since tower T2), `ads-disconnection-on-genset`, `life-safety-*`, `service-capacity-below-demand`, `pressure-zone`, `downfeed-over-pressure` (after the PRV), `unfed-panel`, `fire-tank-*` (FT 60 000 L >= 56 781 L).
 
 **Fixed by its review (2026-11-13).**
 - **A2:** `combined-fire-sprinkler-governs` was keyed on `pumpIds.first`, the jockey FJ. It is now keyed on the duty pump FP.
@@ -167,7 +171,7 @@ _(empty)_
 - **(c) Hose outlet height.** A hydrant box sits at the 1.1 m fixture height (39.6 m on Lantai 12), which sets its pipe leg, while the standpipe lift uses the 1.2 m outlet height (39.7 m).
 - **(d) Sprinkler head height.** A head node sits at the 1.1 m fixture height, while its run is measured as a ceiling run (no leg) and the lift is taken at the ceiling.
 - **(e) Two booster heads.** The gravity solve asks for a 22.230 m booster (KSb11). The Review's `downfeed-below-target` recommends a +15.3 m booster for Lantai 10 (KSb9), which the drawn side-branch booster cannot serve.
-- **(f) No step-load / fire-tank rules.** There is no genset step-load check beyond the largest-motor dip, and no fire-water reserve rule (FT 60 000 L is a brief value).
+- **(f) No step-load rule.** There is no genset step-load check beyond the largest-motor dip. (The fire-water reserve half closed by backlog A-2: FT 60 000 L >= 31.545 L/s x 1800 s = 56 781 L, no finding.)
 - **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
 - **(i) Genset rating ignores ADS on the alternator fault.** The recommended genset rating (`sizeGenerator`: running kVA, motor-start floor) does not consider automatic disconnection on the alternator's own fault level. Before A1 the app's recommended 50 kVA set (alternator fault 0.6 kA) failed `ads-disconnection-on-genset` on three ways (lift Zs 0.573, FP and FPS 0.558 > 0.437 Ω). Only A1's 75 kW fire pump, which raised the start floor to 300 kVA, cleared it.
@@ -196,7 +200,7 @@ _(empty)_
 - Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, 14 x `air-duct-unsized`, `drainage-cleanout`, 5 `// VERIFY`.
 - Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
 
-**Expected absent:** any critical or error, `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`.
+**Expected absent:** any critical or error, `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`, `fire-tank-*` (FT 120 000 L >= 85 172 L).
 
 **Fixed by its review (2026-11-13).**
 - **T1:** the NFPA 20 discharge raise ran past the header: FH→Ha0, FH→Hb0 and FH→S0 each printed the pump's 47.3176 L/s on DN150, and the sprinkler riser was DN150 for one storey. Past a header only an outflow carrying the full rated flow is discharge pipe: the standpipe trunks are DN100 at 31.5451 L/s and the sprinkler feed keeps its own size.

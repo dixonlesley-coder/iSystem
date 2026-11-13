@@ -146,6 +146,11 @@ enum RptStringKey {
   fireOverPressureShare, // {pct}
   fireOutletStaticKey, // {tag} {floors}
   fireOutletStaticValue, // {max} {min} {limit}
+  fireTankReserveKey,
+  fireTankReserveValue,
+  fireTankReserveUnset,
+  fireTankReserveOk,
+  fireTankReserveShort,
   fireHoseStationResidualKey, // {tag} {floors}
   fireHoseStationResidualValue, // {max} {min} {limit}
   fireJockeyKey,
@@ -611,6 +616,16 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '{max}..{min} kPa at pump churn exceeds the {limit} kPa (175 psi) hose '
           'connection limit (NFPA 14 7.2.3.2) - fit a PRV at each outlet or '
           'zone the riser (VERIFY)',
+  RptStringKey.fireTankReserveKey:
+      'Fire-water reserve, {tank}',
+  RptStringKey.fireTankReserveValue:
+      '{flow} L/s x {min} min = {need} L ({m3} m3); tank {cap}{verdict} (VERIFY durations)',
+  RptStringKey.fireTankReserveUnset:
+      'capacity not set',
+  RptStringKey.fireTankReserveOk:
+      ' - OK',
+  RptStringKey.fireTankReserveShort:
+      ' - below the reserve',
   RptStringKey.fireHoseStationResidualKey:
       'Hose reel residual, {tag} {floors}',
   RptStringKey.fireHoseStationResidualValue:
@@ -1129,6 +1144,16 @@ const Map<RptStringKey, String> kReportStringsId = {
       '{max}..{min} kPa saat churn pompa melampaui batas {limit} kPa (175 '
           'psi) sambungan selang (NFPA 14 7.2.3.2) - pasang PRV di setiap '
           'outlet atau bagi pipa tegak menjadi zona (VERIFY)',
+  RptStringKey.fireTankReserveKey:
+      'Cadangan air kebakaran, {tank}',
+  RptStringKey.fireTankReserveValue:
+      '{flow} L/s x {min} menit = {need} L ({m3} m3); tangki {cap}{verdict} (VERIFY durasi)',
+  RptStringKey.fireTankReserveUnset:
+      'kapasitas belum diisi',
+  RptStringKey.fireTankReserveOk:
+      ' - OK',
+  RptStringKey.fireTankReserveShort:
+      ' - di bawah cadangan',
   RptStringKey.fireHoseStationResidualKey:
       'Residual gulungan selang, {tag} {floors}',
   RptStringKey.fireHoseStationResidualValue:
