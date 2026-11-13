@@ -55,6 +55,122 @@ const double transformerLoadingFactor = 0.8;
 /// // VERIFY — secondary source (typical Z% for this kVA range).
 const double transformerImpedancePct = 4;
 
+// ── Backlog E-3 (2026-11-13) — the MV-side transformer protection ────────────
+
+/// HV HRC (current-limiting, back-up) fuse rating (A) protecting ONE 20 kV
+/// distribution transformer of the given rating (kVA), on its MV transformer
+/// feeder (fuse-switch combination, IEC 62271-105). Rows: 50 kVA 6.3 A,
+/// 100 6.3, 160 10, 200 16, 250 16, 315 20, 400 25, 500 31.5, 630 40,
+/// 800 50, 1000 63, 1250 80 — about 2.2 x the 20 kV full-load current, so the
+/// fuse rides through the ~12 x In / 0.1 s magnetising inrush and clears an
+/// LV-terminal fault. Above the table's limit (1250 kVA) the transformer
+/// feeder is a circuit breaker with a protection relay.
+/// // VERIFY — secondary source (general practice / IEC 60282-1 fuse
+/// selection guides for 24 kV-class distribution-transformer fuses; the
+/// fuse maker's selection table for the chosen fuse-switch governs).
+const List<({double kva, double fuseA})> kMvTransformerFuseTable20kV = [
+  (kva: 50, fuseA: 6.3),
+  (kva: 100, fuseA: 6.3),
+  (kva: 160, fuseA: 10),
+  (kva: 200, fuseA: 16),
+  (kva: 250, fuseA: 16),
+  (kva: 315, fuseA: 20),
+  (kva: 400, fuseA: 25),
+  (kva: 500, fuseA: 31.5),
+  (kva: 630, fuseA: 40),
+  (kva: 800, fuseA: 50),
+  (kva: 1000, fuseA: 63),
+  (kva: 1250, fuseA: 80),
+];
+
+/// Standard CT primary ratings (A), ascending: the IEC 61869-2 series 10,
+/// 12.5, 15, 20, 25, 30, 40, 50, 60, 75 and its decimal multiples.
+/// // VERIFY — secondary source (IEC 61869-2 standard primary currents).
+const List<double> kCtPrimaryRatingsA = [
+  10, 12.5, 15, 20, 25, 30, 40, 50, 60, 75, //
+  100, 125, 150, 200, 250, 300, 400, 500, 600, 750,
+  1000, 1250, 1500, 2000, 2500, 3000,
+];
+
+/// A breaker-protected MV transformer feeder's CT primary is the next
+/// standard rating at or above this multiple of the transformer's MV
+/// full-load current (overload setting headroom).
+/// // VERIFY — notAnSniClause (design practice for the relay CT).
+const double kMvCtPrimaryFactor = 1.25;
+
+/// The MV-side protection of one service transformer: its MV full-load
+/// current `I = S / (sqrt3 x 20 000)` and either the HV HRC fuse from
+/// [kMvTransformerFuseTable20kV] or, above the table, an MV circuit breaker
+/// with relay on a CT of the next [kCtPrimaryRatingsA] >= 1.25 x I. [units]
+/// is the number of such transformers (each on its own MV feeder). Pure;
+/// judge-free (never resizes anything LV).
+class MvTransformerProtection {
+  final double kva;
+  final int units;
+
+  /// MV full-load current of ONE unit at [mvVoltageV] (A, unrounded).
+  final double flcA;
+
+  /// HV HRC fuse rating (A) — null when a breaker is required.
+  final double? fuseA;
+
+  /// The relay CT primary (A) — null when the feeder is fused.
+  final double? ctPrimaryA;
+
+  const MvTransformerProtection({
+    required this.kva,
+    required this.units,
+    required this.flcA,
+    this.fuseA,
+    this.ctPrimaryA,
+  });
+
+  bool get fused => fuseA != null;
+
+  /// Short device label, e.g. `HV HRC fuse 63 A` / `MV CB + relay, CT 60/5 A`.
+  String get device => fused
+      ? 'HV HRC fuse ${_fmtA(fuseA!)} A'
+      : 'MV CB + relay, CT ${_fmtA(ctPrimaryA!)}/5 A';
+
+  /// One line for a report / note: the current, the device and its basis.
+  String get summary {
+    final each = units > 1 ? 'each of $units x ' : '';
+    final i = flcA.toStringAsFixed(2);
+    final s = _fmtA(kva);
+    return fused
+        ? 'MV transformer feeder ($each$s kVA): I = $s kVA / (sqrt3 x 20 kV) '
+            '= $i A -> $device (20 kV transformer-fuse table, up to '
+            '${_fmtA(kMvTransformerFuseTable20kV.last.kva)} kVA).'
+        : 'MV transformer feeder ($each$s kVA): I = $s kVA / (sqrt3 x 20 kV) '
+            '= $i A -> above the '
+            '${_fmtA(kMvTransformerFuseTable20kV.last.kva)} kVA fuse table: '
+            '$device (CT >= ${_fmtA(kMvCtPrimaryFactor)} x $i = '
+            '${(kMvCtPrimaryFactor * flcA).toStringAsFixed(2)} A).';
+  }
+}
+
+String _fmtA(double v) =>
+    v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
+
+/// Backlog E-3 — the MV protection of a [kva] service transformer ([units]
+/// of them); null for a non-positive rating. Pure.
+MvTransformerProtection? mvTransformerProtection(double kva, {int units = 1}) {
+  if (!(kva > 0)) return null;
+  final flc = kva * 1000 / (math.sqrt(3) * mvVoltageV);
+  final n = units < 1 ? 1 : units;
+  for (final row in kMvTransformerFuseTable20kV) {
+    if (row.kva >= kva - 1e-9) {
+      return MvTransformerProtection(
+          kva: kva, units: n, flcA: flc, fuseA: row.fuseA);
+    }
+  }
+  final need = kMvCtPrimaryFactor * flc;
+  final ct = kCtPrimaryRatingsA.firstWhere((r) => r >= need - 1e-9,
+      orElse: () => need);
+  return MvTransformerProtection(
+      kva: kva, units: n, flcA: flc, ctPrimaryA: ct);
+}
+
 /// Single-phase (1φ, 230 V) PLN connected-power ("daya tersambung") steps, VA.
 /// // VERIFY — secondary source (published non-subsidised R/B/I tariff steps).
 const List<double> plnDayaVa1ph = [

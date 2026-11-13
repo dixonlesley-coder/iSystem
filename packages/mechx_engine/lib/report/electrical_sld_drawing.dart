@@ -21,6 +21,7 @@ import '../electrical/advanced_study.dart'
         gensetAdsFloorFor,
         gensetStartFloorFor,
         serviceArrangementOf,
+        serviceMvProtection,
         serviceSectionOfRoot,
         serviceTransformer;
 import '../electrical/cable_family.dart'
@@ -2157,6 +2158,9 @@ _Spine _buildSourceSpine(
   // one-line (E-501) draws its transformer from.
   final txLabel =
       serviceArrangementOf(project, result).transformer ?? 'TRANSFORMER';
+  // Backlog E-3 — the MV transformer feeder's device (HV HRC fuse, or MV CB
+  // + relay on its CT), printed beside the MV main.
+  final mvDevice = isMv ? serviceMvProtection(project, result)?.device : null;
 
   // The vertical spine, top -> bottom. The MV station chain exists ONLY on a
   // declared MV service — an LV direct service is just its supply head.
@@ -2232,6 +2236,11 @@ _Spine _buildSourceSpine(
           // fit grows the caption to the minimum plotted size.
           prims.add(
               SldLabel(nodeX, y + _ovH + 7, node.sub!, size: 7.5, role: role));
+        }
+        // Backlog E-3 — right of the riser leg, under the MV main box.
+        if (node.sub == 'MV main' && mvDevice != null) {
+          prims.add(SldLabel(centreX + 6, y + _ovH + 7, mvDevice,
+              size: 7.5, role: role));
         }
     }
     prevBottom = y + _ovH;

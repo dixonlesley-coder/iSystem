@@ -238,6 +238,7 @@ enum RptStringKey {
   ssSystem,
   ssDiversifiedDemand,
   ssOriginDemand,
+  ssMvProtection,
 
   // Panels.
   headingPanels,
@@ -743,6 +744,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
   RptStringKey.ssOriginDemand: 'Origin diversified demand:',
+  RptStringKey.ssMvProtection: 'MV transformer protection:',
 
   RptStringKey.headingPanels: 'Panels',
   RptStringKey.panelIncomer: '- Incomer: {rating} {class} {poles}P',
@@ -1289,6 +1291,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',
   RptStringKey.ssOriginDemand: 'Permintaan terdiversifikasi sumber:',
+  RptStringKey.ssMvProtection: 'Proteksi TM trafo:',
 
   RptStringKey.headingPanels: 'Panel',
   RptStringKey.panelIncomer: '- Pemutus masuk: {rating} {class} {poles}P',

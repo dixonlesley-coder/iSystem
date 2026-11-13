@@ -12,6 +12,7 @@
 /// never hides provenance gaps (§8 / golden rule 6).
 library;
 
+import '../electrical/advanced_study.dart' show serviceMvProtection;
 import '../electrical/compute.dart' show kUpsInputFactor, serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/fault.dart'
@@ -465,6 +466,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         '${_n(s.demandW)} W (${_n(s.demandVa.inKilovoltAmperes)} kVA)'
       ),
       (strings(RptStringKey.ssOriginDemand), '${_n(r.totalDemandW)} W'),
+      // Backlog E-3 — the MV-side device of the printed transformer.
+      if (serviceMvProtection(data.project, r) case final mv?)
+        (strings(RptStringKey.ssMvProtection), mv.summary),
       (strings(RptStringKey.edbEarthingSystem), r.earthing.label),
     ]));
 

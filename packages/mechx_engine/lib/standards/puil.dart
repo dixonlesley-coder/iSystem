@@ -768,6 +768,23 @@ class PuilProfile implements ElectricalStandardsProfile {
               '(time-delayed / category B, electronic-trip) device or the '
               "manufacturer's discrimination tables.",
         ),
+        // Backlog E-3 (2026-11-13) — `kMvTransformerFuseTable20kV`,
+        // `kCtPrimaryRatingsA`, `kMvCtPrimaryFactor` (supply_design.dart).
+        const StandardValue<Object?>(
+          'MV transformer protection at 20 kV: HV HRC fuse table (50 kVA '
+              '6.3 A .. 1250 kVA 80 A, ~2.2 x In), above 1250 kVA a CB + '
+              'relay on the next standard CT >= 1.25 x In',
+          unit: 'A',
+          citation: 'general practice / IEC 60282-1 fuse selection guides, '
+              'IEC 62271-105 fuse-switch combinations, IEC 61869-2 CT '
+              'primaries (not a PUIL clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'The fuse rides through the ~12 x In / 0.1 s magnetising '
+              'inrush and clears an LV-terminal fault; the fuse maker\'s '
+              'selection table for the chosen fuse-switch, and PLN\'s '
+              'protection settings for the relay, govern.',
+        ),
         // Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd).
         const StandardValue<Object?>(
           'TT final-circuit RCD sensitivity by load kind (VFD 300 mA Type B, '

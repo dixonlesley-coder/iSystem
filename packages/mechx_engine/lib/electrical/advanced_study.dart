@@ -123,12 +123,14 @@ import 'sources.dart'
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
+        MvTransformerProtection,
         SupplyDesign,
         SupplyLevel,
         declaredServiceTransformer,
         determineSupply,
         isDeclaredMvService,
         minimalMaxSectionLoad,
+        mvTransformerProtection,
         recommendedDaya,
         sectionAssignment,
         serviceSections,
@@ -641,6 +643,8 @@ AdvancedStudy computeAdvancedStudy(
       lvSections: serviceSections(project),
       // Fix round F7 — the SAME declared arrangement E-301's spine draws.
       transformerLabel: arrangement.transformer,
+      // Backlog E-3 — the MV transformer feeder's device beside the MV main.
+      mvDevice: serviceMvProtection(project, sys)?.device,
       capacitor: arrangement.capacitor == null
           ? null
           : (
@@ -1689,6 +1693,19 @@ double servicePerPhaseBasisVa(
     return null;
   }
   return (kva: kva, units: s.units);
+}
+
+/// Backlog E-3 (2026-11-13) — the MV-side protection of the PRINTED service
+/// transformer ([serviceTransformer], each of its units on its own MV
+/// feeder): its 20 kV full-load current and the HV HRC fuse / MV breaker +
+/// relay CT ([mvTransformerProtection]). Null off a declared PLN MV service.
+/// Report-only: no LV figure reads it.
+MvTransformerProtection? serviceMvProtection(
+    ElectricalProject project, ElectricalSystemResult? sys) {
+  if (project.supplyKind != SupplyKind.pln) return null;
+  final t = serviceTransformer(project, sys);
+  if (t == null) return null;
+  return mvTransformerProtection(t.kva, units: t.units);
 }
 
 /// Round 52 — [studySupplyInputs]' supply design alone.

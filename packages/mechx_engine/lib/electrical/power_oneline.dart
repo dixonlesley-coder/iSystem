@@ -177,6 +177,9 @@ PowerOneLine buildPowerOneLine(
   // transformer (the head reads 'MV supply + MV main') between the utility and the LV bus; [capacitor]
   // hangs the LV-bus bank off the bus. Both null ⇒ byte-identical.
   String? transformerLabel,
+  // Backlog E-3 — the MV transformer feeder's device (fuse / CB + relay),
+  // printed beside the MV main on the utility head. Null ⇒ byte-identical.
+  String? mvDevice,
   ({String head, String sub})? capacitor,
   // Backlog B-3 — the disconnection floor of an unforced set
   // (`gensetAdsFloorFor`). Null ⇒ byte-identical.
@@ -270,6 +273,7 @@ PowerOneLine buildPowerOneLine(
             // Drawing backlog C-5 (i) — the declared MV service's voltage
             // (the supply design's PLN TM figure).
             ? 'MV supply ${_fmt(mvVoltageV / 1000)} kV + MV main'
+                '${mvDevice == null ? '' : ' ($mvDevice)'}'
             : (utilitySub ?? '${_fmt(voltage.volts)} V LV'),
       ));
       if (mvChain) {
