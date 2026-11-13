@@ -410,7 +410,9 @@ void main() {
     // 2.58333 + 46/50 x 1.45 = 3.91733; WC 10 → 0.88333; UR 2 → 0.17667;
     // LAV 1 → 0.08833. DN: first nominal with v <= 2.0 m/s.
     const trunk = <String, ({double l, double fu, double q, int dn, double v})>{
-      'e_cw_WM_GT': (l: 6.7, fu: 96, q: 3.91733, dn: 50, v: 1.995),
+      // Backlog D-3: 3.0 plan + the meter at 0.5 down to GT's slab (was
+      // 3.0 + the 3.7 ceiling = 6.7).
+      'e_cw_WM_GT': (l: 3.5, fu: 96, q: 3.91733, dn: 50, v: 1.995),
       'e_cw_GT_P1': (l: 1.0, fu: 96, q: 3.91733, dn: 50, v: 1.995),
       'e_cw_P1_R0': (l: 5.7, fu: 96, q: 3.91733, dn: 50, v: 1.995),
       'e_cw_R0_R1': (l: 4.0, fu: 72, q: 3.22133, dn: 50, v: 1.641),

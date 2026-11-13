@@ -423,10 +423,11 @@ void main() {
     // first nominal with v <= 2.0 m/s.
     const fill = (fu: 180.0, q: 4.39333, dn: 65, v: 1.324);
     final trunk = <String, ({double l, double fu, double q, int dn, double v})>{
-      // Fill line: the meter (ceiling 3.2) to GT on the slab = 3.0 + 3.2;
+      // Fill line: the meter (backlog D-3: its floor + 0.5, was the 3.2
+      // ceiling) to GT on the slab = 3.0 + 0.5 (was 6.2);
       // TP (slab) → U0 (ceiling) 1.0 + 3.2; U11 (41.7) → RT (roof 42.0)
       // 2.0 + 0.3; RT → A (41.7) 2.0 + 0.3.
-      'e_cw_WM_GT': (l: 6.2, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
+      'e_cw_WM_GT': (l: 3.5, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
       'e_cw_GT_TP': (l: 1.0, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
       'e_cw_TP_U0': (l: 4.2, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
       for (var f = 1; f <= 11; f++)

@@ -379,11 +379,12 @@ void main() {
     // 10 linear 0.05 L/s per UBAP. DN: first nominal with Q / (pi D^2 / 4)
     // <= 2.0 m/s. Lengths: plan + vertical leg (main 3.7 / 7.7 / 11.7 m,
     // fixture 1.1 / 5.1 / 9.1 m, ground plant 0.0, roof tank 12.0, booster on
-    // the L3 slab 8.0, meter at the L1 ceiling 3.7).
+    // the L3 slab 8.0, meter at the L1 floor + 0.5 since backlog D-3).
     const cases = <String, ({double l, double fu, double q, int dn, double v})>{
       // F2: the meter stub feeds GT what GT delivers: 12.5 UBAP; 3.0 plan +
-      // 3.7 meter ceiling -> GT slab.
-      'e_cw_WM_GT': (l: 6.7, fu: 12.5, q: 0.5639, dn: 20, v: 1.795),
+      // 0.5 meter (floor + kWaterMeterHeightM) -> GT slab (backlog D-3; was
+      // 3.0 + the 3.7 ceiling = 6.7).
+      'e_cw_WM_GT': (l: 3.5, fu: 12.5, q: 0.5639, dn: 20, v: 1.795),
       // 12.5 UBAP = 3 x (2.5 + 1.0) + 2.0; q = 0.5 + 2.5 x 0.38333 / 15
       // = 0.56389; DN15 v 3.19 > 2 -> DN20 v 1.795.
       'e_cw_GT_TP': (l: 1.0, fu: 12.5, q: 0.5639, dn: 20, v: 1.795),

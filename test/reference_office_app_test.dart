@@ -763,6 +763,27 @@ void main() {
     test('upfeed: P1 on 38.539 m; SNI floors; one zone, no PRV', () {
       final up = c.read(upfeedDeliveredProvider)!;
       expect(up.criticalNodeId, 'WCb3');
+      // Backlog D-3 — the meter WM (not a delivery node) sits at its floor
+      // + 0.5 m, upstream of GT (the pump suction, 0 kPa): static
+      // −0.5 x 9.81 = −4.905 kPa (was −3.7 x 9.81 = −36.297 at the ceiling);
+      // residual −4.905 − the solved 3.5 m stub loss 14.526 kPa (4.150 kPa/m
+      // on DN50 @ 3.91733 L/s) = −19.431 kPa (was −36.297 − 4.150 x 6.7 =
+      // −64.1). Mains pressure is not modelled (office backlog d).
+      expect(up.noFlowStaticPressure['WM']!.inKiloPascals,
+          closeTo(-4.905, 1e-6));
+      expect(up.residualPressure['WM']!.inKiloPascals, closeTo(-19.431, 2e-3));
+      expect(up.residualPressure['GT']!.inKiloPascals, closeTo(0.0, 1e-9));
+      // BOM: the DN50 cold-water runs WM→GT 3.5 + GT→P1 1.0 + P1→R0 5.7 =
+      // 10.2 m (was 13.4 with the 6.7 m stub); the DN50 riser R0→R1 4.0 m.
+      double cw50(EdgeKind k) => c
+          .read(bomProvider)
+          .where((l) =>
+              l.service == ServiceType.coldWater &&
+              l.diameterMm == 50 &&
+              l.kind == k)
+          .fold<double>(0, (a, l) => a + l.totalLength.meters);
+      expect(cw50(EdgeKind.run), closeTo(10.2, 1e-9));
+      expect(cw50(EdgeKind.riser), closeTo(4.0, 1e-9));
       expect(up.residualPressure['WCb3']!.inKiloPascals, closeTo(225.0, 2e-3));
       // Hydraulic 9810 x 3.91733e-3 x 38.539 = 1481.0 W; shaft / 0.70 =
       // 2115.7 W ⇒ 2.2 kW; fed input 2200 / 0.90 = 2444.4 W.

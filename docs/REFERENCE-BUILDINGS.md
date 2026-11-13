@@ -70,7 +70,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
-- **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
 - **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
 
@@ -80,6 +79,7 @@ _(empty)_
 - **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
 - **(e) Transfer pump label — closed by B-4.** TP_A/B/C are minted `MepLoadSource.transferPump` ('Transfer pump' / 'Pompa transfer'), no figure changed.
 - **(f) Feeder discrimination — closed by B-1 (bounded).** An auto-sized feeder cable grows by at most two section sizes (and never past the upstream incomer) so its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A, one size (VD 0.65 / 0.86 / 1.08 %); MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A, one size. No `non-selective` is left.
+- **(d) Water meter at ceiling level — backlog D-3.** A water meter now sits at its floor + 0.5 m (`kWaterMeterHeightM`): the stub WM → GT measures 3.0 + 0.5 = 3.5 m (was 6.7 with the 3.7 m ceiling leg); flow 0.56389 L/s and DN20 unchanged.
 
 
 ## 3. Office (kantor 4 lantai)

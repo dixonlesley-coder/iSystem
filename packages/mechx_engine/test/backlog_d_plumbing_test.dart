@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 
 import 'reference/apartment.dart';
 import 'reference/office.dart';
+import 'reference/shophouse.dart';
 import 'reference/tower.dart';
 
 const _cal = ScaleCalibration(0.02);
@@ -160,6 +161,45 @@ void main() {
           expect(nodeElevation(n, b.building, b.mounting).meters,
               closeTo(expected, 1e-9));
         }
+      });
+    }
+  });
+
+  group('D-3 — a water meter sits near its floor', () {
+    test('elevation = floor + kWaterMeterHeightM (0.5), not the ceiling', () {
+      const m = NetNode(
+        id: 'm',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 1,
+        component: NodeComponent.waterMeter,
+      );
+      expect(kWaterMeterHeightM, 0.5);
+      expect(nodeElevation(m, building).meters, closeTo(4.0 + 0.5, 1e-12));
+    });
+
+    // Every reference meter stub WM → GT: 150 px x 0.02 = 3.0 m plan + the
+    // drop from the meter (0.5) to the ground tank on the L1 slab (0.0) =
+    // 3.5 m. Before: 3.0 + the L1 ceiling (shophouse / office / tower 3.7,
+    // apartment 3.2) = 6.7 / 6.7 / 6.7 / 6.2 m.
+    for (final (name, build, stub) in <(String, ReferenceBuilding Function(), String)>[
+      ('shophouse', buildShophouse, 'e_cw_${shopId('WM', 'A')}_${shopId('GT', 'A')}'),
+      ('office', buildOffice, 'e_cw_WM_GT'),
+      ('apartment', buildApartment, 'e_cw_WM_GT'),
+      ('tower', buildTower, 'e_cw_WM_GT'),
+    ]) {
+      test('$name: WM → GT = 3.0 + 0.5 = 3.5 m', () {
+        final b = build();
+        final e = b.network.edgeById(stub)!;
+        expect(
+          edgeLength(e, b.network,
+                  calibrationBySheet: b.calibrations,
+                  building: b.building,
+                  mounting: b.mounting)
+              .meters,
+          closeTo(3.5, 1e-9),
+        );
       });
     }
   });

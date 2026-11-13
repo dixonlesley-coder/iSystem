@@ -688,6 +688,16 @@ bool nodeCarriesContent(NetNode n) =>
 /// `SniProfile.verifyChecklist` (status `notAnSniClause`).
 const double kHoseOutletHeightM = 1.2;
 
+/// Backlog D-3 (2026-11-13) — height of a datum-less water meter
+/// ([NodeComponent.waterMeter]) above its own floor surface (m). A meter is
+/// set near the floor (in its box / on the incoming main at low level), not
+/// at the ceiling main: the stub to a slab-mounted ground tank measures its
+/// plan length + |0.5 − the tank's datum|, with no false storey-high leg.
+///
+/// // VERIFY — notAnSniClause: a drafting convention, not an SNI figure; set
+/// the node's elevation / mounting height for the real meter position.
+const double kWaterMeterHeightM = 0.5;
+
 /// True elevation of [node] (§10), used for riser/drop length and static lift:
 ///   • explicit [NetNode.elevation] if set;
 ///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;
@@ -699,7 +709,8 @@ const double kHoseOutletHeightM = 1.2;
 ///     ([NodeComponent.hydrantBox] / [NodeComponent.hoseReel]) at
 ///     [kHoseOutletHeightM] above its floor (backlog D-1); a
 ///     [NodeComponent.sprinklerHead] AT its floor's ceiling plane, the datum
-///     a bare main takes (backlog D-2);
+///     a bare main takes (backlog D-2); a [NodeComponent.waterMeter] at
+///     [kWaterMeterHeightM] above its floor (backlog D-3);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
 ///       – [NodeComponent.roofTank] → roof level on the top storey (it sits
 ///         on the roof slab); drawn BELOW the top storey, its own floor
@@ -763,6 +774,12 @@ Length nodeElevation(
     // static and the BOM agree.
     case NodeComponent.sprinklerHead:
       return building.ceilingElevationOf(node.floorIndex, mounting);
+    // Backlog D-3 (2026-11-13) — a water meter sits near its floor
+    // ([kWaterMeterHeightM]), not at the ceiling main a bare `main` takes:
+    // that added a false storey-high leg to every meter stub.
+    case NodeComponent.waterMeter:
+      return Length(
+          building.elevationOf(node.floorIndex).meters + kWaterMeterHeightM);
     default:
       break;
   }
