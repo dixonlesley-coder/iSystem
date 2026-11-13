@@ -6769,11 +6769,12 @@ class _SelectionSection extends ConsumerWidget {
             ),
           ),
         ],
-        // Soft advisory: this air duct carries air but isn't manually sized yet.
+        // Soft advisory (backlog F-4): this air duct carries air but has no
+        // size at all — neither the sizer's nor a chosen one.
         if (ref.watch(airUnsizedProvider).contains(edge.id)) ...[
           const SizedBox(height: MechXSpacing.xxs),
           Text(
-            'Auto-sized — no duct size chosen yet.',
+            'No size — choose a duct size.',
             style: context.type.caption.copyWith(
               color: context.colors.textMuted,
             ),

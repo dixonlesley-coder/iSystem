@@ -108,11 +108,10 @@ _(empty)_
 - The NFPA 20 standby-pump recommendation.
 - `enclosure-temp-rise-exceeded` on LVMDP: the 250 A incomer on the 164 kVA service floor.
 - 12 × `drainage-laid-steeper` and `drainage-cleanout` at D0.
-- `air-duct-unsized` info: no duct size is hand-chosen.
 - `terminal-velocity` on RG1 (backlog F-2): 925 L/s on one 600 x 600 = 3.212 m/s > the office return limit 3.0 m/s; the room's own bank is 2 grilles.
 - 5 `// VERIFY` advisories.
 
-**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `unfed-panel`, any `pressure-zone`.
+**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `air-duct-unsized` (backlog F-4), `unfed-panel`, any `pressure-zone`.
 
 **Fixed by its review (2026-11-13).**
 - **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout (and since backlog A-5 FP→S0 itself carries 4.714 L/s on its DN125).
@@ -129,6 +128,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
+- **`air-duct-unsized` on auto-sized ducts — backlog F-4.** The info now means a duct with NO size (neither auto nor chosen); the five auto-sized ducts are the engine's own valid picks: 5 → 0.
 - **Equipment duty — backlog F-3.** FCU1 roots the drawn system, so the Rooms inspector's one headline is the drawn duty 121.25 Pa (the 108.70 Pa room estimate is not printed beside it); a room estimate is printed only with the label "estimate (no ducts drawn)".
 - **Return bank — backlog F-2.** The office return limit is min(3.0, 4.0) = 3.0 m/s for both the room sizing and the checker: the room's bank is ceil(0.925 / (0.36 x 0.8 x 3.0)) = ceil(1.07) = 2 grilles, and the drawn single 600 x 600 grille carrying 925 L/s (3.212 m/s, passed by the old 4.0 band) is now flagged `terminal-velocity` (kept as drawn — see backlog (i)).
 - **(a) Duct friction basis — backlog F-1.** The room-air equipment estimate now reads the same PU (0.03 mm) roughness the drawn supply duct reads (`defaultDuctRoughnessForService`): Ø500 at 0.925 m³/s, 0.46829 → 0.44620 Pa/m, so the FCU estimate is 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (was 109.13). It remains an estimate (15 m assumed run); the drawn-duct fan duty is 121.25 Pa.
@@ -199,10 +199,10 @@ _(empty)_
 - 4 x `non-selective`: the PP-Lt1 / PP-Lt2 feeders (50 A vs the 32 A incomers), Feeder PP-E and Feeder to MEP, each at the largest rung its cable protects.
 - 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
 - `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m = 2893.6 kPa > 2413: since backlog A-3 worded as zone-split guidance) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
-- Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, 14 x `air-duct-unsized`, `drainage-cleanout`, 5 `// VERIFY`.
+- Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, `drainage-cleanout`, 5 `// VERIFY`.
 - Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
 
-**Expected absent:** any critical or error, `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`, `fire-tank-*` (FT 120 000 L >= 85 172 L).
+**Expected absent:** any critical or error, `air-duct-unsized` / `air-terminal-unsized` / `terminal-velocity` (backlog F-2 / F-4), `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`, `fire-tank-*` (FT 120 000 L >= 85 172 L).
 
 **Fixed by its review (2026-11-13).**
 - **T1:** the NFPA 20 discharge raise ran past the header: FH→Ha0, FH→Hb0 and FH→S0 each printed the pump's 47.3176 L/s on DN150, and the sprinkler riser was DN150 for one storey. Past a header only an outflow carrying the full rated flow is discharge pipe: the standpipe trunks are DN100 at 31.5451 L/s and the sprinkler feed keeps its own size.
@@ -222,6 +222,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
+- **`air-duct-unsized` on auto-sized ducts — backlog F-4.** The info now means a duct with NO size (neither auto nor chosen): 14 → 0 (all ducts are auto-sized within their limits).
 - **(g) AHU static, two figures — backlog F-3.** The Rooms inspector, the equipment schedule and the calc report print ONE duty per room (`roomAirHeadlineProvider`): AHU1 roots the drawn supply / return system, so the Kantor headline is the drawn-duct duty 327.68 Pa (2.2 kW); the room estimate (15 m assumed run, 303.93 Pa since F-1) is no longer printed beside it, and is labelled "estimate (no ducts drawn)" only for a room no drawn system serves. The toilet's headline is EF1's drawn 38.67 Pa.
 - **(f) Room return-bank face velocity — backlog F-2.** One limit per terminal kind and application (`terminalFaceVelocityMax`) for both the room sizing and the checker: office return min(3.0, 4.0) = 3.0 m/s governs. ceil(3.7 / (0.36 x 0.8 x 3.0)) = 5 return grilles; the fixture now draws RG1..RG5 (740 L/s each, 600 x 600, 2.569 m/s), return chain 500x350 / 700x450 / 900x600 / 1000x700 / 1200x700, return static 35.06 → 36.29 Pa, AHU 326.44 → 327.68 Pa (2.2 kW). The toilet's exhaust grilles (retail, 3.5 m/s) are 300 x 150 (3.426 m/s).
 

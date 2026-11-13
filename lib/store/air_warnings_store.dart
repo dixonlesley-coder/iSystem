@@ -125,21 +125,28 @@ final airWarningCountProvider = Provider<int>((ref) => ref
     .where((c) => c.isWarning)
     .length);
 
-/// Air elements (duct edges + air terminals) that carry air but have NO manually
-/// chosen size yet — they are still relying on auto-sizing. A softer advisory
-/// than an out-of-band velocity warning: it just nudges the engineer to pick a
-/// size / face for the hand-routed network. An element that already carries a
-/// chosen size (edge `sizeOverride`, node face) is NOT listed.
+/// Air elements (duct edges + air terminals) that carry air but have NO size
+/// to print. A softer advisory than an out-of-band velocity warning.
+///
+/// Backlog F-4 (2026-11-13) — a DUCT is listed only when it has no size at
+/// all: no hand-chosen `sizeOverride` AND no auto size from the sizer (no
+/// positive diameter). An auto-sized duct carries the engine's own valid
+/// pick (a size it is not valid for is the separate over-capacity warning,
+/// [airOverCapacityProvider]), so "no hand-chosen size" is not a finding —
+/// it used to list every duct of the reference buildings (office 5, tower
+/// 14). An air TERMINAL (a node carrying an airflow) with no chosen face is
+/// still listed: the sizer stamps no face on a hand-placed terminal.
 final airUnsizedProvider = Provider<Set<String>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
 
-  // Air ducts that carry flow but have no manual size override.
+  // Air ducts that carry flow but have neither a chosen nor an auto size.
   for (final e in net.edges) {
     if (!e.service.isAir || e.sizeOverride != null) continue;
     final s = sizing[e.id];
     if (s == null || s.flow.cubicMetersPerSecond <= 0) continue;
+    if (s.diameter.meters > 0) continue; // the sizer's own size
     out.add(e.id);
   }
 

@@ -991,6 +991,10 @@ void main() {
       // Backlog F-2 — the one return grille is flagged against the office
       // return limit (3.212 > 3.0 m/s; the room recommends two).
       expect(count('terminal-velocity'), 1);
+      // Backlog F-4 — the five ducts are auto-sized within their limits: no
+      // `air-duct-unsized` (it listed all five as "no hand-chosen size").
+      expect(count('air-duct-unsized'), 0);
+      expect(c.read(airUnsizedProvider), isEmpty);
       expect(kinds.where((k) => k.startsWith('unfed-panel')), isEmpty);
       expect(kinds.where((k) => k.startsWith('pressure-zone')), isEmpty);
       // Backlog A-3 — churn 1.4 x 98.536 = 137.951 m; x 9.81 = 1353.3 kPa:

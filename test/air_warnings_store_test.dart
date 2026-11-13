@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/air_warnings_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart';
 import 'package:mechx_engine/units.dart';
@@ -105,7 +106,8 @@ void main() {
     expect(c.read(airUnsizedProvider), isEmpty);
   });
 
-  test('an air duct carrying flow with no size override is flagged unsized', () {
+  test('backlog F-4: an AUTO-sized air duct is not unsized (the sizer\'s own '
+      'valid size is no finding)', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     // AHU (plant source) → duct → diffuser (airflow): the duct carries 0.1 m³/s.
@@ -128,8 +130,10 @@ void main() {
                 id: 'duct', fromId: 'ahu', toId: 'd', service: ServiceType.duct),
           ],
         ));
-    // The duct carries air and has no override ⇒ unsized advisory.
-    expect(c.read(airUnsizedProvider), contains('duct'));
+    // The duct carries air with no override, but the sizer sized it (0.1 m³/s
+    // at the 5 m/s cap ⇒ a positive standard diameter) ⇒ NOT unsized.
+    expect(c.read(sizingProvider)['duct']!.diameter.meters, greaterThan(0));
+    expect(c.read(airUnsizedProvider).contains('duct'), isFalse);
     // The terminal has a face ⇒ not unsized.
     expect(c.read(airUnsizedProvider).contains('d'), isFalse);
   });

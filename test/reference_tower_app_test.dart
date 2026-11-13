@@ -1819,6 +1819,13 @@ void main() {
       expect(n('electrical:fire-pump-protection'), 3);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
       expect(n('downfeed-below-target'), 1);
+      // Backlog F-4 — every duct is auto-sized within its limits: no
+      // `air-duct-unsized` (it listed all 14 ducts while it meant "no
+      // hand-chosen size"); no terminal is unsized or out of band (F-2).
+      expect(n('air-duct-unsized'), 0);
+      expect(n('air-terminal-unsized'), 0);
+      expect(n('terminal-velocity'), 0);
+      expect(c.read(airUnsizedProvider), isEmpty);
       expect(
         c
             .read(designIssuesProvider)

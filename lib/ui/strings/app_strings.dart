@@ -2042,7 +2042,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueOrphanTitle: 'Element references a missing floor or sheet',
   StringKey.issueDuctVelocityTitle: 'Duct velocity out of band',
   StringKey.issueTerminalVelocityTitle: 'Terminal face velocity out of band',
-  StringKey.issueAirDuctUnsizedTitle: 'Air duct not manually sized',
+  StringKey.issueAirDuctUnsizedTitle: 'Air duct has no size',
   StringKey.issueAirTerminalUnsizedTitle: 'Air terminal not manually sized',
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
   StringKey.issueStormOverCapacityTitle: 'Downpipe over capacity',
@@ -2373,8 +2373,8 @@ const Map<StringKey, String> _en = {
       'A drawn element belongs to a sheet that is no longer loaded — '
           're-import that sheet or delete the orphaned element.',
   StringKey.issueAirDuctUnsizedMessage:
-      'This duct carries air but has no chosen size — still '
-          'relying on auto-sizing.',
+      'This duct carries air but has no size — the sizer could not size it '
+          'and none is chosen. Pick a duct size.',
   StringKey.issueAirTerminalUnsizedMessage:
       'This terminal carries air but has no chosen face size.',
   StringKey.issueDuctOverCapacityMessage:
@@ -3722,7 +3722,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueOrphanTitle: 'Elemen merujuk lantai atau lembar yang hilang',
   StringKey.issueDuctVelocityTitle: 'Kecepatan saluran di luar batas',
   StringKey.issueTerminalVelocityTitle: 'Kecepatan muka terminal di luar batas',
-  StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum diukur manual',
+  StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum berukuran',
   StringKey.issueAirTerminalUnsizedTitle: 'Terminal udara belum diukur manual',
   StringKey.issueDuctOverCapacityTitle: 'Saluran melebihi kapasitas',
   StringKey.issueStormOverCapacityTitle: 'Pipa tegak air hujan melebihi kapasitas',
@@ -4073,8 +4073,9 @@ const Map<StringKey, String> _id = {
       'Sebuah elemen tergambar termasuk dalam lembar yang tidak lagi dimuat — '
           'impor ulang lembar itu atau hapus elemen yatim tersebut.',
   StringKey.issueAirDuctUnsizedMessage:
-      'Saluran ini mengalirkan udara tetapi belum memiliki ukuran terpilih — '
-          'masih mengandalkan pengukuran otomatis.',
+      'Saluran ini mengalirkan udara tetapi belum memiliki ukuran — '
+          'pengukuran otomatis tidak menghasilkan ukuran dan belum ada yang '
+          'dipilih. Pilih ukuran saluran.',
   StringKey.issueAirTerminalUnsizedMessage:
       'Terminal ini mengalirkan udara tetapi belum memiliki ukuran muka '
           'terpilih.',
