@@ -26,6 +26,7 @@ import 'package:mechx_engine/sizing/cooling_load.dart'
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show firePumpsDrawnBackwards, moversDrawnBackwards;
+import 'package:mechx_engine/units.dart' show FlowRate;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart'
     show FireTankVerdict;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
@@ -1296,6 +1297,52 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           ref.watch(downfeedSniMinimumResidualProvider) ??
           const SniProfile().minResidualPressureFaucet.value;
       final residualShown = short?.residual ?? delivered.minResidual;
+      // Backlog D-7 (apartment backlog e) — when drawn booster(s) serve only
+      // SOME floors, the recommended head is for the GRAVITY floors the
+      // boosters do not serve: name those floors and say so, so the figure
+      // never reads as a second duty for the drawn booster. No number
+      // changes. Concerned = delivery nodes below the target that no drawn
+      // (non-transfer) booster serves.
+      final targetKpa = ref.watch(targetResidualProvider).inKiloPascals;
+      final boosters = [
+        for (final m in supplyMovers(net, ref.watch(sizingProvider),
+            excludeEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
+            rootFlowOf: (_) => const FlowRate(1)))
+          if (!m.transfer) m,
+      ];
+      final gravityFloors = <int>{};
+      if (boosters.isNotEmpty) {
+        for (final e in delivered.residualPressure.entries) {
+          final n = nodeById[e.key];
+          if (!isDeliveryFixture(n)) continue;
+          if (e.value.inKiloPascals >= targetKpa - 1e-9) continue;
+          if (boosters.any((b) => b.served.contains(e.key))) continue;
+          gravityFloors.add(n!.floorIndex);
+        }
+      }
+      final gravityNamed = gravityFloors.isNotEmpty &&
+          (node == null || gravityFloors.contains(node.floorIndex));
+      String nameOfFloor(int i) => floors.isEmpty
+          ? 'L${i + 1}'
+          : floors[i.clamp(0, floors.length - 1)].name;
+      String floorsText() {
+        final idx = gravityFloors.toList()..sort();
+        final parts = <String>[];
+        var i = 0;
+        while (i < idx.length) {
+          var j = i;
+          while (j + 1 < idx.length && idx[j + 1] == idx[j] + 1) {
+            j++;
+          }
+          parts.add(j == i
+              ? nameOfFloor(idx[i])
+              : str.format(StringKey.issueFloorRange,
+                  {'from': nameOfFloor(idx[i]), 'to': nameOfFloor(idx[j])}));
+          i = j + 1;
+        }
+        return parts.join(', ');
+      }
+
       warnings.add(DesignIssue(
         severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'downfeed-below-target',
@@ -1303,10 +1350,17 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             ? StringKey.issueDownfeedBelowTargetTitle
             : StringKey.issueDownfeedBelowComfortTitle),
         message: str.format(
-            belowSni
-                ? StringKey.issueDownfeedBelowTargetMessage
-                : StringKey.issueDownfeedBelowComfortMessage,
+            gravityNamed
+                ? (belowSni
+                    ? StringKey.issueDownfeedBelowTargetGravityMessage
+                    : StringKey.issueDownfeedBelowComfortGravityMessage)
+                : belowSni
+                    ? StringKey.issueDownfeedBelowTargetMessage
+                    : StringKey.issueDownfeedBelowComfortMessage,
             {
+          if (gravityNamed) 'floors': floorsText(),
+          if (gravityNamed)
+            'boosters': [for (final b in boosters) b.nodeId].join(', '),
           'floor': floorName,
           'sni': sniMin.inKiloPascals.toStringAsFixed(0),
           'residual': residualShown.inKiloPascals.toStringAsFixed(0),

@@ -168,7 +168,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Jockey flow basis:** resolved by A1 (both 0.3155 L/s).
-- **(e) Two booster heads.** The gravity solve asks for a 22.230 m booster (KSb11). The Review's `downfeed-below-target` recommends a +15.3 m booster for Lantai 10 (KSb9), which the drawn side-branch booster cannot serve.
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
 
 ### Backlog closed (2026-11-13)
@@ -179,6 +178,7 @@ _(empty)_
 - **Feeder discrimination — B-1 (bounded).** Nothing grows here: both feeders' floor rungs sit above their own boards' incomers, so the two `non-selective` stay (now naming a selective, time-delayed / category B device); no `outgoing-exceeds-incomer`.
 - **(c) Hose outlet height — backlog D-1.** A hydrant box now sits at its floor + 1.2 m (`kHoseOutletHeightM`, 39.7 m on Lantai 12), the height the standpipe lift and the outlet pressures use: each box leg drops 3.2 − 1.2 = 2.0 m from the ceiling main (was 2.1), hydrant index friction 7.852 → 7.847 m (below the 15 m allowance, the pump stays 31.545 L/s @ 125.036 m).
 - **(d) Sprinkler head height — backlog D-2.** A head node now sits at its floor's ceiling plane (41.7 m on Lantai 12, was 39.6 m), the datum of its run (no leg) and of the sprinkler lift: displayed elevation, static and BOM agree; no figure moves.
+- **(e) Two booster heads — backlog D-7.** The drawn booster BS keeps its 22.230 m duty (floors 10-11); the Review's `downfeed-below-target` now reads 'Lantai 6 to Lantai 10 are fed by gravity and are NOT served by the drawn booster (BS): a separate booster of about +15.3 m for these floors is recommended' (EN + ID), so the +15.3 m no longer reads as a second duty for BS. No number changes.
 - **(g) PRV on a riser — backlog D-4.** `insertComponentOnRiser` places an inline component on a riser at a chosen floor (two riser segments, one undo step; edge inspector 'Insert on riser'). The app tests now draw the Lantai 1 PRV with it: every zone, pressure, duty, BOM line and finding equals the spliced fixture (fingerprint test). The tower keeps its spliced fixture: drawn on the riser, its seven stations drop the splice's three 0.000 m cold-water run BOM lines (DN40 / 65 / 80), all else equal.
 
 

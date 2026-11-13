@@ -766,6 +766,11 @@ enum StringKey {
   // Round 32 (binding-1) — SNI minimum met, below the comfort target (info).
   issueDownfeedBelowComfortTitle,
   issueDownfeedBelowComfortMessage, // {floor} {residual} {sni} {target} {head}
+  // Backlog D-7 — the same two findings when drawn booster(s) serve only
+  // some floors: the recommendation names the gravity floors it concerns.
+  issueDownfeedBelowTargetGravityMessage, // + {floors} {boosters}
+  issueDownfeedBelowComfortGravityMessage, // + {floors} {boosters}
+  issueFloorRange, // {from} {to}
   issueUpfeedBelowComfortTitle,
   issueUpfeedBelowComfortMessage, // {floor} {residual} {sni} {target}
   complianceDetailPressureSniMet,
@@ -2343,6 +2348,11 @@ const Map<StringKey, String> _en = {
       'Roof tank meets the SNI minimum, below the comfort target',
   StringKey.issueDownfeedBelowComfortMessage:
       'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. A booster of about +{head} m is recommended.',
+  StringKey.issueDownfeedBelowTargetGravityMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the SNI 8153 minimum of {sni} kPa (target {target} kPa). {floors} are fed by gravity and are NOT served by the drawn booster ({boosters}): raise the tank or give these floors their own booster of about +{head} m.',
+  StringKey.issueDownfeedBelowComfortGravityMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. {floors} are fed by gravity and are NOT served by the drawn booster ({boosters}): a separate booster of about +{head} m for these floors is recommended.',
+  StringKey.issueFloorRange: '{from} to {to}',
   StringKey.issueUpfeedBelowComfortTitle:
       'Pump supply meets the SNI minimum, below the comfort target',
   StringKey.issueUpfeedBelowComfortMessage:
@@ -4052,6 +4062,11 @@ const Map<StringKey, String> _id = {
       'Tangki atap memenuhi minimum SNI, di bawah target kenyamanan',
   StringKey.issueDownfeedBelowComfortMessage:
       'Fikstur terburuk di "{floor}" menerima {residual} kPa dari tangki atap: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. Disarankan booster sekitar +{head} m.',
+  StringKey.issueDownfeedBelowTargetGravityMessage:
+      'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah minimum SNI 8153 sebesar {sni} kPa (target {target} kPa). {floors} dilayani secara gravitasi dan TIDAK dilayani oleh booster yang digambar ({boosters}): tinggikan tangki atau beri lantai-lantai ini booster tersendiri sekitar +{head} m.',
+  StringKey.issueDownfeedBelowComfortGravityMessage:
+      'Fikstur terburuk di "{floor}" menerima {residual} kPa dari tangki atap: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. {floors} dilayani secara gravitasi dan TIDAK dilayani oleh booster yang digambar ({boosters}): disarankan booster terpisah sekitar +{head} m untuk lantai-lantai ini.',
+  StringKey.issueFloorRange: '{from} s.d. {to}',
   StringKey.issueUpfeedBelowComfortTitle:
       'Suplai pompa memenuhi minimum SNI, di bawah target kenyamanan',
   StringKey.issueUpfeedBelowComfortMessage:

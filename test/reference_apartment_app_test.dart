@@ -1082,6 +1082,28 @@ void main() {
         expect(hits.length, 1);
         expect(hits.single.severity, IssueSeverity.info);
         expect(hits.single.locate?.nodeId, 'KSb9');
+        // Backlog D-7 (apartment backlog e) — the +15.3 m figure is for the
+        // GRAVITY floors below the 225 kPa target that the drawn side-branch
+        // booster BS (floors 10-11) does not serve: Lantai 6..10 (indices
+        // 5..9; Lantai 1 is behind the PRV at 255, Lantai 2..5 are at or
+        // above 225). The message names them and says BS does not serve
+        // them; no number changes (75 kPa, 49, 225, +15.3 m).
+        expect(
+          hits.single.message,
+          'The worst-served fixture on "Lantai 10" gets 75 kPa from the roof '
+          'tank: the SNI 8153 minimum of 49 kPa is met, but it is below the '
+          '225 kPa comfort target. Lantai 6 to Lantai 10 are fed by gravity '
+          'and are NOT served by the drawn booster (BS): a separate booster '
+          'of about +15.3 m for these floors is recommended.',
+        );
+        c.read(localeProvider.notifier).set(AppLocale.id);
+        final id = c
+            .read(designIssuesProvider)
+            .singleWhere((i) => i.kind == 'downfeed-below-target');
+        expect(id.message, contains('Lantai 6 s.d. Lantai 10 dilayani secara '
+            'gravitasi dan TIDAK dilayani oleh booster yang digambar (BS)'));
+        expect(id.message, contains('+15.3 m'));
+        c.read(localeProvider.notifier).set(AppLocale.en);
       },
     );
 
