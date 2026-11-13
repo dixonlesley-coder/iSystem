@@ -338,14 +338,21 @@ bool isSelfContainedAcUnit(NodeComponent? c) =>
 /// Detect every per-ELEMENT connectivity defect in [net]:
 ///   • [NetworkElementDefectKind.orphan] — a node in [Network.nodes] with degree
 ///     0 (connected to nothing), except a self-contained AC unit
-///     ([isSelfContainedAcUnit]);
+///     ([isSelfContainedAcUnit]) that lies INSIDE a drawn room — the caller
+///     passes the ids of such units in [selfContainedUnitsInRooms] (backlog
+///     D-6, shophouse backlog h: the engine holds no rooms; the app resolves
+///     each unit's owning room). A cassette / split unit outside every room
+///     (or with no rooms passed) is an orphan like any other node;
 ///   • [NetworkElementDefectKind.looseEnd] — a degree-1 [NodeRole.main] that is
 ///     not a valid termination ([_isValidTermination]).
 ///
 /// A node's degree counts every incident edge across the WHOLE graph (all
 /// services), matching [Network.edgesAt]. Pure + read-only — never sizes.
 /// Deterministic: the result is sorted by node id.
-List<NetworkElementDefect> networkElementDefects(Network net) {
+List<NetworkElementDefect> networkElementDefects(
+  Network net, {
+  Set<String> selfContainedUnitsInRooms = const {},
+}) {
   // Incident edges per node across every service. An edge is counted once per
   // node (a degenerate self-loop counts once), mirroring Network.edgesAt.
   final incident = <String, List<NetEdge>>{};
@@ -363,7 +370,11 @@ List<NetworkElementDefect> networkElementDefects(Network net) {
       // self-contained room unit (refrigerant + power only): it needs no
       // pipe or duct, so standing alone is its normal state. A ducted AC
       // and an FCU still need their ducts / water and stay flagged.
-      if (isSelfContainedAcUnit(node.component)) continue;
+      // Backlog D-6 — only inside a drawn room (the room it conditions).
+      if (isSelfContainedAcUnit(node.component) &&
+          selfContainedUnitsInRooms.contains(node.id)) {
+        continue;
+      }
       defects.add(NetworkElementDefect(
         nodeId: node.id,
         kind: NetworkElementDefectKind.orphan,

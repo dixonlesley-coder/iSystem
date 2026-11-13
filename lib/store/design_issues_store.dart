@@ -229,8 +229,22 @@ String _verifyLabel(StandardValue<Object?> v) {
 /// The unconnected-element defects of the (drag-frozen) network, computed ONCE
 /// per edit for the issue fan-in and its batch actions (drafting-feel perf —
 /// each read used to re-walk the whole network).
-final networkElementDefectsProvider = Provider<List<NetworkElementDefect>>(
-    (ref) => networkElementDefects(ref.watch(sizingNetworkProvider)));
+///
+/// Backlog D-6 — a cassette / split-wall AC is exempt from the orphan check
+/// only when it lies inside a drawn room ([roomUnitOwnerId], the same
+/// smallest-containing-room rule the cooling shares use); the app passes
+/// those ids to the pure engine judge.
+final networkElementDefectsProvider =
+    Provider<List<NetworkElementDefect>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final rooms = ref.watch(roomAreasProvider);
+  return networkElementDefects(net, selfContainedUnitsInRooms: {
+    for (final n in net.nodes)
+      if (isSelfContainedAcUnit(n.component) &&
+          roomUnitOwnerId(n, rooms) != null)
+        n.id,
+  });
+});
 
 final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final net = ref.watch(sizingNetworkProvider);

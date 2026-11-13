@@ -460,8 +460,8 @@ class SniProfile implements StandardsProfile {
         'urinal, flush valve: UBAP 5 (private / public), 6 (assembly); '
         'DFU 4; min 98 kPa (flush valve)',
         unit: 'table',
-        citation: 'UPC 2012 Table 610.3 / IPC Table 709.1 — urinal, flush '
-            'valve (NOT a confirmed SNI 8153 Tabel 3 row)',
+        citation: 'UPC 2012 Table 610.3 / IPC Table 709.1 — urinal with '
+            'flushometer (NOT a confirmed SNI 8153 Tabel 3 row)',
         status: VerificationStatus.notAnSniClause,
         note: 'A flush-valve urinal loads 5 UBAP (6 in assembly; private '
             'takes the public figure, never below) and 4 DFU, and is a '

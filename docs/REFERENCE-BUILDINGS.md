@@ -65,13 +65,12 @@ _(empty)_
 - **F1:** units B and C were solved as upfeed "extra supply components" from their ground tanks (no gravity field, RT at −146 kPa, booster sized 36.998 m). Every roof-tank component of a downfeed project is now its own downfeed system (`extraDownfeedTanksProvider`); B = C = A.
 - **F2:** the meter stub WM → GT sized DN15 at 0 L/s. A root tank's mains feed now carries what the tank delivers (DN20).
 - **F3:** the stack vent was sized on the top junction's 5 DFU (DN40). It now carries the stack base's 17 DFU (DN50).
-- **F4:** a cassette AC in a room was flagged `unconnected-orphan`. Cassette and split-wall units need no pipe or duct and are exempt.
+- **F4:** a cassette AC in a room was flagged `unconnected-orphan`. Cassette and split-wall units need no pipe or duct and are exempt (inside a drawn room, backlog D-6).
 
 ### Backlog (outside scope, not fixed)
 
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
-- **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
 
 ### Backlog closed (2026-11-13)
 
@@ -80,6 +79,7 @@ _(empty)_
 - **(e) Transfer pump label — closed by B-4.** TP_A/B/C are minted `MepLoadSource.transferPump` ('Transfer pump' / 'Pompa transfer'), no figure changed.
 - **(f) Feeder discrimination — closed by B-1 (bounded).** An auto-sized feeder cable grows by at most two section sizes (and never past the upstream incomer) so its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A, one size (VD 0.65 / 0.86 / 1.08 %); MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A, one size. No `non-selective` is left.
 - **(d) Water meter at ceiling level — backlog D-3.** A water meter now sits at its floor + 0.5 m (`kWaterMeterHeightM`): the stub WM → GT measures 3.0 + 0.5 = 3.5 m (was 6.7 with the 3.7 m ceiling leg); flow 0.56389 L/s and DN20 unchanged.
+- **(h) Orphan exemption ignores the room — backlog D-6.** The cassette / split-wall exemption now applies only to a unit inside a drawn room (the app passes `roomUnitOwnerId`'s units to the engine judge): unit A's cassettes stay exempt; a split unit on Lantai 2 (no room) or the cassettes with the room not drawn raise `unconnected-orphan`.
 
 
 ## 3. Office (kantor 4 lantai)

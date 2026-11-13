@@ -2,6 +2,7 @@
 // Each group pins one item from first principles.
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
@@ -239,9 +240,35 @@ void main() {
 
     test('listed in the verify checklist (not an SNI clause)', () {
       final v = sni.verifyChecklist
-          .where((x) => x.citation.contains('urinal, flush valve'));
+          .where((x) => x.citation.contains('urinal with flushometer'));
       expect(v, hasLength(1));
       expect(v.single.status, VerificationStatus.notAnSniClause);
+    });
+  });
+
+  group('D-6 — the AC orphan exemption needs the room', () {
+    final net = Network(nodes: [
+      for (final c in [NodeComponent.acCassette, NodeComponent.acSplitWall])
+        NetNode(
+            id: c.name,
+            sheetId: 's0',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: c.role,
+            component: c),
+    ]);
+    Set<String> orphans(Set<String> inRooms) => {
+          for (final d in networkElementDefects(net,
+              selfContainedUnitsInRooms: inRooms))
+            if (d.kind == NetworkElementDefectKind.orphan) d.nodeId,
+        };
+    test('outside a room (or no rooms passed) both units are orphans', () {
+      expect(orphans(const {}), {'acCassette', 'acSplitWall'});
+    });
+    test('inside a room the unit is exempt', () {
+      expect(orphans({'acCassette'}), {'acSplitWall'});
+      expect(orphans({'acCassette', 'acSplitWall'}), isEmpty);
     });
   });
 }

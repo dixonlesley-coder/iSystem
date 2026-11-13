@@ -253,5 +253,36 @@ void main() {
       expect(kinds, contains('unconnected-orphan:DUCTED'));
       expect(kinds, contains('unconnected-orphan:FCU'));
     });
+
+    // Backlog D-6 (shophouse backlog h) — the exemption holds only INSIDE a
+    // drawn room: a split / cassette unit outside every room (here on
+    // Lantai 2, where no room is drawn) is flagged like any other orphan,
+    // and with the room not drawn unit A's cassettes are flagged too.
+    test('outside any room a split / cassette unit is an orphan', () {
+      final shop = buildShophouse();
+      final net = Network(nodes: [
+        ...shop.network.nodes,
+        NetNode(
+            id: 'SPLIT_L2',
+            sheetId: kShopSheetL2,
+            x: 450,
+            y: 500,
+            floorIndex: 1,
+            role: NodeComponent.acSplitWall.role,
+            component: NodeComponent.acSplitWall),
+      ], edges: shop.network.edges);
+      final c = _load(shop, net, room: true);
+      addTearDown(c.dispose);
+      final kinds = {for (final i in c.read(designIssuesProvider)) i.kind};
+      expect(kinds, contains('unconnected-orphan:SPLIT_L2'));
+      expect(kinds, isNot(contains('unconnected-orphan:$kShopAcNodeId')));
+
+      final bare = _load(shop, shop.network, room: false);
+      addTearDown(bare.dispose);
+      final bareKinds = {
+        for (final i in bare.read(designIssuesProvider)) i.kind,
+      };
+      expect(bareKinds, contains('unconnected-orphan:$kShopAcNodeId'));
+    });
   });
 }
