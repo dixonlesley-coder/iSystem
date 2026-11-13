@@ -5517,11 +5517,16 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
     maxY: maxY,
     legend: [
       const SldLegendEntry('Source', 'Supply source / equipment'),
-      const SldLegendEntry('G', 'Standby generator (genset)'),
+      // Drawing backlog I-4 — a code is keyed only when the sheet prints it
+      // (the transformer / capacitor bank are captioned in full since F7).
+      if (_printsCode(prims, 'G'))
+        const SldLegendEntry('G', 'Standby generator (genset)'),
       const SldLegendEntry('Board', 'Distribution board / bus'),
-      if (oneLine.nodeOfKind(PowerNodeKind.transformer) != null)
+      if (oneLine.nodeOfKind(PowerNodeKind.transformer) != null &&
+          _printsCode(prims, 'TX'))
         const SldLegendEntry('TX', 'Service transformer (MV / LV)'),
-      if (oneLine.nodeOfKind(PowerNodeKind.capacitor) != null)
+      if (oneLine.nodeOfKind(PowerNodeKind.capacitor) != null &&
+          _printsCode(prims, 'CAP'))
         const SldLegendEntry('CAP', 'Capacitor bank (LV bus)'),
       if (_hasOpenCoupler(prims)) _kCouplerLegend,
     ],
@@ -5535,3 +5540,10 @@ String _busSpec(BusbarResult b) => b.parallelBars > 1
     ? '${b.parallelBars}x(${_num(b.widthMm)}x${_num(b.thicknessMm)}) '
         '${_num(b.csaMm2)}mm2'
     : '${_num(b.csaMm2)}mm2';
+
+/// Drawing backlog I-4 — whether a label of [prims] prints [code] as a
+/// whole token (so a legend never keys a code the sheet does not show).
+bool _printsCode(List<SldPrim> prims, String code) {
+  final re = RegExp('(?<![A-Za-z])${RegExp.escape(code)}(?![A-Za-z])');
+  return prims.whereType<SldLabel>().any((l) => re.hasMatch(l.text));
+}

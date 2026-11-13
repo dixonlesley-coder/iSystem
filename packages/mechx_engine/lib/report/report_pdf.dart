@@ -510,7 +510,13 @@ class _Typesetter {
                 _wrap(body.first[c], fs, widths[c] - 2 * padX).length);
           }
         }
-        return headLines * lead + 2 * padY + rowLines * lead + 2 * padY + 4;
+        // Drawing backlog I-4 — a short table is kept whole ([table]).
+        final rowsKept =
+            body.length <= kReportTableMinCarryRows ? body.length : 1;
+        return headLines * lead +
+            2 * padY +
+            math.max(1, rowsKept) * (rowLines * lead + 2 * padY) +
+            4;
       case RptFigure():
         final plan = _planFigure(b.sheet);
         return math.min(plan.firstChunkH, 120.0) + 14 + 16;
@@ -660,18 +666,39 @@ class _Typesetter {
       _y -= headH;
     }
 
+    final wrappedRows = [
+      for (final row in bodyCells)
+        [
+          for (var c = 0; c < cols; c++)
+            _wrap(row[c], fs, widths[c] - 2 * padX),
+        ],
+    ];
+    final rowHs = [
+      for (final w in wrappedRows)
+        w.map((l) => l.length).reduce(math.max) * lead + 2 * padY,
+    ];
+    // Drawing backlog I-4 (widow rule) — a short table (at most
+    // [kReportTableMinCarryRows] rows) starts on a page that holds it whole,
+    // and a split never carries fewer than that many rows to the next page:
+    // a schedule never issues a page holding only its last row or two.
+    const carry = kReportTableMinCarryRows;
+    final whole = headH + rowHs.fold<double>(0, (a, h) => a + h) + 4;
+    final short = rowHs.length <= carry && whole <= _pageFlowH;
     // Room for the header + at least one body row before starting.
-    _ensure(headH + lead + 2 * padY + 4);
+    _ensure(short ? whole : headH + lead + 2 * padY + 4);
     drawHeaderBand();
 
-    for (final row in bodyCells) {
-      final wrapped = [
-        for (var c = 0; c < cols; c++)
-          _wrap(row[c], fs, widths[c] - 2 * padX),
-      ];
-      final rowLines = wrapped.map((l) => l.length).reduce(math.max);
-      final rowH = rowLines * lead + 2 * padY;
-      if (_y - rowH < _bottomLimit) {
+    var onPage = 0;
+    for (var r = 0; r < bodyCells.length; r++) {
+      final wrapped = wrappedRows[r];
+      final rowH = rowHs[r];
+      final left = rowHs.length - r;
+      final tailFits = _y -
+              rowHs.sublist(r).fold<double>(0, (a, h) => a + h) >=
+          _bottomLimit;
+      final widow = left == carry && onPage > 0 && !tailFits;
+      if (_y - rowH < _bottomLimit || widow) {
+        onPage = 0;
         // Split: close nothing (the band bottom rule already drawn), repeat
         // the header on the fresh page.
         _newPage();
@@ -692,6 +719,7 @@ class _Typesetter {
         _line(xs[c], top, xs[c], top - rowH, w: 0.4, color: _inkHairline);
       }
       _y -= rowH;
+      onPage++;
     }
     // Heavier closing rule under the table.
     _line(_margin, _y, _pageW - _margin, _y, w: 0.8);
@@ -1199,3 +1227,7 @@ Uint8List reportBlocksToPdf(
 
   return _assemblePdf([coverWithBlock, ...contentPages]);
 }
+
+/// Drawing backlog I-4 — the fewest body rows a split table carries to the
+/// next page (and the most rows a table may have to be kept whole).
+const int kReportTableMinCarryRows = 3;

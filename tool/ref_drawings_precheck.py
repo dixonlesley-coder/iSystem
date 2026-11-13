@@ -16,8 +16,11 @@ and ROOT/INDEX.md (sheet tables + summary counts).
 Items checked (docs/DRAFTING-CHECKLIST.md): 1/3 title block fields, 4 legend
 text inside its LEGEND box (scripted part), 2/23
 numbers unique + drawing list, 5 smallest text pt, 6 stamped overlap warning,
-7 garbled glyphs, 21 panel-schedule totals add up to the DAYA rows (E-201 /
-E-601), 24 cross-document figures, 25 PDF vs DXF text. Report only:
+7 garbled glyphs, 9 every legend code is printed on its sheet (scripted
+part, plans + risers + single-lines + schedules), 6 the supply / drainage
+notes clear of linework, 21 panel-schedule totals add up to the DAYA rows
+(E-201 / E-601), 23 no orphan schedule page, 24 cross-document figures, 25
+PDF vs DXF text. Report only:
 it never edits a drawing.
 
 Needs: pdftoppm + pdftotext (poppler), ImageMagick `montage`, python3 with
@@ -663,6 +666,142 @@ def run_building(root, b):
                              f'"{b[:70]}"' for b in bad[:3]))
                 else:
                     emit(4, 'PASS', lab, 'legend text inside its box')
+
+    # 9 (scripted part, backlog I-4) — a legend never keys a code the sheet
+    # does not print: on every page carrying a LEGEND box, each one-token
+    # code (`CW`, `PRV`, `NYM`, `TX`...) must appear in the page text outside
+    # the legend; a riser-tag example (`CW-R3`) needs any `CW-R<n>`. Line-
+    # style classes (Normal / Essential / Source / Earth / Board) are keyed by
+    # colour and gated in the engine; multi-word codes are skipped.
+    lines += ['', '## Item 9 - every legend code is printed on its sheet '
+              '(scripted part)']
+    style = {'Normal', 'Essential', 'Source', 'Earth', 'Board'}
+    for pg in pages:
+        tl = pg['text'].splitlines()
+        idx, on = [], False
+        for i, l in enumerate(tl):
+            st = l.strip()
+            if st in ('LEGEND', 'LEGENDA'):
+                on = True
+                continue
+            if on:
+                if not st or st.startswith(tuple(TB_LABELS)) or \
+                        st.startswith('CLIENT'):
+                    on = False
+                    continue
+                idx.append(i)
+        if not idx:
+            continue
+        lab = f'{short(pg["stem"], project)} p{pg["page"]}'
+        sidx = set(idx)
+        body = '\n'.join(l for i, l in enumerate(tl) if i not in sidx)
+        missing = []
+        for i in idx:
+            l = tl[i].strip()
+            if ' - ' not in l:
+                continue
+            code = l.split(' - ')[0].strip()
+            if not code or ' ' in code or code in style:
+                continue
+            if re.fullmatch(r'[A-Z]+-R\d+', code):
+                pat = re.escape(code.split('-')[0]) + r'-R\d+'
+            else:
+                pat = r'(?<![A-Za-z])' + re.escape(code) + r'(?![A-Za-z])'
+            if not re.search(pat, body):
+                missing.append(code)
+        if missing:
+            emit(9, 'FAIL', lab, 'legend keys code(s) the sheet does not '
+                 'print: ' + ', '.join(missing))
+        else:
+            emit(9, 'PASS', lab, 'every legend code printed on the sheet')
+
+    # 6 (scripted part, backlog I-4) — the supply-capacity note (DEMAND >
+    # DECLARED ... SUBSCRIBED DAYA) and the drainage terminus note (KE
+    # SALURAN PEMBUANGAN) are never struck by a line: no stroked segment
+    # crosses one of their words (the word box shrunk by a hairline).
+    lines += ['', '## Item 6 - supply / drainage notes clear of linework '
+              '(scripted part)']
+    note_words = {'DEMAND', 'DECLARED', 'SUBSCRIBED', 'SALURAN', 'PEMBUANGAN'}
+
+    def seg_hits(a, b, box):
+        (x1, y1), (x2, y2) = a, b
+        bx0, by0, bx1, by1 = box
+        t0, t1 = 0.0, 1.0
+        dx, dy = x2 - x1, y2 - y1
+        for pp, q in ((-dx, x1 - bx0), (dx, bx1 - x1), (-dy, y1 - by0),
+                      (dy, by1 - y1)):
+            if pp == 0:
+                if q < 0:
+                    return False
+                continue
+            t = q / pp
+            if pp < 0:
+                if t > t1:
+                    return False
+                t0 = max(t0, t)
+            else:
+                if t < t0:
+                    return False
+                t1 = min(t1, t)
+        return t0 < t1
+
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-(riser-sld|electrical-[a-z-]+)$', st):
+            continue
+        with pdfplumber.open(pdf) as doc:
+            for n, pgp in enumerate(doc.pages, 1):
+                ws = [w for w in pgp.extract_words()
+                      if w['text'] in note_words]
+                if not ws:
+                    continue
+                segs = []
+                for l in pgp.lines:
+                    pts = l.get('pts') or [(l['x0'], l['top']),
+                                           (l['x1'], l['bottom'])]
+                    segs += list(zip(pts, pts[1:]))
+                for c in pgp.curves:
+                    pts = c.get('pts') or []
+                    segs += list(zip(pts, pts[1:]))
+                for r in pgp.rects:
+                    x0, t, x1, b = r['x0'], r['top'], r['x1'], r['bottom']
+                    q = [(x0, t), (x1, t), (x1, b), (x0, b), (x0, t)]
+                    segs += list(zip(q, q[1:]))
+                hit = sorted({w['text'] for w in ws if any(
+                    seg_hits(a, b, (w['x0'] + 0.4, w['top'] + 0.8,
+                                    w['x1'] - 0.4, w['bottom'] - 0.8))
+                    for a, b in segs)})
+                lab = f'{short(st, project)} p{n}'
+                if hit:
+                    emit(6, 'FAIL', lab, 'note struck by a line: '
+                         + ', '.join(hit))
+                else:
+                    emit(6, 'PASS', lab, 'supply / drainage note clear of '
+                         'linework')
+
+    # 23 (scripted part, backlog I-4) — no orphan schedule page: the last
+    # page of a multi-page equipment schedule carries at least three body
+    # lines (a table never strands its last row or two, nor a footnote tail).
+    lines += ['', '## Item 23 - no orphan schedule page (scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not st.endswith('-equipment-schedule'):
+            continue
+        sp = sorted((q for q in pages if q['pdf'] == pdf),
+                    key=lambda q: q['page'])
+        if len(sp) < 2:
+            continue
+        last = sp[-1]
+        body = [l.strip() for l in last['text'].splitlines()
+                if l.strip() and not l.strip().startswith(tuple(TB_LABELS))
+                and not re.search(r'Page \d+ of \d+$', l.strip())
+                and not l.strip().startswith(('Tag ', 'CLIENT'))]
+        lab = f'{short(st, project)} p{last["page"]}'
+        if len(body) < 3:
+            emit(23, 'FAIL', lab, f'orphan page: {len(body)} body line(s) '
+                 + '; '.join(f'"{b[:40]}"' for b in body))
+        else:
+            emit(23, 'PASS', lab, f'{len(body)} body lines on the last page')
 
     # 7 — garbled glyphs.
     lines += ['', '## Item 7 - garbled glyphs (? tokens, U+FFFD, tofu '

@@ -291,6 +291,13 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   issues detail sheets.
 
 ### Backlog closed (2026-11-13)
+- I-4 Reviewer observations: the house demand-vs-declared note, the apartment drain
+  note and the office E-101 tag gap were already clear (now scripted: pre-check
+  item 6 notes clear of linework); shophouse M-601 no longer strands two rows on its
+  last page (table widow rule, >= 3 rows carried; pre-check item 23 orphan page);
+  tower E-501 no longer keys `TX` / `CAP` it does not print (pre-check item 9: every
+  legend code printed on its sheet, now over risers, single-lines and schedules as
+  well as plans and layouts).
 - I-3 Detail sheets: fewer, fuller. (a) a cluster whose detail would not plot at
   least twice as large as its plan is keyed on the plan instead (key circles + PIPE
   KEY table, no sheet; none of the five buildings has one); (b) a plan's details are
