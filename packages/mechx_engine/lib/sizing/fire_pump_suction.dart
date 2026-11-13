@@ -218,6 +218,21 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         (sizing[x.id]?.flow.cubicMetersPerSecond ?? 0) >= q * (1 - 1e-9));
   }
 
+  // Reference tower T1 (2026-11-13) — past a discharge HEADER (the first
+  // junction) an outflow is still the pump's discharge pipe only when its
+  // OWN sized flow is the pump's full rated flow (a single onward main). A
+  // header splitting the rated flow over two standpipe mains (each its own
+  // riser's 500 gpm of a 750 gpm pump) or teeing a sprinkler feed off is
+  // the end of the discharge piping: every outflow keeps its own class size.
+  // Supersedes the Round-65 flow-ratio test (`isBranchOffMain`) past a
+  // header; the O1 rule at the pump node itself is unchanged.
+  bool carriesRated(NetEdge e, String pump) {
+    final q = ratedFlowByPump[pump]?.cubicMetersPerSecond;
+    final own = sizing[e.id]?.flow.cubicMetersPerSecond;
+    if (q == null || own == null || q <= 0) return true;
+    return own >= q * (1 - 1e-9);
+  }
+
   for (final p in [...pumps]..sort()) {
     // Suction: upstream through every node that is not a source (tank /
     // plant / inlet) or another mover.
@@ -277,7 +292,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         // riser off a bare degree-2 node is): only a riser reached past the
         // header through a further junction keeps the standpipe's class size.
         if (e.kind == EdgeKind.riser) {
-          if (!pastHeader || (atHeader && !isBranchOffMain(e, cur, p))) {
+          if (!pastHeader || (atHeader && carriesRated(e, p))) {
             discharge.add(e.id);
             rate(e.id, p);
           }
@@ -290,7 +305,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         // same node carries the whole rated flow is a separate system's
         // feed (a sprinkler riser teed off the hydrant pump's header): it
         // keeps its own class size, never the pump's DN125 at 31.5 L/s.
-        if (pastHeader && isBranchOffMain(e, cur, p)) continue;
+        if (pastHeader && !carriesRated(e, p)) continue;
         discharge.add(e.id);
         rate(e.id, p);
         final next = other(e, cur);
