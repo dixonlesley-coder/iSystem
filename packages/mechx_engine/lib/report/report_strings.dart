@@ -460,6 +460,9 @@ enum RptStringKey {
   phaseCell3ph,
   olGenStandby,
   olGenSizing,
+  olGenStepLoad,
+  olGenStepLoadOk,
+  olGenStepLoadStaged,
   olGenSizingRunning,
   olGenSizingMotorStart,
   olGenSizingDisconnection,
@@ -1002,6 +1005,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3ph',
   RptStringKey.olGenStandby: 'Standby',
+  RptStringKey.olGenStepLoad:
+      'Genset step load on transfer: {step} kW in one step vs the allowable '
+          'first step {allow} kW ({pct} % of {rated} kW rated) — {verdict}',
+  RptStringKey.olGenStepLoadOk: 'OK',
+  RptStringKey.olGenStepLoadStaged:
+      'above it: stage the pick-up (load-shed groups, timed starters)',
   RptStringKey.olGenSizing:
       'Genset sizing: {kva} kVA, governed by {reason} (running {run} kVA, '
           'motor start {start} kVA{ads})',
@@ -1549,6 +1558,14 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3 fasa',
   RptStringKey.olGenStandby: 'Siaga',
+  RptStringKey.olGenStepLoad:
+      'Beban langkah genset saat transfer: {step} kW sekaligus vs langkah '
+          'pertama yang diizinkan {allow} kW ({pct} % dari {rated} kW '
+          'pengenal) — {verdict}',
+  RptStringKey.olGenStepLoadOk: 'OK',
+  RptStringKey.olGenStepLoadStaged:
+      'melebihi: ambil beban bertahap (grup pelepasan beban, starter '
+          'bertunda)',
   RptStringKey.olGenSizing:
       'Ukuran genset: {kva} kVA, ditentukan oleh {reason} (beban jalan '
           '{run} kVA, start motor {start} kVA{ads})',

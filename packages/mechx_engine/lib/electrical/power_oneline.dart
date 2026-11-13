@@ -109,12 +109,17 @@ class PowerOneLine {
   /// governing reason) the generator node prints; null with no standby set.
   final GeneratorResult? gensetSizing;
 
+  /// Backlog E-4 — the standby set's block-load (step) check on ATS
+  /// transfer; null with no standby set (or a primary genset plant).
+  final GensetStepLoadResult? gensetStepLoad;
+
   const PowerOneLine({
     required this.nodes,
     required this.edges,
     required this.interlocks,
     this.gensetStart,
     this.gensetSizing,
+    this.gensetStepLoad,
   });
 
   /// First node of a kind, or null.
@@ -180,6 +185,9 @@ PowerOneLine buildPowerOneLine(
   // Backlog E-3 — the MV transformer feeder's device (fuse / CB + relay),
   // printed beside the MV main on the utility head. Null ⇒ byte-identical.
   String? mvDevice,
+  // Backlog E-4 — the real power the standby set picks up in ONE step on ATS
+  // transfer (the backed boards' demand W). Null ⇒ no step check.
+  Power? stepLoad,
   ({String head, String sub})? capacitor,
   // Backlog B-3 — the disconnection floor of an unforced set
   // (`gensetAdsFloorFor`). Null ⇒ byte-identical.
@@ -586,6 +594,12 @@ PowerOneLine buildPowerOneLine(
     edges: edges,
     interlocks: interlocks,
     gensetStart: genPrimary ? plantStart : gensetStart,
+    gensetStepLoad: genPrimary || genResult == null || stepLoad == null
+        ? null
+        : gensetStepLoadCheck(
+            ratedKva: ApparentPower.kilovoltAmperes(
+                genResult.ratingKva.inKilovoltAmperes * genResult.units),
+            stepW: stepLoad),
     gensetSizing: genPrimary ? null : genResult,
   );
 }

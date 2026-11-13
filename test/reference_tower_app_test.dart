@@ -1873,6 +1873,27 @@ void main() {
       expect(adv.powerFactor.existingPf, closeTo(0.961, 5e-4));
     });
 
+    test('backlog E-4: genset step load 302.8 kW <= 0.6 x 640 = 384 kW, OK',
+        () {
+      // On ATS transfer the 800 kVA set picks up PP-E (lifts, emergency
+      // lighting, the MEP board) in one step: 302 847 W = 302.8 kW (the
+      // `gensetBackupDemandW` basis, backup fraction 0). Allowable first
+      // step 0.6 x 800 kVA x 0.8 = 0.6 x 640 = 384 kW >= 302.8 => OK, no
+      // staged pick-up.
+      final st = c.read(electricalAdvancedProvider).powerOneLine!
+          .gensetStepLoad!;
+      expect(st.stepKw, closeTo(302.847, 1e-9));
+      expect(st.ratedKw, closeTo(640, 1e-9));
+      expect(st.allowableKw, closeTo(384, 1e-9));
+      expect(st.exceeded, isFalse);
+      expect(
+          c
+              .read(electricalAdvancedProvider)
+              .warnings
+              .where((w) => w.code == 'genset-step-load-staged'),
+          isEmpty);
+    });
+
     test('Review: deliberate findings present, the rest absent', () {
       final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
       int n(String k) => kinds.where((x) => x == k).length;

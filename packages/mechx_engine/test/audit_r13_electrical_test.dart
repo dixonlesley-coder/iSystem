@@ -434,8 +434,17 @@ void main() {
       expect(kva * 1000, greaterThanOrEqualTo(essentialVa));
       // Round 56 — the study also judges ADS on the genset and the
       // enclosure rise (120 kW heater boards); no GENSET-backup warning.
-      expect(study.warnings.where((w) => w.code.startsWith('genset-')),
+      // Backlog E-4 — the one-step pick-up of the 120 kW essential board is
+      // an INFO (staged pick-up) when above 0.6 x kVA x 0.8; never a
+      // genset-backup warning.
+      expect(
+          study.warnings.where((w) =>
+              w.code.startsWith('genset-') &&
+              w.code != 'genset-step-load-staged'),
           isEmpty);
+      expect(
+          study.warnings.any((w) => w.code == 'genset-step-load-staged'),
+          120 > 0.6 * kva * 0.8);
     });
 
     test('a forced nameplate below the essential demand is warned', () {
@@ -444,11 +453,17 @@ void main() {
       final study = computeAdvancedStudy(p, proj, sys);
       // 100 kVA < the 120 kVA essential VA (cos φ 1 heater), AND — Round 17,
       // the engine's kW limit — 0.8 × 100 = 80 kW < the 120 kW essential W.
+      // Backlog E-4 — and the 120 kW one-step pick-up is above 0.6 x 80 =
+      // 48 kW: the staged pick-up INFO (judge-only, the set stays 100 kVA).
       expect(
           study.warnings
               .map((w) => w.code)
               .where((c) => c.startsWith('genset-')),
-          ['genset-below-essential-demand', 'genset-below-essential-power']);
+          [
+            'genset-below-essential-demand',
+            'genset-below-essential-power',
+            'genset-step-load-staged',
+          ]);
     });
   });
 

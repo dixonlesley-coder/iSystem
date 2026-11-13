@@ -1133,6 +1133,26 @@ void main() {
     });
     tearDownAll(() => c.dispose());
 
+    test('backlog E-4: genset step load 102.8 kW <= 0.6 x 240 = 144 kW, OK',
+        () {
+      // On ATS transfer the 300 kVA set picks up PP-E (lift, emergency
+      // lighting, the MEP board) in one step: 102 768 W = 102.8 kW (backup
+      // fraction 0). Allowable first step 0.6 x 300 kVA x 0.8 = 0.6 x 240 =
+      // 144 kW >= 102.8 => OK.
+      final st = c.read(electricalAdvancedProvider).powerOneLine!
+          .gensetStepLoad!;
+      expect(st.stepKw, closeTo(102.768, 1e-9));
+      expect(st.ratedKw, closeTo(240, 1e-9));
+      expect(st.allowableKw, closeTo(144, 1e-9));
+      expect(st.exceeded, isFalse);
+      expect(
+          c
+              .read(electricalAdvancedProvider)
+              .warnings
+              .where((w) => w.code == 'genset-step-load-staged'),
+          isEmpty);
+    });
+
     test('fire: standpipe 125.036 m, sprinkler 87.347 m on the enlarged '
         'DN40 feed main, rated 31.545 L/s @ 125.036 m, 75 kW, jockey, '
         'standby', () {

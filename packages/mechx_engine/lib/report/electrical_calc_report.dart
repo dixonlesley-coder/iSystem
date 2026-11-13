@@ -23,7 +23,8 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
-import '../electrical/sources.dart' show GeneratorResult, GensetSizingReason;
+import '../electrical/sources.dart'
+    show GeneratorResult, GensetSizingReason, kGensetFirstStepFraction;
 import '../standards/puil.dart' show BreakerClassCode;
 import '../standards/sni.dart'
     show Revision, StandardValue, VerificationStatus;
@@ -688,6 +689,20 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         if (ol.gensetSizing case final g?
             when g.governing != null && g.floorsKva != null)
           ('', _gensetSizingLine(g, strings)),
+        // Backlog E-4 — the block-load (step) check of the standby set.
+        if (ol.gensetStepLoad case final st?)
+          (
+            '',
+            strings.format(RptStringKey.olGenStepLoad, {
+              'step': st.stepKw.toStringAsFixed(1),
+              'allow': st.allowableKw.toStringAsFixed(1),
+              'pct': (kGensetFirstStepFraction * 100).toStringAsFixed(0),
+              'rated': st.ratedKw.toStringAsFixed(1),
+              'verdict': strings(st.exceeded
+                  ? RptStringKey.olGenStepLoadStaged
+                  : RptStringKey.olGenStepLoadOk),
+            })
+          ),
       ]));
     if (ol.interlocks.isNotEmpty) {
       blocks

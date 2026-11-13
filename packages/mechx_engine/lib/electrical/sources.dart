@@ -403,6 +403,51 @@ enum GensetSizingReason {
   final String label;
 }
 
+/// Backlog E-4 (2026-11-13) — the largest load a standby set may accept in
+/// ONE step (as a fraction of its rated kW at [kGeneratorPf]) and stay within
+/// its transient frequency / voltage band: 60 % for a turbocharged diesel
+/// set under ISO 8528-5 performance class G2 guidance (first load step).
+/// // VERIFY — secondary source (ISO 8528-5 class G2 load-acceptance
+/// guidance for turbocharged engines; the genset maker's load-acceptance
+/// curve for the chosen set governs).
+const double kGensetFirstStepFraction = 0.6;
+
+/// Backlog E-4 — the block-load (step) check of a standby set: on ATS
+/// transfer the set picks up [stepKw] (the backed boards' simultaneous
+/// non-motor demand plus their running motors) in ONE step, judged against
+/// [allowableKw] = [kGensetFirstStepFraction] x [ratedKw] (rated kVA x
+/// [kGeneratorPf]). Judge-only: it never changes a rating — an exceeded step
+/// is answered by STAGED pick-up (load-shed groups / timed starters).
+class GensetStepLoadResult {
+  final double stepKw;
+  final double ratedKw;
+  final double allowableKw;
+
+  const GensetStepLoadResult({
+    required this.stepKw,
+    required this.ratedKw,
+    required this.allowableKw,
+  });
+
+  /// True when the one-step pick-up is above the allowable first step.
+  bool get exceeded => stepKw > allowableKw + 1e-9;
+}
+
+/// Backlog E-4 — [GensetStepLoadResult] for a set of total rating
+/// [ratedKva] (all paralleled units) picking up [stepW] in one step. Null
+/// for a non-positive rating. Pure.
+GensetStepLoadResult? gensetStepLoadCheck(
+    {required ApparentPower ratedKva, required Power stepW}) {
+  final kva = ratedKva.inKilovoltAmperes;
+  if (!(kva > 0)) return null;
+  final ratedKw = kva * kGeneratorPf;
+  return GensetStepLoadResult(
+    stepKw: stepW.watts / 1000,
+    ratedKw: ratedKw,
+    allowableKw: kGensetFirstStepFraction * ratedKw,
+  );
+}
+
 /// Outcome of a genset motor-starting voltage-dip screen.
 class GensetStartResult {
   /// Genset continuous apparent-power rating assessed.

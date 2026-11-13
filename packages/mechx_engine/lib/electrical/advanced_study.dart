@@ -118,6 +118,8 @@ import 'sources.dart'
         gensetStartFloorKva,
         kAlternatorSubtransientXdPu,
         kAlternatorTransientXdPu,
+        kGeneratorPf,
+        kGensetFirstStepFraction,
         kMaxStartVoltageDipPct,
         sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
@@ -645,6 +647,9 @@ AdvancedStudy computeAdvancedStudy(
       transformerLabel: arrangement.transformer,
       // Backlog E-3 — the MV transformer feeder's device beside the MV main.
       mvDevice: serviceMvProtection(project, sys)?.device,
+      // Backlog E-4 — the one-step pick-up on transfer: what the set backs
+      // (the SAME `gensetBackupDemandW` basis it is sized on).
+      stepLoad: gensetBackupDemandW(project, sys),
       capacitor: arrangement.capacitor == null
           ? null
           : (
@@ -702,6 +707,7 @@ AdvancedStudy computeAdvancedStudy(
   final verify = _aggregateVerify([
     if (onGenset.judged) [gensetSustainedFaultVerifyItem],
     if (powerOneLine?.gensetStart != null) [gensetStartDipVerifyItem],
+    if (powerOneLine?.gensetStepLoad != null) [gensetStepLoadVerifyItem],
     issued.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
@@ -750,6 +756,8 @@ AdvancedStudy computeAdvancedStudy(
       ...gensetBackupWarnings(project, sys),
       ...onGenset.warnings,
       ...gensetStartDipWarnings(project, powerOneLine,
+          rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
+      ...gensetStepLoadWarnings(powerOneLine,
           rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
       ...enclosureTempRiseWarnings(sys, enclosure),
       ...ttRcdTouchVoltageWarnings(project, sys, electrode),
@@ -904,6 +912,41 @@ const String gensetStartDipVerifyItem =
     "level uses the sub-transient X''d = ${kAlternatorSubtransientXdPu} pu) "
     'are representative — confirm both against the alternator datasheet. '
     '// VERIFY notAnSniClause';
+
+/// Backlog E-4 — the honesty item of the genset block-load (step) check.
+final String gensetStepLoadVerifyItem =
+    'Genset step load: the allowable first load step of '
+    '${(kGensetFirstStepFraction * 100).toStringAsFixed(0)} % of the rated '
+    'kW (at pf $kGeneratorPf) '
+    'is ISO 8528-5 class G2 guidance for a turbocharged set — confirm '
+    "against the genset maker's load-acceptance curve. // VERIFY "
+    'secondarySource';
+
+/// Backlog E-4 — INFO, JUDGE-ONLY: on ATS transfer the standby set picks up
+/// the backed load in one step above its allowable first step
+/// ([kGensetFirstStepFraction] of rated kW): stage the pick-up (load-shed
+/// groups, timed / sequenced starters). Never resizes the set. Placed on the
+/// root panel.
+List<ElectricalWarning> gensetStepLoadWarnings(PowerOneLine? oneLine,
+    {String? rootPanelId}) {
+  final st = oneLine?.gensetStepLoad;
+  if (st == null || !st.exceeded) return const [];
+  String kw(double v) => v.toStringAsFixed(1);
+  return [
+    ElectricalWarning(
+      code: 'genset-step-load-staged',
+      severity: WarningSeverity.info,
+      message: 'Genset step load: on ATS transfer the set picks up '
+          '${kw(st.stepKw)} kW in one step, above the allowable first step '
+          '${kw(st.allowableKw)} kW '
+          '(${(kGensetFirstStepFraction * 100).toStringAsFixed(0)} % of '
+          '${kw(st.ratedKw)} kW rated) — stage the pick-up: load-shed groups '
+          'on the ATS, timed / sequenced motor starters. The rating is not '
+          'changed.',
+      panelId: rootPanelId,
+    ),
+  ];
+}
 
 /// Round 70 — JUDGE-ONLY: the generator node of the power one-line failed
 /// its motor-start dip screen (a forced nameplate, or a declared primary
