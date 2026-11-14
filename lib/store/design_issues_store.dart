@@ -59,8 +59,10 @@ import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
 import 'fire_store.dart'
     show
+        fireBreakTankChecksProvider,
         fireOverPressureProvider,
         firePumpDutyProvider,
+        fireZoneLinesProvider,
         fireSystemBasesProvider,
         fireTankReservesProvider,
         kMinFireStageHeadM,
@@ -1550,6 +1552,42 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 5a-bis-2b. Fire zone break tanks (backlog Z-2) ───────────────────
+  // Judge-only, located on the tank: 30 min of the relay pump's rated flow
+  // (`// VERIFY`), refilled at least at that flow. A fire tank is never
+  // auto-sized: an unset capacity states the requirement.
+  for (final t in ref.watch(fireBreakTankChecksProvider)) {
+    final args = {
+      'tank': fireTankTags[t.tankId] ?? t.tankId,
+      'zone': '${t.zoneNumber}',
+      'need': t.requiredLitres.toStringAsFixed(0),
+      'flow': t.requirement.ratedFlow.inLitersPerSecond.toStringAsFixed(2),
+      'min': t.requirement.durationMin.toStringAsFixed(0),
+      'cap': (t.capacityLitres ?? 0).toStringAsFixed(0),
+    };
+    switch (t.verdict) {
+      case FireTankVerdict.ok:
+        break;
+      case FireTankVerdict.undersized:
+        warnings.add(DesignIssue(
+          severity: IssueSeverity.warning,
+          kind: 'fire-break-tank-undersized:${t.tankId}',
+          title: str(StringKey.issueFireBreakTankUndersizedTitle),
+          message:
+              str.format(StringKey.issueFireBreakTankUndersizedMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+      case FireTankVerdict.unset:
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-break-tank-capacity-unset:${t.tankId}',
+          title: str(StringKey.issueFireBreakTankUnsetTitle),
+          message: str.format(StringKey.issueFireBreakTankUnsetMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+    }
+  }
+
   // ── 5a-bis-3. Cold-water tank capacity / fill (backlog W-3, W-5) ────────
   // Judge-only, located on the tank.
   final dailyForAuto = ref.watch(dailyDemandLitresProvider);
@@ -1685,6 +1723,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — a fire
   // pump whose churn pressure exceeds the standard component rating
   // (175 psi): judge-only, locatable to the duty pump.
+  final fireZoneLines = ref.watch(fireZoneLinesProvider);
+  String fireFloorName(int f) {
+    final floors = project.building.floors;
+    return f >= 0 && f < floors.length ? floors[f].name : 'F$f';
+  }
+
   for (final o in fireOverPressure) {
     final b = o.basis;
     // Round 52 — located at the pump whose discharge sees the maximum (a
@@ -1703,6 +1747,20 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     // maximum is its own kind (split into pressure zones), keyed on the
     // pump whose discharge sees the maximum.
     final sp = o.standpipe;
+    // Backlog Z-2 — with designed zones the warning names the zone (its
+    // floors) whose own churn still exceeds the single-zone maximum.
+    final zoneLine = fireZoneLines
+        .where((l) => identical(l.basis, b))
+        .firstOrNull;
+    final zonePrefix = zoneLine == null
+        ? ''
+        : str.format(StringKey.issueFireZonePrefix, {
+            'zone': '${zoneLine.zone.number}',
+            'floors': zoneLine.lowFloor == zoneLine.highFloor
+                ? fireFloorName(zoneLine.lowFloor)
+                : '${fireFloorName(zoneLine.lowFloor)}-'
+                    '${fireFloorName(zoneLine.highFloor)}',
+          });
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: '${sp ? 'standpipe-system-over-pressure' : 'fire-system-over-pressure'}'
@@ -1710,7 +1768,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       title: str(sp
           ? StringKey.issueStandpipeOverPressureTitle
           : StringKey.issueFireOverPressureTitle),
-      message: str.format(
+      message: zonePrefix + str.format(
           sp
               ? StringKey.issueStandpipeOverPressureMessage
               : StringKey.issueFireOverPressureMessage,

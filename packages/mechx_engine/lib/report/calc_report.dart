@@ -169,6 +169,63 @@ class FireTankReportLine {
   });
 }
 
+/// Backlog Z-2 (2026-11-14) — one DESIGNED fire zone (the app's
+/// `fireZoneLinesProvider`): its pump's rated point, motor, churn and pipe
+/// class, which term governs a relay pump (its own zone or the break-tank
+/// fill it delivers) and the break tank it draws from (required vs
+/// entered). Printed only when the drawing holds a designed break (empty
+/// list ⇒ no line, byte-identical).
+class FireZoneReportLine {
+  final int number;
+  final String floors;
+  final String tag;
+  final double ratedLps;
+  final double ratedHeadM;
+  final double motorKw;
+  final double churnKpa;
+  final String pressureClass;
+
+  /// Relay pumps only (the zone fills a break tank): the fill flow, the
+  /// fill head and the zone's own point, and which sets the rating.
+  final String? fillTankTag;
+  final double? fillLps;
+  final double? fillHeadM;
+  final double? ownLps;
+  final double? ownHeadM;
+
+  /// The break tank this zone draws from (zone >= 2).
+  final String? breakTankTag;
+  final double? breakRequiredLitres;
+  final double? breakDurationMin;
+  final double? breakCapacityLitres;
+
+  /// The fill pipe into that break tank (its sized bore and flow).
+  final double? fillPipeMm;
+  final double? fillPipeLps;
+
+  const FireZoneReportLine({
+    required this.number,
+    required this.floors,
+    required this.tag,
+    required this.ratedLps,
+    required this.ratedHeadM,
+    required this.motorKw,
+    required this.churnKpa,
+    required this.pressureClass,
+    this.fillTankTag,
+    this.fillLps,
+    this.fillHeadM,
+    this.ownLps,
+    this.ownHeadM,
+    this.breakTankTag,
+    this.breakRequiredLitres,
+    this.breakDurationMin,
+    this.breakCapacityLitres,
+    this.fillPipeMm,
+    this.fillPipeLps,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -261,6 +318,9 @@ class CalcReportData {
   /// Backlog A-3 — the pressure class of every pumped fire system.
   final List<({String tag, String label, double churnKpa})>
       firePressureClasses;
+
+  /// Backlog Z-2 — the designed fire zones (empty ⇒ no line).
+  final List<FireZoneReportLine> fireZones;
 
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
@@ -384,6 +444,7 @@ class CalcReportData {
     this.standpipeOutletOverPressure = const [],
     this.fireTankReserves = const [],
     this.firePressureClasses = const [],
+    this.fireZones = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
     this.fireDry = const [],
@@ -1171,6 +1232,65 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                     : strings(RptStringKey.firePumpVerdictWithin),
               })
             ),
+        // Backlog Z-2 — one block per designed fire zone (printed only when
+        // the drawing holds a break tank ⇒ byte-identical otherwise).
+        for (final z in d.fireZones) ...[
+          (
+            strings.format(RptStringKey.fireZoneKey,
+                {'n': '${z.number}', 'floors': z.floors}),
+            strings.format(RptStringKey.fireZoneValue, {
+              'tag': z.tag,
+              'lps': z.ratedLps.toStringAsFixed(2),
+              'head': z.ratedHeadM.toStringAsFixed(1),
+              'motor': z.motorKw.toStringAsFixed(1),
+              'churn': z.churnKpa.toStringAsFixed(0),
+              'psi': (z.churnKpa / 6.894757).toStringAsFixed(0),
+              'cls': z.pressureClass,
+            })
+          ),
+          if (z.fillTankTag != null && z.fillHeadM != null)
+            (
+              strings.format(RptStringKey.fireZoneRelayKey,
+                  {'n': '${z.number}', 'tank': z.fillTankTag!}),
+              strings.format(RptStringKey.fireZoneRelayValue, {
+                'ownq': (z.ownLps ?? 0).toStringAsFixed(2),
+                'ownh': (z.ownHeadM ?? 0).toStringAsFixed(1),
+                'fillq': (z.fillLps ?? 0).toStringAsFixed(2),
+                'fillh': z.fillHeadM!.toStringAsFixed(1),
+                'flowby': strings(
+                    (z.fillLps ?? 0) > (z.ownLps ?? 0) + 1e-9
+                        ? RptStringKey.fireZoneGovernsFill
+                        : RptStringKey.fireZoneGovernsOwn),
+                'headby': strings(z.fillHeadM! > (z.ownHeadM ?? 0) + 1e-9
+                    ? RptStringKey.fireZoneGovernsFill
+                    : RptStringKey.fireZoneGovernsOwn),
+              })
+            ),
+          if (z.breakTankTag != null && z.breakRequiredLitres != null)
+            (
+              strings.format(RptStringKey.fireZoneBreakTankKey,
+                  {'n': '${z.number}', 'tank': z.breakTankTag!}),
+              strings.format(RptStringKey.fireZoneBreakTankValue, {
+                'flow': z.ratedLps.toStringAsFixed(2),
+                'min': (z.breakDurationMin ?? 0).toStringAsFixed(0),
+                'need': z.breakRequiredLitres!.toStringAsFixed(0),
+                'cap': z.breakCapacityLitres == null
+                    ? strings(RptStringKey.fireTankReserveUnset)
+                    : '${z.breakCapacityLitres!.toStringAsFixed(0)} L',
+                'verdict': z.breakCapacityLitres == null
+                    ? ''
+                    : z.breakCapacityLitres! + 1e-9 < z.breakRequiredLitres!
+                        ? strings(RptStringKey.fireTankReserveShort)
+                        : strings(RptStringKey.fireTankReserveOk),
+                'fill': z.fillPipeMm == null
+                    ? ''
+                    : strings.format(RptStringKey.fireZoneFillPipe, {
+                        'lps': (z.fillPipeLps ?? 0).toStringAsFixed(2),
+                        'mm': z.fillPipeMm!.round(),
+                      }),
+              })
+            ),
+        ],
         // Round 52 — a gravity system's own head verdict (no pump drawn).
         for (final g in d.fireGravity)
           (

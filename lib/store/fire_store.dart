@@ -24,6 +24,8 @@ import 'package:mechx_engine/sizing/network_sizing.dart'
     show EdgeSizing, fireHopSources;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
 import 'package:mechx_engine/sizing/fire_water_reserve.dart';
+import 'package:mechx_engine/sizing/fire_zones.dart';
+import 'package:mechx_engine/geometry/building.dart' show Floor;
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
@@ -647,6 +649,30 @@ class FireSystemBasis {
   /// sprinkler head is drawn on the system.
   final double? sprinklerPointHeadM;
 
+  /// Backlog Z-2 (2026-11-14) — the RELAY duty of a zone room that also
+  /// fills the next zone's break tank ([fillTankId], Round 70
+  /// `fireFillDestinationTank`): the fill flow it must deliver
+  /// ([fillFlow], what the tank feeds — `fireTransferFedFlow`), the head
+  /// that refill needs ([fillHeadM]: `fireRelayFillHeadM` = lift to the
+  /// tank + the sized fill-path friction + the 5 m inlet residual) and the
+  /// zone's OWN point before the max ([ownFlow] / [ownHead]). The rated
+  /// point is max(own, fill) on each term (never clamped down). Null when
+  /// the system fills no break tank.
+  final String? fillTankId;
+  final FlowRate? fillFlow;
+  final double? fillHeadM;
+  final FlowRate? ownFlow;
+  final Head? ownHead;
+
+  /// True when the break-tank fill sets the rated FLOW / HEAD (strictly
+  /// above the zone's own figure).
+  bool get fillGovernsFlow =>
+      fillFlow != null &&
+      ownFlow != null &&
+      fillFlow!.cubicMetersPerSecond > ownFlow!.cubicMetersPerSecond + 1e-12;
+  bool get fillGovernsHead =>
+      fillHeadM != null && ownHead != null && fillHeadM! > ownHead!.meters + 1e-9;
+
   /// True when this system has no pump of its own to rate: gravity-fed, a
   /// transfer fill or a dry (brigade-fed) system.
   bool get standsDown => gravityFed || transfer || dry;
@@ -688,6 +714,11 @@ class FireSystemBasis {
     this.dryInletId,
     this.dryRequiredInletHeadM,
     this.sprinklerPointHeadM,
+    this.fillTankId,
+    this.fillFlow,
+    this.fillHeadM,
+    this.ownFlow,
+    this.ownHead,
   });
 }
 
@@ -1079,10 +1110,16 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final fillTank = pumps.isNotEmpty && hasTerminal && duty != null
         ? fillTankOf(sys)
         : null;
+    FlowRate? ownFlow, fillFlow;
+    Head? ownHead;
+    double? fillHeadM;
     if (fillTank != null) {
+      ownFlow = flow;
+      ownHead = head;
       final fed = fireTransferFedFlow(net, sys, fillTank.id, systems,
           sprinklerDemand: remote.remoteAreaDemand,
           destinationTankOf: destinationOf);
+      fillFlow = fed;
       if (fed != null && fed.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
         flow = fed;
       }
@@ -1098,7 +1135,13 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         lengthOf: lengthOf,
         targetIds: {fillTank.id},
       );
-      final fillHead = math.max(0.0, tankZ - pumpZ) + math.max(0.0, f ?? 0.0);
+      // Backlog Z-2 (2026-11-14) — the refill also passes the tank's inlet
+      // (float) valve: + [kTankInletResidualHeadM] (`fireRelayFillHeadM`,
+      // the W-3 transfer convention). The fill path is sized at the fill
+      // flow (backlog Z-1), so its sized friction is the friction at it.
+      final fillHead =
+          fireRelayFillHeadM(liftM: tankZ - pumpZ, frictionM: f ?? 0.0);
+      fillHeadM = fillHead;
       if (fillHead > head.meters + 1e-9) head = Head(fillHead);
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
@@ -1464,6 +1507,11 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       dryInletId: dry ? inlets.first.id : null,
       dryRequiredInletHeadM: dryHeadM,
       sprinklerPointHeadM: sprinklerPointHead,
+      fillTankId: fillTank?.id,
+      fillFlow: fillFlow,
+      fillHeadM: fillHeadM,
+      ownFlow: ownFlow,
+      ownHead: ownHead,
     ));
   }
   return out;
@@ -1820,6 +1868,12 @@ final fireTankReservesProvider = Provider<List<FireTankReserve>>((ref) {
   if (bases.isEmpty) return const [];
   final net = ref.watch(sizingNetworkProvider);
   final hazard = ref.watch(fireHazardProvider);
+  // Backlog Z-2 — a zone BREAK tank is judged on its own requirement
+  // ([fireBreakTankChecksProvider]: 30 min of the relay pump's rated flow,
+  // automatically refilled), never as a full fire-water reserve.
+  final breakTanks = {
+    for (final c in ref.watch(fireBreakTankChecksProvider)) c.tankId,
+  };
   final best = <String, FireTankReserve>{};
   for (final b in bases) {
     if (b.dry || b.transfer || b.flow.cubicMetersPerSecond <= 0) continue;
@@ -1833,6 +1887,7 @@ final fireTankReservesProvider = Provider<List<FireTankReserve>>((ref) {
     for (final id in b.system.nodeIds) {
       final n = net.nodeById(id);
       if (n == null || n.component != NodeComponent.groundTank) continue;
+      if (breakTanks.contains(id)) continue;
       final onFire = net.edgesAt(id).any((e) =>
           e.service == ServiceType.fireSprinkler ||
           e.service == ServiceType.fireHydrant);
@@ -1894,3 +1949,178 @@ final prvHoseValveVariantsProvider = Provider<Map<String, String>>((ref) => {
             'kPa static, set ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} '
             'kPa residual',
     });
+
+/// Backlog Z-1 / Z-2 (2026-11-14) — the drawn fire ZONE chain
+/// ([fireZones] over [fireRatingSystems], the elevations every fire basis
+/// reads). No break tank ⇒ every zone is numbered 1 ([fireZoned] false).
+final fireZoneChainProvider = Provider<List<FireZone>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  return fireZones(net,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters);
+});
+
+/// Backlog Z-2 — one fire zone's break tank: the tank the zone draws from,
+/// filled by the zone below ([FireZone.upstream]). [requirement] is the
+/// zone pump's rated flow x [kFireBreakTankDurationMin] (refilled at least
+/// at that flow); [capacityLitres] the tank node's OWN entered capacity
+/// (a fire tank is never auto-sized). [fillFlow] is the fill flow the zone
+/// below is rated to deliver; [fillEdgeId] the pipe flowing into the tank
+/// from that zone (its sized bore is the fill pipe).
+class FireBreakTankCheck {
+  final String tankId;
+  final String sheetId;
+  final int zoneNumber;
+  final FireBreakTankRequirement requirement;
+  final double? capacityLitres;
+  final FireTankVerdict verdict;
+  final FlowRate? fillFlow;
+  final String? fillEdgeId;
+  const FireBreakTankCheck({
+    required this.tankId,
+    required this.sheetId,
+    required this.zoneNumber,
+    required this.requirement,
+    required this.capacityLitres,
+    required this.verdict,
+    required this.fillFlow,
+    required this.fillEdgeId,
+  });
+
+  double get requiredLitres => requirement.volumeLitres;
+}
+
+/// The basis of [zone] (its rating system's row of [bases]).
+FireSystemBasis? fireZoneBasis(FireZone zone, List<FireSystemBasis> bases) {
+  for (final b in bases) {
+    if (identical(b.system, zone.system)) return b;
+  }
+  for (final b in bases) {
+    if (b.system.nodeIds.length == zone.system.nodeIds.length &&
+        b.system.nodeIds.containsAll(zone.system.nodeIds)) {
+      return b;
+    }
+  }
+  return null;
+}
+
+/// Backlog Z-2 — every zone break tank and its JUDGE-ONLY verdict: the
+/// Review raises `fire-break-tank-undersized:<tank>` (capacity set below
+/// the requirement) / `fire-break-tank-capacity-unset:<tank>`; the Fire
+/// inspector and the calc report print the same figures. Sorted by zone.
+final fireBreakTankChecksProvider =
+    Provider<List<FireBreakTankCheck>>((ref) {
+  final zones = ref.watch(fireZoneChainProvider);
+  if (!fireZoned(zones)) return const [];
+  final bases = ref.watch(fireSystemBasesProvider);
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <FireBreakTankCheck>[];
+  for (final z in zones) {
+    final tankId = z.suctionTankId;
+    final up = z.upstream;
+    if (tankId == null || up == null) continue;
+    final tank = net.nodeById(tankId);
+    final b = fireZoneBasis(z, bases);
+    if (tank == null || b == null || b.standsDown) continue;
+    if (!(b.flow.cubicMetersPerSecond > 0)) continue;
+    final req = FireBreakTankRequirement(ratedFlow: b.flow);
+    final lower = fireZoneBasis(zones[up], bases);
+    String? fillEdge;
+    for (final e in zones[up].system.edges) {
+      if (e.fromId != tankId && e.toId != tankId) continue;
+      final sz = sizing[e.id];
+      if (sz == null || sz.flow.cubicMetersPerSecond <= 0) continue;
+      if (fillEdge == null || naturalIdCompare(e.id, fillEdge) < 0) {
+        fillEdge = e.id;
+      }
+    }
+    out.add(FireBreakTankCheck(
+      tankId: tankId,
+      sheetId: tank.sheetId,
+      zoneNumber: z.number,
+      requirement: req,
+      capacityLitres: tank.tankCapacityLitres,
+      verdict: judgeFireTank(
+          capacityLitres: tank.tankCapacityLitres,
+          requiredLitres: req.volumeLitres),
+      fillFlow: lower?.fillFlow,
+      fillEdgeId: fillEdge,
+    ));
+  }
+  return out;
+});
+
+/// Backlog Z-2 — one fire zone as every surface prints it: its basis (the
+/// existing per-system rating), the floors its terminals serve, the lowest
+/// and highest terminal elevations, its working pressure / class and the
+/// break tank it draws from. Empty unless the drawing holds a designed break
+/// ([fireZoned]): a single-zone building prints exactly as before.
+class FireZoneLine {
+  final FireZone zone;
+  final FireSystemBasis basis;
+  final int lowFloor;
+  final int highFloor;
+  final double lowTerminalZ;
+  final double highTerminalZ;
+  final FirePressureClassLine? pressure;
+  final FireBreakTankCheck? breakTank;
+  const FireZoneLine({
+    required this.zone,
+    required this.basis,
+    required this.lowFloor,
+    required this.highFloor,
+    required this.lowTerminalZ,
+    required this.highTerminalZ,
+    required this.pressure,
+    required this.breakTank,
+  });
+}
+
+final fireZoneLinesProvider = Provider<List<FireZoneLine>>((ref) {
+  final zones = ref.watch(fireZoneChainProvider);
+  if (!fireZoned(zones)) return const [];
+  final bases = ref.watch(fireSystemBasesProvider);
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final classes = ref.watch(firePressureClassesProvider);
+  final tanks = ref.watch(fireBreakTankChecksProvider);
+  final out = <FireZoneLine>[];
+  for (final z in zones) {
+    final b = fireZoneBasis(z, bases);
+    if (b == null) continue;
+    int? lo, hi;
+    double? zlo, zhi;
+    for (final n in net.nodes) {
+      if (!z.system.nodeIds.contains(n.id) ||
+          n.role != NodeRole.fixture ||
+          isSupplyInletComponent(n.component)) {
+        continue;
+      }
+      final el = nodeElevation(n, project.building, project.mounting).meters;
+      lo = lo == null || n.floorIndex < lo ? n.floorIndex : lo;
+      hi = hi == null || n.floorIndex > hi ? n.floorIndex : hi;
+      zlo = zlo == null || el < zlo ? el : zlo;
+      zhi = zhi == null || el > zhi ? el : zhi;
+    }
+    if (lo == null || hi == null) continue;
+    out.add(FireZoneLine(
+      zone: z,
+      basis: b,
+      lowFloor: lo,
+      highFloor: hi,
+      lowTerminalZ: zlo!,
+      highTerminalZ: zhi!,
+      pressure: classes.where((l) => identical(l.basis, b)).firstOrNull,
+      breakTank: tanks.where((t) => t.tankId == z.suctionTankId).firstOrNull,
+    ));
+  }
+  return out;
+});
+
+/// Backlog Z-2 — the floor-range label of a fire zone ('Lantai 1-Lantai 15').
+String fireZoneFloorsLabel(List<Floor> floors, int low, int high) {
+  String name(int f) => f >= 0 && f < floors.length ? floors[f].name : 'F$f';
+  return low == high ? name(low) : '${name(low)}-${name(high)}';
+}

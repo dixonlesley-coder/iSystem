@@ -488,6 +488,52 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
               ),
           ]
         : const [],
+    // Backlog Z-2 — one block per designed fire zone (empty unless a break
+    // tank is drawn).
+    fireZones: fireDrawn
+        ? [
+            for (final z in ref.read(fireZoneLinesProvider))
+              () {
+                final b = z.basis;
+                final fl = ref.read(projectControllerProvider).building.floors;
+                String name(int f) =>
+                    f >= 0 && f < fl.length ? fl[f].name : 'F$f';
+                final bt = z.breakTank;
+                final fillSz = bt?.fillEdgeId == null
+                    ? null
+                    : ref.read(sizingProvider)[bt!.fillEdgeId!];
+                return FireZoneReportLine(
+                  number: z.zone.number,
+                  floors: z.lowFloor == z.highFloor
+                      ? name(z.lowFloor)
+                      : '${name(z.lowFloor)}-${name(z.highFloor)}',
+                  tag: fireSystemTag(b),
+                  ratedLps: b.rating.ratedFlow.inLitersPerSecond,
+                  ratedHeadM: b.rating.ratedHead.meters,
+                  motorKw: b.rating.selectedMotor.inKiloWatts,
+                  churnKpa: z.pressure?.churnKpa ??
+                      b.rating.churn.head.meters * 9.80665,
+                  pressureClass: z.pressure == null
+                      ? '-'
+                      : firePressureClassLabel(z.pressure!.pressureClass),
+                  fillTankTag: b.fillTankId == null
+                      ? null
+                      : nodeTagMap[b.fillTankId!] ?? b.fillTankId,
+                  fillLps: b.fillFlow?.inLitersPerSecond,
+                  fillHeadM: b.fillHeadM,
+                  ownLps: b.ownFlow?.inLitersPerSecond,
+                  ownHeadM: b.ownHead?.meters,
+                  breakTankTag:
+                      bt == null ? null : nodeTagMap[bt.tankId] ?? bt.tankId,
+                  breakRequiredLitres: bt?.requiredLitres,
+                  breakDurationMin: bt?.requirement.durationMin,
+                  breakCapacityLitres: bt?.capacityLitres,
+                  fillPipeMm: fillSz?.diameter.inMillimeters,
+                  fillPipeLps: fillSz?.flow.inLitersPerSecond,
+                );
+              }(),
+          ]
+        : const [],
     // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
     // the tag its schedule row / MDP way carry.
     fireSystems: fireDrawn
@@ -5580,6 +5626,28 @@ class _FireSection extends ConsumerWidget {
                   ' x ${t.reserve.durationMin.toStringAsFixed(0)} min)'
                   '${t.capacityLitres == null ? ' · capacity not set' : t.verdict == FireTankVerdict.undersized ? ' · tank ${t.capacityLitres!.toStringAsFixed(0)} L short' : ' · tank OK'}',
             ),
+          // Backlog Z-2 — one row per designed fire zone (pump point, motor,
+          // pipe class) and its break tank (required vs entered); nothing is
+          // printed for a building with no break tank.
+          for (final z in ref.watch(fireZoneLinesProvider)) ...[
+            kv(
+              'Zone ${z.zone.number} · '
+                  '${fireZoneFloorsLabel(ref.watch(projectControllerProvider).building.floors, z.lowFloor, z.highFloor)}',
+              '${z.basis.rating.ratedFlow.inLitersPerSecond.toStringAsFixed(1)} L/s @ '
+                  '${z.basis.rating.ratedHead.meters.toStringAsFixed(1)} m · '
+                  '${z.basis.rating.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW'
+                  '${z.pressure == null ? '' : ' · ${firePressureClassLabel(z.pressure!.pressureClass)}'}'
+                  '${z.basis.fillGovernsFlow || z.basis.fillGovernsHead ? ' · relay fill governs' : ''}',
+            ),
+            if (z.breakTank case final bt?)
+              kv(
+                'Break tank ${equipmentNodeTags(ref.watch(sizingNetworkProvider))[bt.tankId] ?? bt.tankId}',
+                '${bt.requiredLitres.toStringAsFixed(0)} L '
+                    '(${bt.requirement.ratedFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'
+                    ' x ${bt.requirement.durationMin.toStringAsFixed(0)} min)'
+                    '${bt.capacityLitres == null ? ' · capacity not set' : bt.verdict == FireTankVerdict.undersized ? ' · tank ${bt.capacityLitres!.toStringAsFixed(0)} L short' : ' · tank OK'}',
+              ),
+          ],
           const SizedBox(height: MechXSpacing.xs),
           Row(
             children: [

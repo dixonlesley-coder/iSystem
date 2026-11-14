@@ -174,6 +174,15 @@ enum RptStringKey {
   fireTankReserveUnset,
   fireTankReserveOk,
   fireTankReserveShort,
+  fireZoneKey, // {n} {floors}
+  fireZoneValue, // {tag} {lps} {head} {motor} {churn} {psi} {cls}
+  fireZoneRelayKey, // {n} {tank}
+  fireZoneRelayValue, // {ownq} {ownh} {fillq} {fillh} {flowby} {headby}
+  fireZoneGovernsOwn,
+  fireZoneGovernsFill,
+  fireZoneBreakTankKey, // {n} {tank}
+  fireZoneBreakTankValue, // {flow} {min} {need} {cap} {verdict} {fill}
+  fireZoneFillPipe, // {lps} {mm}
   fireHoseStationResidualKey, // {tag} {floors}
   fireHoseStationResidualValue, // {max} {min} {limit}
   fireJockeyKey,
@@ -692,6 +701,18 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'Fire pipework pressure class, {tag}',
   RptStringKey.firePressureClassValue:
       '{cls}: working pressure {churn} kPa at pump churn (pipe, valves and fittings downstream of the pump; standard <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
+  RptStringKey.fireZoneKey: 'Fire zone {n} ({floors})',
+  RptStringKey.fireZoneValue:
+      '{tag}: rated {lps} L/s @ {head} m, motor {motor} kW; churn {churn} kPa ({psi} psi) at the pump; {cls}',
+  RptStringKey.fireZoneRelayKey: 'Fire zone {n} relay duty (fills {tank})',
+  RptStringKey.fireZoneRelayValue:
+      'own zone {ownq} L/s @ {ownh} m; break-tank fill {fillq} L/s @ {fillh} m (lift + fill friction + 5 m inlet); flow set by {flowby}, head by {headby}',
+  RptStringKey.fireZoneGovernsOwn: 'the own zone',
+  RptStringKey.fireZoneGovernsFill: 'the fill',
+  RptStringKey.fireZoneBreakTankKey: 'Fire zone {n} break tank, {tank}',
+  RptStringKey.fireZoneBreakTankValue:
+      '{flow} L/s x {min} min = {need} L required; tank {cap}{verdict}{fill} (VERIFY)',
+  RptStringKey.fireZoneFillPipe: '; fill {lps} L/s on DN{mm}',
   RptStringKey.fireTankReserveKey:
       'Fire-water reserve, {tank}',
   RptStringKey.fireTankReserveValue:
@@ -1282,6 +1303,18 @@ const Map<RptStringKey, String> kReportStringsId = {
       'Kelas tekanan pipa kebakaran, {tag}',
   RptStringKey.firePressureClassValue:
       '{cls}: tekanan kerja {churn} kPa pada churn pompa (pipa, katup dan fiting di hilir pompa; standar <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
+  RptStringKey.fireZoneKey: 'Zona kebakaran {n} ({floors})',
+  RptStringKey.fireZoneValue:
+      '{tag}: rating {lps} L/s @ {head} m, motor {motor} kW; churn {churn} kPa ({psi} psi) di pompa; {cls}',
+  RptStringKey.fireZoneRelayKey: 'Tugas relai zona kebakaran {n} (mengisi {tank})',
+  RptStringKey.fireZoneRelayValue:
+      'zona sendiri {ownq} L/s @ {ownh} m; pengisian tangki antara {fillq} L/s @ {fillh} m (angkat + gesekan pengisian + 5 m inlet); debit ditentukan oleh {flowby}, head oleh {headby}',
+  RptStringKey.fireZoneGovernsOwn: 'zona sendiri',
+  RptStringKey.fireZoneGovernsFill: 'pengisian',
+  RptStringKey.fireZoneBreakTankKey: 'Tangki antara zona kebakaran {n}, {tank}',
+  RptStringKey.fireZoneBreakTankValue:
+      '{flow} L/s x {min} menit = {need} L dibutuhkan; tangki {cap}{verdict}{fill} (VERIFY)',
+  RptStringKey.fireZoneFillPipe: '; pengisian {lps} L/s pada DN{mm}',
   RptStringKey.fireTankReserveKey:
       'Cadangan air kebakaran, {tank}',
   RptStringKey.fireTankReserveValue:

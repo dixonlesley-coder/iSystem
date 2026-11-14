@@ -825,6 +825,11 @@ enum StringKey {
   issueFireTankUndersizedMessage,
   issueFireTankUnsetTitle,
   issueFireTankUnsetMessage,
+  issueFireBreakTankUndersizedTitle,
+  issueFireBreakTankUndersizedMessage, // {tank} {cap} {need} {flow} {min} {zone}
+  issueFireBreakTankUnsetTitle,
+  issueFireBreakTankUnsetMessage, // {tank} {need} {flow} {min} {zone}
+  issueFireZonePrefix, // {zone} {floors}
   issueRoofTankFillUndrawnTitle,
   issueRoofTankFillUndrawnMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
@@ -2500,6 +2505,15 @@ const Map<StringKey, String> _en = {
       'Fire tank capacity not set',
   StringKey.issueFireTankUnsetMessage:
       'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
+  StringKey.issueFireBreakTankUndersizedTitle:
+      'Fire break tank below its requirement',
+  StringKey.issueFireBreakTankUndersizedMessage:
+      'Break tank {tank} (fire zone {zone}) holds {cap} L, below the {need} L the relay pump needs ({flow} L/s for {min} min, refilled automatically at least at {flow} L/s). Enlarge the tank. (// VERIFY vs SNI 03-1745.)',
+  StringKey.issueFireBreakTankUnsetTitle:
+      'Fire break tank capacity not set',
+  StringKey.issueFireBreakTankUnsetMessage:
+      'Break tank {tank} (fire zone {zone}) has no capacity entered. It must hold {need} L ({flow} L/s for {min} min), refilled automatically at least at {flow} L/s. (// VERIFY vs SNI 03-1745.)',
+  StringKey.issueFireZonePrefix: 'Fire zone {zone} ({floors}): ',
   StringKey.issueRoofTankFillUndrawnTitle: 'Roof tank fill not drawn',
   StringKey.issueRoofTankFillUndrawnMessage:
       'Roof tank {tank} has no drawn pipe filling it (no transfer / fill line flows into it), so no fill pipework or transfer duty is sized for it. Draw its fill from the transfer main or the mains.',
@@ -4246,6 +4260,15 @@ const Map<StringKey, String> _id = {
       'Kapasitas tangki kebakaran belum diisi',
   StringKey.issueFireTankUnsetMessage:
       'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
+  StringKey.issueFireBreakTankUndersizedTitle:
+      'Tangki antara kebakaran di bawah kebutuhannya',
+  StringKey.issueFireBreakTankUndersizedMessage:
+      'Tangki antara {tank} (zona kebakaran {zone}) berisi {cap} L, di bawah {need} L yang dibutuhkan pompa relai ({flow} L/s selama {min} menit, diisi ulang otomatis minimal {flow} L/s). Perbesar tangki. (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueFireBreakTankUnsetTitle:
+      'Kapasitas tangki antara kebakaran belum diisi',
+  StringKey.issueFireBreakTankUnsetMessage:
+      'Tangki antara {tank} (zona kebakaran {zone}) belum diisi kapasitasnya. Tangki harus menampung {need} L ({flow} L/s selama {min} menit), diisi ulang otomatis minimal {flow} L/s. (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueFireZonePrefix: 'Zona kebakaran {zone} ({floors}): ',
   StringKey.issueRoofTankFillUndrawnTitle: 'Pengisian tangki atap belum digambar',
   StringKey.issueRoofTankFillUndrawnMessage:
       'Tangki atap {tank} tidak memiliki pipa pengisi yang digambar (tidak ada pipa transfer / pengisi yang mengalir ke dalamnya), sehingga tidak ada pipa pengisi atau tugas pompa transfer yang diukur untuknya. Gambar pengisiannya dari pipa transfer atau PDAM.',
