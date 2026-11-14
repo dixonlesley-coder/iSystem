@@ -2914,6 +2914,127 @@ double mechRiserLabelWidth(String text, double size) {
   return w;
 }
 
+/// Fix round 6 — work counters of the riser placer's obstacle index (the
+/// guard test's operation count): [mechRiserObstacleTests] boxes the index
+/// actually examined, [mechRiserObstacleScan] the boxes the old full scans
+/// would have visited for the same queries.
+int mechRiserObstacleTests = 0;
+int mechRiserObstacleScan = 0;
+
+/// Fix round 6 (2026-11-14) — the riser label placer's obstacle lists with a
+/// uniform-grid spatial index. [near] yields every item whose bounding box
+/// meets the query box (inclusive, with a hair of margin), in INSERTION
+/// order: a cost loop over [near] visits exactly the items that can add to
+/// it, in the order the full scan did, so every sum is bit-identical — the
+/// skipped items each added exactly 0. The full scans made one M-201 build
+/// O(slots x obstacles) (~1 s for the shophouse whole riser, times the
+/// pitch / band escalation and the paginator's rebuilds).
+class _RectIndex<T> extends Iterable<T> {
+  static const double _cell = 32;
+  static const double _hair = 1e-6;
+  final List<T> _items = <T>[];
+  final List<(double, double, double, double)> _boxes = [];
+  final Map<int, List<int>> _grid = <int, List<int>>{};
+  final List<int> _seen = <int>[];
+  int _stamp = 0;
+
+  @override
+  Iterator<T> get iterator => _items.iterator;
+
+  @override
+  int get length => _items.length;
+
+  static int _key(int cx, int cy) => (cx & 0xFFFFF) << 20 | (cy & 0xFFFFF);
+
+  void _add(T item, double minX, double minY, double maxX, double maxY) {
+    final i = _items.length;
+    _items.add(item);
+    _boxes.add((minX, minY, maxX, maxY));
+    _seen.add(0);
+    if (!(minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite)) {
+      (_grid[_key(0x7FFFF, 0x7FFFF)] ??= <int>[]).add(i);
+      return;
+    }
+    final x0 = (minX / _cell).floor(), x1 = (maxX / _cell).floor();
+    final y0 = (minY / _cell).floor(), y1 = (maxY / _cell).floor();
+    for (var gx = x0; gx <= x1; gx++) {
+      for (var gy = y0; gy <= y1; gy++) {
+        (_grid[_key(gx, gy)] ??= <int>[]).add(i);
+      }
+    }
+  }
+
+  /// Add a box item (a [_LabelRect]).
+  void addRect(T item) {
+    final r = item as _LabelRect;
+    _add(item, r.minX, r.minY, r.maxX, r.maxY);
+  }
+
+  /// Add a segment item (x1, y1, x2, y2).
+  void addSeg(T item) {
+    final (x1, y1, x2, y2) = item as (double, double, double, double);
+    _add(item, math.min(x1, x2), math.min(y1, y2), math.max(x1, x2),
+        math.max(y1, y2));
+  }
+
+  /// Items whose box meets the segment's bounding box.
+  Iterable<T> nearSeg(double x1, double y1, double x2, double y2) => near(
+      math.min(x1, x2), math.min(y1, y2), math.max(x1, x2), math.max(y1, y2));
+
+  /// Items whose box meets [minX]..[maxX] x [minY]..[maxY], in insertion
+  /// order.
+  List<T> near(double minX, double minY, double maxX, double maxY) {
+    mechRiserObstacleScan += _items.length;
+    if (_items.isEmpty) return const [];
+    _stamp++;
+    final hits = <int>[];
+    void visit(List<int>? cell) {
+      if (cell == null) return;
+      for (final i in cell) {
+        if (_seen[i] == _stamp) continue;
+        _seen[i] = _stamp;
+        mechRiserObstacleTests++;
+        final (a, b, c, d) = _boxes[i];
+        if (a <= maxX + _hair &&
+            minX <= c + _hair &&
+            b <= maxY + _hair &&
+            minY <= d + _hair) {
+          hits.add(i);
+        }
+      }
+    }
+
+    visit(_grid[_key(0x7FFFF, 0x7FFFF)]);
+    if (!(minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite) ||
+        (maxX - minX) / _cell * ((maxY - minY) / _cell) > _grid.length) {
+      // A query wider than the index: scan every item instead.
+      for (var i = 0; i < _items.length; i++) {
+        if (_seen[i] == _stamp) continue;
+        mechRiserObstacleTests++;
+        final (a, b, c, d) = _boxes[i];
+        if (a <= maxX + _hair &&
+            minX <= c + _hair &&
+            b <= maxY + _hair &&
+            minY <= d + _hair) {
+          hits.add(i);
+        }
+      }
+    } else {
+      final x0 = ((minX - _hair) / _cell).floor();
+      final x1 = ((maxX + _hair) / _cell).floor();
+      final y0 = ((minY - _hair) / _cell).floor();
+      final y1 = ((maxY + _hair) / _cell).floor();
+      for (var gx = x0; gx <= x1; gx++) {
+        for (var gy = y0; gy <= y1; gy++) {
+          visit(_grid[_key(gx, gy)]);
+        }
+      }
+    }
+    hits.sort();
+    return [for (final i in hits) _items[i]];
+  }
+}
+
 /// An axis-aligned label box in drawing space (baseline at [maxY], the text
 /// rising to [minY]).
 class _LabelRect {
@@ -2961,19 +3082,20 @@ class _LabelPlacer {
   final List<SldPrim> prims;
 
   /// Boxes of LABELS already on the sheet (fixed + placed movable tags).
-  final List<_LabelRect> _labels = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _labels = _RectIndex<_LabelRect>();
 
   /// Boxes of reserved INK — pipe legs, equipment glyphs, bordered blocks.
-  final List<_LabelRect> _ink = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _ink = _RectIndex<_LabelRect>();
 
   /// Leader segments already drawn (x1, y1, x2, y2) — Round 15: reserved so a
   /// later tag never lands on an earlier leader.
-  final List<(double, double, double, double)> _leaders = [];
+  final _RectIndex<(double, double, double, double)> _leaders =
+      _RectIndex<(double, double, double, double)>();
 
   /// Round 17 (drafting-visual-3-6) — HARD obstacles a leader may never cross
   /// (the per-floor BRANCHES fan-out column): a tag parked on the far side of
   /// the column used to run its leader through the fan-out text.
-  final List<_LabelRect> _hard = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _hard = _RectIndex<_LabelRect>();
   _LabelPlacer(this.prims);
 
   /// Drawing-review D5 — the keyed entries (text → key) of tags that found no
@@ -3017,7 +3139,7 @@ class _LabelPlacer {
   /// Record a region no leader may cross (see [_hard]); also ink for labels.
   void reserveHardBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _hard.add(_LabelRect(minX, minY, maxX, maxY));
+    _hard.addRect(_LabelRect(minX, minY, maxX, maxY));
   }
 
   /// Round 15 (drafting-visual-2-1) — the COST of a label box at ([x], [y]):
@@ -3032,17 +3154,20 @@ class _LabelPlacer {
       required bool withLeader}) {
     final r = _rectFor(x, y, text, size);
     var total = 0.0;
-    for (final p in _labels) {
+    // Fix round 6 — only the items whose boxes meet the slot (the rest add
+    // exactly 0), visited in insertion order: the same sum, bit for bit.
+    for (final p in _labels.near(r.minX, r.minY, r.maxX, r.maxY)) {
       final a = p.overlap(r);
       total += r.fusesWith(p, size) ? _kFusedLabelWeight * a : a;
     }
-    for (final p in _ink) {
+    for (final p in _ink.near(r.minX, r.minY, r.maxX, r.maxY)) {
       total += _kInkWeight * p.overlap(r);
     }
-    for (final (x1, y1, x2, y2) in _leaders) {
+    for (final (x1, y1, x2, y2)
+        in _leaders.near(r.minX, r.minY, r.maxX, r.maxY)) {
       if (_segmentHitsRect(x1, y1, x2, y2, r)) total += _kInkWeight * size;
     }
-    for (final p in _hard) {
+    for (final p in _hard.near(r.minX, r.minY, r.maxX, r.maxY)) {
       total += _kInkWeight * p.overlap(r);
     }
     // Round 34 — a slot in another floor band than the element it names is
@@ -3054,14 +3179,14 @@ class _LabelPlacer {
     }
     if (withLeader) {
       final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
-      for (final p in _labels) {
+      for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
         if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) {
           total += _kInkWeight * size;
         }
       }
       // A leader through a hard obstacle is never acceptable: a cost no
       // ordinary overlap can reach, so any other slot wins.
-      for (final p in _hard) {
+      for (final p in _hard.nearSeg(anchorX, anchorY, ex, ey)) {
         if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) total += 1e9;
       }
     }
@@ -3097,7 +3222,7 @@ class _LabelPlacer {
         _kLongLeader;
     var total = 0.0;
     var soft = 0.0;
-    for (final p in _ink) {
+    for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
       final len = _segmentClipLength(anchorX, anchorY, ex, ey, p);
       if (len <= 0) continue;
       final strip = (p.maxX - p.minX) <= 2 * _kInkHalfThickness + 0.01 ||
@@ -3170,16 +3295,19 @@ class _LabelPlacer {
       var t = 0.0;
       final cx = (q.minX + q.maxX) / 2, cy = (q.minY + q.maxY) / 2;
       final qt = _LabelRect(cx - rt, cy - rt, cx + rt, cy + rt);
-      for (final p in _labels) {
+      // Fix round 6 — qt holds q, the glyph test circle (rt) and the leader
+      // test circle (r + 0.1 size): every item that can add is near it.
+      for (final p in _labels.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
         t += p.overlap(qt);
       }
-      for (final p in _ink) {
+      for (final p in _ink.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
         t += p.glyph ? glyphCost(p, cx, cy) : p.overlap(q);
       }
-      for (final p in _hard) {
+      for (final p in _hard.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
         t += p.overlap(q);
       }
-      for (final (x1, y1, x2, y2) in _leaders) {
+      for (final (x1, y1, x2, y2)
+          in _leaders.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
         // Fix round 5 — a drawn leader may not pass through the CIRCLE (its
         // full radius + a hairline), not only through its 0.85 r box: a
         // later key grazed an earlier key's leader.
@@ -3241,17 +3369,18 @@ class _LabelPlacer {
       if (far) {
         // Its leader must cross no other leader and no placed label.
         final ex = cx - dx / d * r, ey = cy - dy / d * r;
-        for (final (x1, y1, x2, y2) in _leaders) {
+        for (final (x1, y1, x2, y2)
+            in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
           if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
             c += size;
           }
         }
-        for (final p in _labels) {
+        for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
           if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
         }
         // … and preferably no pipe / glyph it does not name (a SOFT
         // preference: it orders the clear slots, never blocks the key).
-        for (final p in _ink) {
+        for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
           final own = anchorX >= p.minX - 0.01 &&
               anchorX <= p.maxX + 0.01 &&
               anchorY >= p.minY - 0.01 &&
@@ -3278,10 +3407,11 @@ class _LabelPlacer {
       final q = _LabelRect(anchorX - 0.85 * r, anchorY - 0.85 * r,
           anchorX + 0.85 * r, anchorY + 0.85 * r);
       var c = 0.0;
-      for (final p in _labels) {
+      for (final p in _labels.near(q.minX, q.minY, q.maxX, q.maxY)) {
         c += p.overlap(q);
       }
-      for (final p in _ink) {
+      for (final p in _ink.near(
+          anchorX - rt, anchorY - rt, anchorX + rt, anchorY + rt)) {
         if (p.glyph) {
           c += glyphCost(p, anchorX, anchorY);
           continue;
@@ -3292,10 +3422,11 @@ class _LabelPlacer {
             anchorY <= p.maxY + 0.01;
         if (!own) c += p.overlap(q);
       }
-      for (final p in _hard) {
+      for (final p in _hard.near(q.minX, q.minY, q.maxX, q.maxY)) {
         c += p.overlap(q);
       }
-      for (final (x1, y1, x2, y2) in _leaders) {
+      for (final (x1, y1, x2, y2)
+          in _leaders.near(q.minX, q.minY, q.maxX, q.maxY)) {
         // A leader leaving this same element is its own linework.
         final mine = (x1 - anchorX).abs() < 0.01 && (y1 - anchorY).abs() < 0.01;
         if (!mine && _segmentHitsRect(x1, y1, x2, y2, q)) c += size;
@@ -3338,18 +3469,19 @@ class _LabelPlacer {
             var c = rectCost(q);
             if (c > tol) continue;
             final ex = cx - dx / d * r, ey = cy - dy / d * r;
-            for (final (x1, y1, x2, y2) in _leaders) {
+            for (final (x1, y1, x2, y2)
+                in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
               if (_segmentsCrossProper(
                   anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
                 c += size;
               }
             }
-            for (final p in _labels) {
+            for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
               if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
             }
             if (c > tol) continue;
             var soft = 0;
-            for (final p in _ink) {
+            for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
               final own = anchorX >= p.minX - 0.01 &&
                   anchorX <= p.maxX + 0.01 &&
                   anchorY >= p.minY - 0.01 &&
@@ -3375,14 +3507,14 @@ class _LabelPlacer {
     // Fix round 3 — registered with its clear gap, so a LATER tag keeps
     // off the circle too (a fixture name sat tangent to it).
     final rg = r + 0.2 * size;
-    _labels.add(_LabelRect(cx - rg, cy - rg, cx + rg, cy + rg));
+    _labels.addRect(_LabelRect(cx - rg, cy - rg, cx + rg, cy + rg));
     if (bestFar) {
       final dx = cx - anchorX, dy = cy - anchorY;
       final dl = math.sqrt(dx * dx + dy * dy);
       final ex = cx - dx / dl * r, ey = cy - dy / dl * r;
       prims.add(SldLine(anchorX, anchorY, ex, ey,
           weight: SldWeight.thin, role: role));
-      _leaders.add((anchorX, anchorY, ex, ey));
+      _leaders.addSeg((anchorX, anchorY, ex, ey));
     }
     prims
       ..add(SldCircle(cx, cy, r, weight: SldWeight.thin, role: role))
@@ -3408,7 +3540,7 @@ class _LabelPlacer {
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
-    _labels.add(_rectFor(label.x, label.y, label.text, label.size));
+    _labels.addRect(_rectFor(label.x, label.y, label.text, label.size));
     prims.add(label);
   }
 
@@ -3419,7 +3551,7 @@ class _LabelPlacer {
   /// moves. Zero-area regions are ignored.
   void reserveBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _ink.add(_LabelRect(minX, minY, maxX, maxY));
+    _ink.addRect(_LabelRect(minX, minY, maxX, maxY));
   }
 
   /// Fix round 4 (R2) — [reserveBox] for a drawn SYMBOL's full extent (an
@@ -3428,7 +3560,7 @@ class _LabelPlacer {
   /// gap — its own element's symbol included.
   void reserveGlyph(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _ink.add(_LabelRect(minX, minY, maxX, maxY, glyph: true));
+    _ink.addRect(_LabelRect(minX, minY, maxX, maxY, glyph: true));
   }
 
   /// Record a drawn LINE as a thin occupied strip so a label is never struck
@@ -3477,7 +3609,8 @@ class _LabelPlacer {
       final len = math.sqrt(
           (ex - anchorX) * (ex - anchorX) + (ey - anchorY) * (ey - anchorY));
       if (len > kMechRiserMaxLeaderLabelHeights * size) return false;
-      for (final (x1, y1, x2, y2) in _leaders) {
+      for (final (x1, y1, x2, y2)
+          in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
         if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
           return false;
         }
@@ -3601,7 +3734,7 @@ class _LabelPlacer {
     if (anchorBand != null && labelBand != anchorBand) {
       unresolvedCount++;
     }
-    _labels.add(rect);
+    _labels.addRect(rect);
     // A tag pulled well off its default anchor — or one that could not be fully
     // cleared — gets a leader so its element stays legible / unfused.
     // Fix round 3 (O2) — [alwaysLead]: a tag wider than the short run it
@@ -3612,7 +3745,7 @@ class _LabelPlacer {
       if ((ex - anchorX).abs() > 0.5 || (ey - anchorY).abs() > 0.5) {
         prims.add(SldLine(anchorX, anchorY, ex, ey,
             weight: SldWeight.thin, role: role));
-        _leaders.add((anchorX, anchorY, ex, ey));
+        _leaders.addSeg((anchorX, anchorY, ex, ey));
       }
     }
     prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));

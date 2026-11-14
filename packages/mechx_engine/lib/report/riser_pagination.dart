@@ -57,7 +57,35 @@ List<SldSheet> paginatedRiserSheets({
   SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
       buildPlantPart,
 }) {
-  double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
+  // Fix round 6 (2026-11-14) — every builder is PURE in its arguments, and
+  // the passes below ask for the same range again (the single-floor sizes,
+  // the greedy chunks, the S2 singles, the plant row / parts): each distinct
+  // call is built once per pagination. Same sheets, byte for byte.
+  final buildMemo = <({int lo, int hi})?, SldSheet>{};
+  final rawBuild = build;
+  build = (r) => buildMemo[r] ??= rawBuild(r);
+  if (buildWithoutExtras != null) {
+    final raw = buildWithoutExtras;
+    final memo = <({int lo, int hi}), SldSheet>{};
+    buildWithoutExtras = (r) => memo[r] ??= raw(r);
+  }
+  if (buildColumnPart != null) {
+    final raw = buildColumnPart;
+    final memo = <(({int lo, int hi}), int, bool), SldSheet>{};
+    buildColumnPart = (r, k, bare) => memo[(r, k, bare)] ??= raw(r, k, bare);
+  }
+  if (buildPlantRow != null) {
+    final raw = buildPlantRow;
+    final memo = <(({int lo, int hi}), bool), SldSheet>{};
+    buildPlantRow = (r, bare) => memo[(r, bare)] ??= raw(r, bare);
+  }
+  if (buildPlantPart != null) {
+    final raw = buildPlantPart;
+    final memo = <(({int lo, int hi}), int, bool), SldSheet>{};
+    buildPlantPart = (r, k, bare) => memo[(r, k, bare)] ??= raw(r, k, bare);
+  }
+  final minPtMemo = Map<SldSheet, double>.identity();
+  double minPt(SldSheet s) => minPtMemo[s] ??= sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
   // Round 43 (electrical-sim-8-riser-floor-band-illegible) — a page whose
   // floors are WIDTH-bound (17 boards side by side on one storey) cannot
