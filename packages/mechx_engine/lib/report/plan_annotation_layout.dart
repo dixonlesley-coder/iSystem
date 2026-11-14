@@ -501,7 +501,7 @@ PlanAnnotations layoutPlanAnnotations({
       gridMarks.add(PlanGridMark(axis.label, true,
           (x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y), p1.x, top, r));
       layout.addGridLine(p1.x, p1.y, p2.x, p2.y);
-      layout.addBox(
+      layout.addTextBox(
           (minX: p1.x - r, minY: top - r, maxX: p1.x + r, maxY: top + r));
     }
     for (final axis in grid.rows) {
@@ -511,7 +511,7 @@ PlanAnnotations layoutPlanAnnotations({
       gridMarks.add(PlanGridMark(axis.label, false,
           (x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y), left, p1.y, r));
       layout.addGridLine(p1.x, p1.y, p2.x, p2.y);
-      layout.addBox(
+      layout.addTextBox(
           (minX: left - r, minY: p1.y - r, maxX: left + r, maxY: p1.y + r));
     }
   }
@@ -638,8 +638,8 @@ PlanAnnotations layoutPlanAnnotations({
       layout.markUnresolved();
       unresolvedAt.add((x: r.maxX, y: r.minY));
     }
-    layout.addBox(bubbleBox!);
-    layout.addBox(capBox!);
+    layout.addTextBox(bubbleBox!);
+    layout.addTextBox(capBox!);
     if (placed && bestM > 1) {
       // The leader from the boundary corner to the bubble's near edge.
       final k = 1 - 1 / (bestM * math.sqrt2);
@@ -669,7 +669,7 @@ PlanAnnotations layoutPlanAnnotations({
     final p = map(t.x, t.y);
     final h = t.size * u;
     mTexts.add(PlanMarkText(p.x, p.y, h, t.text));
-    layout.addBox((
+    layout.addTextBox((
       minX: p.x,
       minY: p.y - 0.3 * h,
       maxX: p.x + helveticaTextWidth(t.text, h),
@@ -738,7 +738,7 @@ PlanAnnotations layoutPlanAnnotations({
       }
       final (x, y) = pick;
       upDown.add(PlanUpDownMark(sense, x, y, ts));
-      layout.addBox(boxAt(x, y));
+      layout.addTextBox(boxAt(x, y));
     }
   }
 
@@ -841,7 +841,7 @@ PlanAnnotations layoutPlanAnnotations({
       }
       cx ??= fx!;
       cy ??= fy!;
-      layout.addBox(boxAt(cx, cy));
+      layout.addTextBox(boxAt(cx, cy));
       ties.add(PlanTieDimension(
         axisExtension: axisExt,
         riserExtension: riserExt,

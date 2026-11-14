@@ -1236,6 +1236,16 @@ class PlanLabelLayout {
   /// Register an occupied axis-aligned box.
   void addBox(LabelBox b) => boxes.add(b);
 
+  final List<LabelBox> _textBoxes = [];
+
+  /// Fix round 4 (R1) — register an occupied box that holds TEXT (a detail
+  /// caption, a bubble letter, an UP/DN mark, a tie figure): an obstacle like
+  /// [addBox], and one a key leader may never cross.
+  void addTextBox(LabelBox b) {
+    boxes.add(b);
+    _textBoxes.add(b);
+  }
+
   /// Register a run's linework (an obstacle for every OTHER edge's label and
   /// for leaders). [id] is the owning edge id (null ⇒ obstacle for all).
   void addRun(String? id, double x1, double y1, double x2, double y2) =>
@@ -2003,6 +2013,25 @@ LeaderedLabelPlacement _placeKeyTag({
         final seg = [(anchor.x, anchor.y), (ex, ey)];
         for (final l in layout._labels) {
           if (_quadsOverlap(l, seg)) cost += 1;
+        }
+        // Fix round 4 (R1, 2026-11-13) — the leader must also miss every
+        // TEXT registered as a box (a detail bubble + its caption, an UP/DN
+        // mark, a tie figure, a mark text), not only the placed tags: a key
+        // leader used to run straight through 'DETAIL A - LIHAT M-509'.
+        // A text box stops at its baseline: the leader keeps 0.2 text
+        // heights from it (descenders, the glyph's own side bearing).
+        final lb = _quadBounds(seg);
+        final m = 0.2 * ts;
+        for (final t in layout._textBoxes) {
+          final o = (
+            minX: t.minX - m,
+            minY: t.minY - m,
+            maxX: t.maxX + m,
+            maxY: t.maxY + m
+          );
+          if (_boxesOverlap(o, lb) && _quadsOverlap(_boxQuad(o), seg)) {
+            cost += 1;
+          }
         }
       }
       if (best == null || cost < best.cost) {
