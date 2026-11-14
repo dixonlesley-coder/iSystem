@@ -375,6 +375,7 @@ enum RptStringKey {
   esFireBreakTankService,
   esTankCapacityUnset,
   esTankCapacityUnsetNote,
+  esTankCapacityAutoNote,
   earthNoteTnCs,
   earthNoteTnS,
   earthNoteTt,
@@ -945,6 +946,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esTankCapacityUnset: 'capacity not set',
   RptStringKey.esTankCapacityUnsetNote:
       '(*) Tank capacity not set: enter the tank volume to state its duty.',
+  RptStringKey.esTankCapacityAutoNote:
+      '(auto) = sized by the app from daily demand; not entered.',
   RptStringKey.earthNoteTnCs:
       'Combined PEN from the source, split into separate N and PE at the '
           'origin. Common PLN practice.',
@@ -1553,6 +1556,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
   RptStringKey.esTankCapacityUnsetNote:
       '(*) Kapasitas tangki belum diisi: masukkan volume tangki untuk menyatakan kapasitasnya.',
+  RptStringKey.esTankCapacityAutoNote:
+      '(auto) = diukur oleh aplikasi dari kebutuhan harian; tidak diisi.',
   RptStringKey.earthNoteTnCs:
       'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
           'asal. Praktik umum PLN.',

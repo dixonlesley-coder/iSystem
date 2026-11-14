@@ -136,6 +136,10 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   if (roofM3 != null) lines.add('Roof tank: $roofM3');
   final groundM3 = tankM3(NodeComponent.groundTank);
   if (groundM3 != null) lines.add('Ground tank: $groundM3');
+  // Backlog T-2 — explain the '(auto)' capacity mark once.
+  if (net.nodes.any((n) => n.tankCapacityAuto)) {
+    lines.add('(auto) = sized by the app from daily demand; not entered');
+  }
   // Round 29 (ui-journeys-3-occupancy-two-vocabularies) — the Building
   // input's own label in the active locale (was the hard-coded English enum
   // name 'Private', unlike the 'Residential' the engineer picked).
@@ -176,7 +180,9 @@ SldSheet buildLiveRiserSheet(
   MechRiserPlant plant = MechRiserPlant.auto,
 }) {
   final project = ref.read(projectControllerProvider);
-  final network = ref.read(networkControllerProvider).network;
+  // Backlog T-2 — the effective network (an auto tank capacity injected,
+  // W-5), the SAME nodes the sizing read; at rest it is the live network.
+  final network = ref.read(sizingNetworkProvider);
   final sizing = ref.read(sizingProvider);
   final building = project.building;
   final feed = ref.read(feedStrategyProvider);

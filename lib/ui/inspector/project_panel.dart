@@ -1128,7 +1128,8 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // node-identity numbering), so plan, riser, schedule and BOM cross-reference.
   // A hard-coded `P-01` only matched when the pump happened to be node n0. The
   // fixed tag stays the fallback when no such unit is drawn.
-  final net = ref.read(networkControllerProvider).network;
+  // Backlog T-2 — the effective network (auto tank capacities, W-5).
+  final net = ref.read(sizingNetworkProvider);
   final nodeTags = equipmentNodeTags(net);
   String? tagOfFirst(bool Function(NetNode n) pick) {
     for (final n in net.nodes) {
@@ -1564,6 +1565,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       roof: n.component == NodeComponent.roofTank,
       capacityLitres: n.tankCapacityLitres,
       fireBreak: fireBreakTanks.contains(n.id),
+      auto: n.tankCapacityAuto,
     ));
   }
 

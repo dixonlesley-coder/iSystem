@@ -873,7 +873,8 @@ String? equipmentDetail(NetNode node,
       // export (the PDF sanitizer would mangle a real superscript to '?').
       final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
       final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
-      return '$clean m3';
+      // Backlog T-2 — an app-sized capacity says so on every drawing.
+      return node.tankCapacityAuto ? '$clean m3 (auto)' : '$clean m3';
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
     case NodeComponent.ahu:

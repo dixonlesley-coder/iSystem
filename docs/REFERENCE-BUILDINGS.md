@@ -291,6 +291,13 @@ judged.
 | Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 (entered) | 30 000 / 11 520 = 2.6 days |
 | Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 150 000 + RT 30 000 = 180.0 m3 (entered; GT was 60 000 before backlog T-1) | 180 000 / 150 000 = 1.2 days |
 
+**Auto marks on the drawings (backlog T-2, 2026-11-14).** House M-601 TK-01
+'- (*)' → '0.7 m3 (auto)', M-201 'TK-01 Roof tank' → 'TK-01 Roof tank · 0.7 m3
+(auto)'; shophouse GT '0.7 m3 (auto)', RT '0.3 m3 (auto)'; office GT '10.0 m3
+(auto)' (riser '10 m3 (auto)'); each sheet carries '(auto) = sized by the app from
+daily demand; not entered'. Before T-2 the schedule and the riser read the live
+network and printed an auto tank as 'capacity not set'.
+
 **Tower storage to one day (backlog T-1, 2026-11-14).** Owner: "enlarge tanks
 to 1 day". GT 60 000 → 150 000 L (entered), RT 30 000 L unchanged. Meter feed
 150 000 / 14 400 = 10.41667 L/s: DN80 v 2.072 > 2.0 → DN100 v 1.326 (was 4.16667

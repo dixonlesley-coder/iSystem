@@ -494,6 +494,12 @@ class NetNode {
   /// capacity, so a null value on an old file is byte-identical.
   final double? tankRefillHours;
 
+  /// Backlog T-2 (2026-11-14) — true when [tankCapacityLitres] is the app's
+  /// AUTO capacity (backlog W-5), injected by the effective sizing network;
+  /// every printed surface appends '(auto)'. Transient: never written to
+  /// `.mechx` (the auto value is derived), false on every drawn node.
+  final bool tankCapacityAuto;
+
   /// Explicit electrical load (W) for a motorised equipment node (pump / fan /
   /// air unit) — overrides the component's [NodeComponentInfo.defaultMotorKw]
   /// when the mechanical node is fed into the electrical model. Null ⇒ use the
@@ -549,6 +555,7 @@ class NetNode {
     this.component,
     this.tankCapacityLitres,
     this.tankRefillHours,
+    this.tankCapacityAuto = false,
     this.electricalLoadW,
     this.faceWidthMm,
     this.faceHeightMm,
@@ -581,6 +588,7 @@ class NetNode {
     bool clearTankCapacity = false,
     double? tankRefillHours,
     bool clearTankRefillHours = false,
+    bool? tankCapacityAuto,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
     double? faceWidthMm,
@@ -616,6 +624,7 @@ class NetNode {
         tankRefillHours: clearTankRefillHours
             ? null
             : (tankRefillHours ?? this.tankRefillHours),
+        tankCapacityAuto: tankCapacityAuto ?? this.tankCapacityAuto,
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),

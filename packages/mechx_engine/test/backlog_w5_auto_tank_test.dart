@@ -6,6 +6,8 @@
 import 'dart:math' as math;
 
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/report/riser_tags.dart' show equipmentDetail;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/tank_fill.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -153,5 +155,29 @@ void main() {
         expect(b.share, closeTo(e.value.share, 1e-12), reason: e.key);
       }
     }
+  });
+
+  test('T-2: an auto capacity prints "(auto)" on the riser tag and schedule',
+      () {
+    const n = NetNode(
+        id: 'RT',
+        sheetId: 's',
+        x: 0,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.plant,
+        component: NodeComponent.roofTank,
+        tankCapacityLitres: 650);
+    expect(equipmentDetail(n), '0.7 m3');
+    expect(equipmentDetail(n.copyWith(tankCapacityAuto: true)), '0.7 m3 (auto)');
+    final md = buildEquipmentScheduleMarkdown(const EquipmentScheduleData(
+      projectName: 'P',
+      date: '2026-11-14',
+      tanks: [
+        TankScheduleItem(tag: 'TK-01', roof: true, capacityLitres: 650, auto: true),
+      ],
+    ));
+    expect(md, contains('| 0.7 m3 (auto) |'));
+    expect(md, contains('(auto) = sized by the app from daily demand; not entered.'));
   });
 }

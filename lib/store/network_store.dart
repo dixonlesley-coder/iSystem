@@ -4306,7 +4306,7 @@ final sizingNetworkProvider = Provider<Network>((ref) {
   return Network(nodes: [
     for (final n in net.nodes)
       if (auto[n.id] case final a?)
-        n.copyWith(tankCapacityLitres: a.litres)
+        n.copyWith(tankCapacityLitres: a.litres, tankCapacityAuto: true)
       else
         n,
   ], edges: net.edges);

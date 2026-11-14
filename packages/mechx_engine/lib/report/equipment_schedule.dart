@@ -243,6 +243,10 @@ class TankScheduleItem {
   /// scheduled as 'Fire break tank', whatever its drawn tank typing.
   final bool fireBreak;
 
+  /// Backlog T-2 — the capacity is the app's auto capacity (W-5): the duty
+  /// cell prints '(auto)' and one note explains it.
+  final bool auto;
+
   const TankScheduleItem({
     required this.tag,
     required this.roof,
@@ -250,6 +254,7 @@ class TankScheduleItem {
     this.modelSpec,
     this.qty = 1,
     this.fireBreak = false,
+    this.auto = false,
   });
 }
 
@@ -461,7 +466,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
               : RptStringKey.esGroundTankService),
       // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
       duty: cap != null && cap > 0
-          ? '${_fmt(cap / 1000.0, dp: 1)} m3'
+          ? '${_fmt(cap / 1000.0, dp: 1)} m3${t.auto ? ' (auto)' : ''}'
           : strings(RptStringKey.esTankCapacityUnset),
       size: '',
       modelSpec: t.modelSpec ?? specFor(t.tag),
@@ -729,6 +734,11 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
   blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
   if (anyUnset) {
     blocks.add(RptNote(strings(RptStringKey.esTankCapacityUnsetNote)));
+  }
+  // Backlog T-2 — one note explaining an auto-sized capacity.
+  if (rows.any((r) =>
+      r.category == EquipmentCategory.tank && r.duty.endsWith(' (auto)'))) {
+    blocks.add(RptNote(strings(RptStringKey.esTankCapacityAutoNote)));
   }
 
   // One section per non-empty category, in enum order.
