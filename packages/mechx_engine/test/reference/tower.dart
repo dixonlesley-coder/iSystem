@@ -150,6 +150,14 @@ const String kTowerJockeyPump = 'FJ';
 const String kTowerTransferPump = 'TP';
 const String kTowerStandbyTransferPump = 'TPS';
 
+/// The fire zone break (backlog Z): the break tank on the plant floor and
+/// the relay duty / standby / jockey pumps drawing from it.
+const String kTowerBreakTank = 'BT';
+const String kTowerRelayPump = 'FP2';
+const String kTowerRelayStandbyPump = 'FP2S';
+const String kTowerRelayJockeyPump = 'FJ2';
+const double kTowerBreakTankL = 60000;
+
 /// The hand-picked bore of the jockey legs (mm), as in the apartment.
 const double kTowerJockeyLegMm = 25;
 
@@ -438,7 +446,13 @@ final (double, double) _efStep = (150 * 4 / _diag, 150 * 6 / _diag);
 /// The tower's mechanical + fire + HVAC network. [prvFloors] draws a PRV
 /// station on the gravity riser at each floor index k (between GR(k+1) and
 /// GRk); empty draws none.
-Network buildTowerNetwork({List<int> prvFloors = const []}) {
+Network buildTowerNetwork(
+    {List<int> prvFloors = const [], int? fireBreakFloor}) {
+  final brk = fireBreakFloor;
+  // Upper-zone hydrant riser nodes sit 0.5 m (25 px) north of the lower
+  // zone's (a second riser in the same shaft).
+  (double, double) up((double, double) p, int f) =>
+      brk != null && f > brk ? (p.$1, p.$2 - 25) : p;
   NetNode node(
     String id,
     (double, double) at, {
@@ -530,11 +544,30 @@ Network buildTowerNetwork({List<int> prvFloors = const []}) {
     node('FH', _fh, floor: 0),
     for (var f = 0; f <= top; f++) ...[
       for (final r in kTowerHydrantRisers) ...[
-        node('H$r$f', _hRiser[r]!, floor: f),
-        node('HYD$r$f', _hyd[r]!,
+        node('H$r$f', up(_hRiser[r]!, f), floor: f),
+        node('HYD$r$f', up(_hyd[r]!, f),
             floor: f, component: NodeComponent.hydrantBox),
       ],
-      node('S$f', _s, floor: f),
+      if (brk == null || f >= brk) node('S$f', _s, floor: f),
+    ],
+    if (brk != null) ...[
+      // The break: tank BT filled from riser a's top (Ha<brk>), relay duty /
+      // standby / jockey pumps from BT, header FH2, upper riser bases.
+      node(kTowerBreakTank, _ft,
+          floor: brk,
+          component: NodeComponent.roofTank,
+          tankL: kTowerBreakTankL),
+      node(kTowerRelayPump, (1300, 1200),
+          floor: brk, component: NodeComponent.pump),
+      node(kTowerRelayStandbyPump,
+          (1300 + math.sqrt(150 * 150 - 100 * 100), 1200),
+          floor: brk, component: NodeComponent.pump),
+      node(kTowerRelayJockeyPump,
+          (1300 - math.sqrt(150 * 150 - 100 * 100), 1200),
+          floor: brk, component: NodeComponent.pump),
+      node('FH2', _fh, floor: brk),
+      for (final r in kTowerHydrantRisers)
+        node('H2$r', up(_hRiser[r]!, brk + 1), floor: brk),
     ],
     for (var i = 1; i <= 6; i++)
       node('SP$i', (_s.$1 + 150.0 * i, _s.$2),
@@ -628,12 +661,31 @@ Network buildTowerNetwork({List<int> prvFloors = const []}) {
     _edge(fh, 'FH', 'Hb0'), // 300 px = 6.0 m
     for (final r in kTowerHydrantRisers) ...[
       for (var f = 1; f <= top; f++)
-        _edge(fh, 'H$r${f - 1}', 'H$r$f', kind: riser),
+        if (brk != null && f == brk + 1)
+          _edge(fh, 'H2$r', 'H$r$f', kind: riser)
+        else
+          _edge(fh, 'H$r${f - 1}', 'H$r$f', kind: riser),
       for (var f = 0; f <= top; f++) _edge(fh, 'H$r$f', 'HYD$r$f'), // 2.0 m
     ],
+    if (brk != null) ...[
+      // Fill: riser a's top → BT (250 px = 5.0 m + the vertical leg).
+      _edge(fh, 'Ha$brk', kTowerBreakTank),
+      // Relay pump room (as the ground room).
+      _edge(fh, kTowerBreakTank, kTowerRelayPump),
+      _edge(fh, kTowerRelayPump, 'FH2'),
+      _edge(fh, kTowerBreakTank, kTowerRelayStandbyPump),
+      _edge(fh, kTowerRelayStandbyPump, 'FH2'),
+      _edge(fh, kTowerBreakTank, kTowerRelayJockeyPump,
+          sizeOverride: Diameter.mm(kTowerJockeyLegMm)),
+      _edge(fh, kTowerRelayJockeyPump, 'FH2',
+          sizeOverride: Diameter.mm(kTowerJockeyLegMm)),
+      _edge(fh, 'FH2', 'H2a'), // 150 / 25 px
+      _edge(fh, 'FH2', 'H2b'),
+    ],
     // Sprinkler riser + six heads on the top floor.
-    _edge(sp, 'FH', 'S0'), // 200 px = 4.0 m
-    for (var f = 1; f <= top; f++) _edge(sp, 'S${f - 1}', 'S$f', kind: riser),
+    if (brk == null) _edge(sp, 'FH', 'S0') else _edge(sp, 'FH2', 'S$brk'),
+    for (var f = (brk ?? 0) + 1; f <= top; f++)
+      _edge(sp, 'S${f - 1}', 'S$f', kind: riser),
     _edge(sp, 'S$top', 'SP1'), // 150 px = 3.0 m
     for (var i = 2; i <= 6; i++) _edge(sp, 'SP${i - 1}', 'SP$i'), // 3.0 m
     // HVAC — supply trunk AHU1 → SD1 → … → SD8 (3.0 m each); return RGn →
@@ -830,7 +882,8 @@ ElectricalProject buildTowerElectrical({
 const List<int> kTowerPrvFloors = [19, 16, 13, 10, 7, 4, 1];
 
 /// Reference building 5 — the office tower.
-ReferenceBuilding buildTower({List<int> prvFloors = kTowerPrvFloors}) =>
+ReferenceBuilding buildTower(
+        {List<int> prvFloors = kTowerPrvFloors, int? fireBreakFloor}) =>
     ReferenceBuilding(
       name: 'Reference 5 - Tower',
       building: BuildingLevels([
@@ -846,7 +899,8 @@ ReferenceBuilding buildTower({List<int> prvFloors = kTowerPrvFloors}) =>
         for (final s in kTowerSheets)
           s: const ScaleCalibration(kTowerMetersPerPixel),
       },
-      network: buildTowerNetwork(prvFloors: prvFloors),
+      network: buildTowerNetwork(
+          prvFloors: prvFloors, fireBreakFloor: fireBreakFloor),
       electrical: buildTowerElectrical(),
       occupancy: Occupancy.public,
       // Backlog W-4 — 100 staff per floor x 30 floors = 3000.

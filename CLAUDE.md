@@ -308,6 +308,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Transfer to several roof tanks (backlog W-3, 2026-11-14)**: each roof tank on the transfer main gets its own fill flow on its branch, a shared pipe the sum; `transferPumpHead` lifts to the WORST tank (lift + friction at each pipe's sized flow + 5 m inlet residual `kTankInletResidualHeadM`); a roof tank no drawn pipe fills raises the info `roof-tank-fill-undrawn`.
 
+**Designed fire zones (backlog Z, 2026-11-14)**: the engineer marks a zone break by DRAWING it — a fire break tank on a plant floor filled by the lower zone's riser and a relay pump set drawing from it (a storage tank is already a hydraulic break, Round 51, so each zone is its own rating system and `FireSystemBasis`). Z-1 (engine, `sizing/fire_zones.dart`): `fireZones` numbers the zones along the break-tank chain (`FireZone.number` / `suctionTankId` / `fillTankId` / `upstream`, `fireZoned`), `fireFillPathEdgeIds` — the lower riser to the break tank is now sized at the fill flow (max with its own flow), `fireRelayFillHeadM` (lift + fill friction + 5 m inlet residual) and `FireBreakTankRequirement` (rated flow x `kFireBreakTankDurationMin` 30 min `// VERIFY`). No break tank ⇒ one zone, byte-identical.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

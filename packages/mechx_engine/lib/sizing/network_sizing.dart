@@ -58,6 +58,7 @@ import 'fire_standpipe.dart'
         StandpipeClass,
         parallelStandpipeCount,
         standpipeFlow;
+import 'fire_zones.dart' show fireFillPathEdgeIds;
 import 'storm_sizing.dart' as storm;
 import 'tank_fill.dart' show tankFillFlow;
 import 'water_supply_sizing.dart' as water;
@@ -5732,6 +5733,31 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     for (final e in s.edges) {
       if (s.sourceEdgeIds.contains(e.id)) continue;
       if (allFlows.containsKey(e.id)) allFlows[e.id] = q;
+    }
+  }
+  // Backlog Z-1 (2026-11-14) — a zone room that also fills the next break
+  // tank (Round 70) delivers the tank's fill flow up its FILL PATH: every
+  // pipe on a shortest path from the pump discharge to the break tank
+  // ([fireFillPathEdgeIds]) carries at least what the tank feeds
+  // ([fireTransferFedFlow]: the upper zone's design flow). Max, never the
+  // sum (one fire event): the lower riser is sized for the relay fill when
+  // the zone above is on fire. Rooms filling no break tank are untouched.
+  for (final s in ratingSystems) {
+    final fill = fillTank[s];
+    if (fill == null || !fireSystemHasTerminal(net, s) || !hasPump(s)) {
+      continue;
+    }
+    final fed = fireTransferFedFlow(net, s, fill, ratingSystems,
+        sprinklerDemand: sprinklerDemandCap,
+        destinationTankOf: destinationTankOf,
+        standpipeCap: hydrantDesignFlow);
+    if (fed == null || !(fed.cubicMetersPerSecond > 0)) continue;
+    for (final id in fireFillPathEdgeIds(net, s, fill)) {
+      final q = allFlows[id];
+      if (q != null &&
+          fed.cubicMetersPerSecond > q.cubicMetersPerSecond + 1e-12) {
+        allFlows[id] = fed;
+      }
     }
   }
   // Round 53 (regression-shared-header-sizer-partitions-on-fireSystems) — a

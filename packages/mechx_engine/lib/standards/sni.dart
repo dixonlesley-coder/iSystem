@@ -879,6 +879,21 @@ class SniProfile implements StandardsProfile {
               'a set capacity below it warns, an unset capacity states the '
               'requirement. Confirm the durations vs SNI 03-1745 / 03-3989.',
         ),
+        // Backlog Z-1 — `kFireBreakTankDurationMin` (fire_zones.dart).
+        const StandardValue<Object?>(
+          30.0,
+          unit: 'min',
+          citation: 'NFPA 14 / NFPA 20 break-tank practice — a fire zone '
+              'break tank holds 30 min of the relay pump\'s rated flow, '
+              'refilled automatically at least at that flow (NOT confirmed '
+              'vs SNI 03-1745)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A designed fire zone draws from a break tank the zone below '
+              'fills: required capacity = the upper zone pump\'s rated flow x '
+              '30 min, required fill flow = that rated flow; the lower pump '
+              'is rated on max(own zone, the fill). Judge-only on the entered '
+              'capacity (never auto-sized). Confirm vs SNI 03-1745.',
+        ),
         const StandardValue<Object?>(
           25.0,
           unit: 'mm',
