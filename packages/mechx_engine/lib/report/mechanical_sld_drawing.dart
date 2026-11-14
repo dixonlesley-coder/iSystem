@@ -1386,7 +1386,7 @@ SldSheet _buildMechanicalRiserSld({
   for (final n in nodes) {
     final p = posById[n.id]!;
     final half = (n.component != null ? _symbolSize : _nodeBox) / 2;
-    placer.reserveBox(p.dx - half, p.dy - half, p.dx + half, p.dy + half);
+    placer.reserveGlyph(p.dx - half, p.dy - half, p.dx + half, p.dy + half);
   }
   for (final e in network.edges) {
     if (focus != null && e.service != focus) continue;
@@ -1485,7 +1485,7 @@ SldSheet _buildMechanicalRiserSld({
       final gy = p.dy + _symbolSize;
       prims.addAll(planSewerTerminusPrims(cx: p.dx, cy: gy, size: _symbolSize));
       // Round 15 — the terminus glyph is ink a node tag must not print over.
-      placer.reserveBox(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
+      placer.reserveGlyph(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
           p.dx + _symbolSize / 2, gy + _symbolSize / 2);
       // Drawing backlog C-4 — the note takes its own CLEAR slot: placed
       // (not forced) after every pipe leg is reserved, so it never sits on a
@@ -2870,7 +2870,7 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
     prims.addAll(planComponentPrims(NodeComponent.pump,
         cx: px, cy: lp.dy, size: _nodeBox + 4));
     const half = (_nodeBox + 4) / 2;
-    placer.reserveBox(px - half, lp.dy - half, px + half, lp.dy + half);
+    placer.reserveGlyph(px - half, lp.dy - half, px + half, lp.dy + half);
     placer.place(px + (_nodeBox + 4) / 2 + 4, lp.dy + 3, 'HWR PUMP',
         size: 8,
         anchorX: px,
@@ -2910,7 +2910,21 @@ double mechRiserLabelWidth(String text, double size) {
 /// rising to [minY]).
 class _LabelRect {
   final double minX, minY, maxX, maxY;
-  const _LabelRect(this.minX, this.minY, this.maxX, this.maxY);
+
+  /// Fix round 4 (R2) — true for the drawn extent of a SYMBOL (an equipment
+  /// glyph, a fixture terminal, a junction box): a key circle clears it by
+  /// its full radius plus a gap, never the 0.85 r box a thin pipe gets.
+  final bool glyph;
+  const _LabelRect(this.minX, this.minY, this.maxX, this.maxY,
+      {this.glyph = false});
+
+  /// Fix round 4 (R2) — how far a circle of radius [r] about ([cx], [cy])
+  /// reaches INTO this box (0 when the circle is clear of it).
+  double circlePenetration(double cx, double cy, double r) {
+    final dx = math.max(math.max(minX - cx, 0.0), cx - maxX);
+    final dy = math.max(math.max(minY - cy, 0.0), cy - maxY);
+    return math.max(r - math.sqrt(dx * dx + dy * dy), 0.0);
+  }
 
   /// Round 29 — do the two label boxes FUSE (glyph bodies overlap: more than
   /// the descender allowance of a [size]-pt label vertically, more than a
@@ -3136,16 +3150,23 @@ class _LabelPlacer {
     // Fix round 3 (S5/S6) — against TEXT the circle tests its full drawn
     // radius plus a clear gap (a 0.85 r box left the circle tangent to, or
     // on, a neighbouring tag's glyphs); against ink the 0.85 r box stands.
+    // Fix round 4 (R2, 2026-11-13) — against a SYMBOL (equipment glyph,
+    // fixture terminal, junction box) the circle keeps its full radius plus
+    // the same gap as against text: tested at 0.85 r a key sat tight to a
+    // tank, and the on-element last resort below put keys 24 / 25 on the
+    // tank and pump they key.
+    final rt = r + 0.2 * size;
+    double glyphCost(_LabelRect p, double cx, double cy) =>
+        p.circlePenetration(cx, cy, rt) * size;
     double rectCost(_LabelRect q) {
       var t = 0.0;
       final cx = (q.minX + q.maxX) / 2, cy = (q.minY + q.maxY) / 2;
-      final rt = r + 0.2 * size;
       final qt = _LabelRect(cx - rt, cy - rt, cx + rt, cy + rt);
       for (final p in _labels) {
         t += p.overlap(qt);
       }
       for (final p in _ink) {
-        t += p.overlap(q);
+        t += p.glyph ? glyphCost(p, cx, cy) : p.overlap(q);
       }
       for (final p in _hard) {
         t += p.overlap(q);
@@ -3237,7 +3258,8 @@ class _LabelPlacer {
       if (hardOk && soft == 0) break;
     }
     // Last resort before the honest stamp: the circle ON its own element
-    // (the element's own pipe may pass under its tag; nothing else may).
+    // (the element's own pipe may pass under its tag; nothing else may —
+    // fix round 4: not its own SYMBOL either, which it would hide).
     if (bestCost > tol) {
       final q = _LabelRect(anchorX - 0.85 * r, anchorY - 0.85 * r,
           anchorX + 0.85 * r, anchorY + 0.85 * r);
@@ -3246,6 +3268,10 @@ class _LabelPlacer {
         c += p.overlap(q);
       }
       for (final p in _ink) {
+        if (p.glyph) {
+          c += glyphCost(p, anchorX, anchorY);
+          continue;
+        }
         final own = anchorX >= p.minX - 0.01 &&
             anchorX <= p.maxX + 0.01 &&
             anchorY >= p.minY - 0.01 &&
@@ -3377,6 +3403,15 @@ class _LabelPlacer {
   void reserveBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
     _ink.add(_LabelRect(minX, minY, maxX, maxY));
+  }
+
+  /// Fix round 4 (R2) — [reserveBox] for a drawn SYMBOL's full extent (an
+  /// equipment glyph, a fixture terminal, a junction box): ink for tags as
+  /// before, and a region a KEY circle clears by its whole radius plus a
+  /// gap — its own element's symbol included.
+  void reserveGlyph(double minX, double minY, double maxX, double maxY) {
+    if (maxX <= minX || maxY <= minY) return;
+    _ink.add(_LabelRect(minX, minY, maxX, maxY, glyph: true));
   }
 
   /// Record a drawn LINE as a thin occupied strip so a label is never struck
