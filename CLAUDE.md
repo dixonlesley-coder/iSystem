@@ -300,6 +300,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Hot-water backlog (2026-11-13)**: the Hunter demand curve is chosen per PIPE (valve branch only with a flush valve downstream — G-1); a placed `NodeComponent.waterHeater` is sized by the ASHRAE fixture-demand method (`sizing/water_heater.dart`, `waterHeaterDesignsProvider`: recovery, storage up the tank ladder, element up the kW ladder) and fed to the MEP board as a 1-/3-phase heating way (G-2); a hot-water system with a DRAWN return mints its solved recirculation way in the default MEP sync (G-3; an assumed return keeps the 'Feed solved MEP duties' opt-in).
 
+**Tank fill rate (backlog W-1, 2026-11-14)**: each storage tank node has an editable refill time (`NetNode.tankRefillHours`, `.mechx` `tank_refill_h`; default ground 4 h / roof 1 h, `// VERIFY` `SniProfile.tankFillBasis`); fill flow = capacity / refill time (`sizing/tank_fill.dart` `tankFillFlow`) sizes a ground tank's meter feed and the transfer pipework into a roof tank (sizer UBAP pass); no capacity keeps the peak basis + the info `tank-fill-capacity-unset`. Inspector: 'Refill time' on the tank node (with its fill flow); calc report: one line per tank (`tankFillsProvider`, `store/tank_fill_store.dart`). The owner's `tank-fill-below-demand` judge is NOT built: the app has no daily water-demand figure.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

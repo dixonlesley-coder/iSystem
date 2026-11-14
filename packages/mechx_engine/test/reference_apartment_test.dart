@@ -422,23 +422,57 @@ void main() {
     // 120 → 3.37333; 135 → 3.62833; 150 → 3.88333; 180 → 4.39333. DN: the
     // first nominal with v <= 2.0 m/s.
     const fill = (fu: 180.0, q: 4.39333, dn: 65, v: 1.324);
+    // Backlog W-1 (2026-11-14) — the fill line is sized on the TANKS' fill
+    // flows (capacity / refill time, `tankFillFlow`), the FU it serves is
+    // unchanged (180). Meter feed WM → GT: GT 20 000 L / (4 h x 3600 s) =
+    // 1.38889 L/s; DN25 v = 1.38889e-3 / (pi x 0.025^2 / 4 = 4.9087e-4) =
+    // 2.829 > 2.0 → DN32 v = 1.38889e-3 / 8.0425e-4 = 1.727. Transfer GT →
+    // TP → U0..U11 → RT: RT 10 000 L / (1 h x 3600 s) = 2.77778 L/s; DN40 v =
+    // 2.77778e-3 / 1.25664e-3 = 2.210 > 2.0 → DN50 v = 2.77778e-3 /
+    // 1.96350e-3 = 1.415 (was 4.39333 L/s DN65 v 1.324, the peak demand).
+    const meterFeed = (fu: 180.0, q: 1.38889, dn: 32, v: 1.727);
+    const transfer = (fu: 180.0, q: 2.77778, dn: 50, v: 1.415);
     final trunk = <String, ({double l, double fu, double q, int dn, double v})>{
       // Fill line: the meter (backlog D-3: its floor + 0.5, was the 3.2
       // ceiling) to GT on the slab = 3.0 + 0.5 (was 6.2);
       // TP (slab) → U0 (ceiling) 1.0 + 3.2; U11 (41.7) → RT (roof 42.0)
       // 2.0 + 0.3; RT → A (41.7) 2.0 + 0.3.
-      'e_cw_WM_GT': (l: 3.5, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
-      'e_cw_GT_TP': (l: 1.0, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
-      'e_cw_TP_U0': (l: 4.2, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
+      'e_cw_WM_GT': (
+        l: 3.5,
+        fu: meterFeed.fu,
+        q: meterFeed.q,
+        dn: meterFeed.dn,
+        v: meterFeed.v
+      ),
+      'e_cw_GT_TP': (
+        l: 1.0,
+        fu: transfer.fu,
+        q: transfer.q,
+        dn: transfer.dn,
+        v: transfer.v
+      ),
+      'e_cw_TP_U0': (
+        l: 4.2,
+        fu: transfer.fu,
+        q: transfer.q,
+        dn: transfer.dn,
+        v: transfer.v
+      ),
       for (var f = 1; f <= 11; f++)
         'e_cw_U${f - 1}_U$f': (
           l: 3.5,
-          fu: fill.fu,
-          q: fill.q,
-          dn: fill.dn,
-          v: fill.v
+          fu: transfer.fu,
+          q: transfer.q,
+          dn: transfer.dn,
+          v: transfer.v
         ),
-      'e_cw_U11_RT': (l: 2.3, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
+      'e_cw_U11_RT': (
+        l: 2.3,
+        fu: transfer.fu,
+        q: transfer.q,
+        dn: transfer.dn,
+        v: transfer.v
+      ),
       'e_cw_RT_A': (l: 2.3, fu: fill.fu, q: fill.q, dn: fill.dn, v: fill.v),
       // Boosted branch: A (41.7) → BS (slab 38.5) 1.0 + 3.2; BS → BR11
       // (41.7) 1.0 + 3.2; 30 UBAP DN32, then 15 UBAP DN20.

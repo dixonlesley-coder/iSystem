@@ -486,6 +486,14 @@ class NetNode {
   /// footprint × depth). Null for a non-tank node or an unspecified size.
   final double? tankCapacityLitres;
 
+  /// Backlog W-1 (2026-11-14) — the REFILL TIME (hours) of a storage TANK
+  /// node: its fill flow is [tankCapacityLitres] / this
+  /// (`sizing/tank_fill.dart` `tankFillFlow`). Null ⇒ the type default
+  /// (`kGroundTankRefillHoursDefault` / `kRoofTankRefillHoursDefault`,
+  /// `// VERIFY`). Additive — the sizer reads it only on a tank with a
+  /// capacity, so a null value on an old file is byte-identical.
+  final double? tankRefillHours;
+
   /// Explicit electrical load (W) for a motorised equipment node (pump / fan /
   /// air unit) — overrides the component's [NodeComponentInfo.defaultMotorKw]
   /// when the mechanical node is fed into the electrical model. Null ⇒ use the
@@ -540,6 +548,7 @@ class NetNode {
     this.roofAreaM2,
     this.component,
     this.tankCapacityLitres,
+    this.tankRefillHours,
     this.electricalLoadW,
     this.faceWidthMm,
     this.faceHeightMm,
@@ -570,6 +579,8 @@ class NetNode {
     bool clearComponent = false,
     double? tankCapacityLitres,
     bool clearTankCapacity = false,
+    double? tankRefillHours,
+    bool clearTankRefillHours = false,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
     double? faceWidthMm,
@@ -602,6 +613,9 @@ class NetNode {
         tankCapacityLitres: clearTankCapacity
             ? null
             : (tankCapacityLitres ?? this.tankCapacityLitres),
+        tankRefillHours: clearTankRefillHours
+            ? null
+            : (tankRefillHours ?? this.tankRefillHours),
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),
@@ -680,6 +694,7 @@ bool nodeCarriesContent(NetNode n) =>
     n.customFixtureId != null ||
     n.airflow != null ||
     n.tankCapacityLitres != null ||
+    n.tankRefillHours != null ||
     n.roofAreaM2 != null ||
     n.electricalLoadW != null ||
     n.faceWidthMm != null ||

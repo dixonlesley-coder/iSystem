@@ -207,6 +207,19 @@ class CalcReportData {
   final List<({String tag, WaterHeaterDesign design, int phases})>
       waterHeaters;
 
+  /// Backlog W-1 — every cold-water storage tank's fill: its capacity (null
+  /// when not entered), refill time and fill flow (capacity / refill time;
+  /// null without a capacity) — the SAME flow the sizer sized its feed on.
+  /// Empty ⇒ unchanged.
+  final List<
+      ({
+        String tag,
+        bool roof,
+        double? capacityLitres,
+        double refillHours,
+        FlowRate? fillFlow,
+      })> tankFills;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -342,6 +355,7 @@ class CalcReportData {
     this.hotWaterRecirc,
     this.additionalHotWaterRecirc = const [],
     this.waterHeaters = const [],
+    this.tankFills = const [],
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
@@ -830,6 +844,25 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           ? strings(RptStringKey.sysThreePhase)
           : strings(RptStringKey.sysSinglePhase),
     }));
+  }
+  // Backlog W-1 — one line per tank: capacity, refill time, fill flow.
+  for (final t in d.tankFills) {
+    String num(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    final kind = strings(
+        t.roof ? RptStringKey.wsTankKindRoof : RptStringKey.wsTankKindGround);
+    final q = t.fillFlow;
+    final cap = t.capacityLitres;
+    ws.writeln(q == null || cap == null
+        ? strings.format(RptStringKey.wsTankFillUnset,
+            {'tag': t.tag, 'kind': kind, 'h': num(t.refillHours)})
+        : strings.format(RptStringKey.wsTankFill, {
+            'tag': t.tag,
+            'kind': kind,
+            'cap': cap.toStringAsFixed(0),
+            'h': num(t.refillHours),
+            'lps': q.inLitersPerSecond.toStringAsFixed(3),
+          }));
   }
   ws.writeln(); // closes the cluster (one blank line, zones or not).
   blocks.add(RptMarkdown(ws.toString()));

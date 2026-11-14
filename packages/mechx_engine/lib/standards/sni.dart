@@ -116,6 +116,30 @@ enum PipeMaterial { pvc, hdpe, copper, galvanizedIron, ductileIron, steel }
 /// and flush-valve branches; they converge above ~1000 UBAP.
 enum FlushSystem { flushTank, flushValve }
 
+/// Backlog W-1 (2026-11-14) — the default REFILL TIME of a cold-water
+/// GROUND tank (hours): its fill flow (the meter feed's design flow) is the
+/// tank's capacity / this. // VERIFY — design policy (owner's decision),
+/// NOT an SNI 8153 clause; surfaced via [SniProfile.tankFillBasis].
+const double kGroundTankRefillHoursDefault = 4.0;
+
+/// Backlog W-1 — the default REFILL TIME of a ROOF tank (hours): its fill
+/// flow (the transfer duty and pipework design flow) is its capacity / this.
+/// // VERIFY — design policy, NOT an SNI 8153 clause.
+const double kRoofTankRefillHoursDefault = 1.0;
+
+/// Backlog W-2 / W-3 (2026-11-14) — the residual head a storage tank's
+/// INLET (float / ball valve) needs to pass its fill flow (m): added to the
+/// mains-pressure requirement at a ground tank and to a transfer pump's head
+/// at each roof tank. // VERIFY — general practice (≈ 0.5 bar for a float
+/// valve at full flow), NOT an SNI 8153 clause.
+const double kTankInletResidualHeadM = 5.0;
+
+/// Backlog W-2 (2026-11-14) — the default AVAILABLE MAINS (PDAM) pressure at
+/// the water meter, as head (m). Deliberately LOW: the engineer enters the
+/// utility's figure on the Building page. // VERIFY — PDAM service pressure
+/// varies by city and hour; NOT an SNI clause.
+const double kDefaultMainsHeadM = 10.0;
+
 /// Occupancy class for UBAP fixture-unit loads (SNI 8153:2015 Tabel 3 columns):
 /// pribadi (private) / umum (public) / tempat berkumpul (assembly).
 enum Occupancy { private, public, assembly }
@@ -470,6 +494,28 @@ class SniProfile implements StandardsProfile {
             'Tabel 3.',
       );
 
+  /// Backlog W-1 / W-2 / W-3 (2026-11-14) — the ONE verify-checklist entry
+  /// behind a tank's fill flow and the mains / transfer heads that deliver it
+  /// (`sizing/tank_fill.dart`). `notAnSniClause` (design policy / general
+  /// practice): printed in the calc report's Unverified section, no Review
+  /// advisory.
+  StandardValue<Object?> get tankFillBasis => const StandardValue<Object?>(
+        'refill time: ground tank $kGroundTankRefillHoursDefault h, roof tank '
+        '$kRoofTankRefillHoursDefault h; tank inlet residual '
+        '$kTankInletResidualHeadM m; mains head at the meter '
+        '$kDefaultMainsHeadM m (default)',
+        unit: 'table',
+        citation: 'tank fill rate = capacity / refill time; float-valve inlet '
+            'residual; PDAM mains pressure (NOT SNI 8153 figures)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A tank fills at its capacity / refill time (default ground '
+            '4 h, roof 1 h, editable per tank): the meter feed of a ground '
+            'tank and the transfer pipework / pump of a roof tank are sized on '
+            'it. The tank inlet (float valve) needs 5 m residual; the mains at '
+            'the meter is assumed 10 m unless the utility figure is entered. '
+            'Confirm against the project brief and the PDAM.',
+      );
+
   /// Backlog G-2 (2026-11-13) — the ONE verify-checklist entry behind the
   /// water-heater duty (`sizing/water_heater.dart`): the ASHRAE fixture-
   /// demand table rows, demand / storage factors and the heating constants.
@@ -541,6 +587,8 @@ class SniProfile implements StandardsProfile {
         urinalFlushValveLoads,
         // Backlog G-2 — the water-heater fixture-demand basis.
         waterHeaterFixtureDemand,
+        // Backlog W-1..W-3 — the tank fill-rate basis.
+        tankFillBasis,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(

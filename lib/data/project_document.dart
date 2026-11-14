@@ -567,6 +567,8 @@ Map<String, dynamic> _netNodeToJson(NetNode n) => {
       if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
       if (n.component != null) 'component': n.component!.name,
       if (n.tankCapacityLitres != null) 'tank_l': n.tankCapacityLitres,
+      // Backlog W-1 — the tank refill time (hours, additive).
+      if (n.tankRefillHours != null) 'tank_refill_h': n.tankRefillHours,
       if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
       if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
       if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
@@ -610,6 +612,8 @@ NetNode _netNodeFromJson(Map n) => NetNode(
           ? null
           : _enumOrNull(NodeComponent.values, n['component']),
       tankCapacityLitres: _decodeNonNegative(n['tank_l']),
+      // Backlog W-1 — tolerant: absent / non-positive ⇒ null ⇒ the default.
+      tankRefillHours: _decodePositive(n['tank_refill_h']),
       electricalLoadW: _decodeNonNegative(n['elec_w']),
       faceWidthMm: _decodePositive(n['face_w_mm']),
       faceHeightMm: _decodePositive(n['face_h_mm']),

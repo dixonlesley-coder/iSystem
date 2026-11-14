@@ -59,6 +59,7 @@ import 'fire_standpipe.dart'
         parallelStandpipeCount,
         standpipeFlow;
 import 'storm_sizing.dart' as storm;
+import 'tank_fill.dart' show tankFillFlow;
 import 'water_supply_sizing.dart' as water;
 
 /// Default drainage fixture units assumed at a sanitary terminal that has no
@@ -4669,7 +4670,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // tank's loaded outgoing edges, read once off the demand curve —
           // flowing from the meter INTO the tank. `// VERIFY notAnSniClause`
           // (the fill is taken at the system's diversified peak, not a
-          // separate tank fill rate).
+          // separate tank fill rate). Backlog W-1 — SUPERSEDED for a root
+          // tank with a capacity: its feed carries the tank's fill flow
+          // (below); the peak basis stays only for a tank with no capacity.
           final mainsFeedFrom = <String, String>{};
           if (service == ServiceType.coldWater) {
             final rn = net.nodeById(root);
@@ -4753,17 +4756,105 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
                   v.value > 0 &&
                   edgeParents[v.key] == root &&
                   (edgeUnits[v.key] ?? 0) > 0);
+          // Backlog W-1 (2026-11-14) — a storage tank FILLS at its capacity
+          // / its refill time (`tankFillFlow`), not at the diversified peak
+          // of what it distributes. (a) The root tank's mains feed
+          // (`mainsFeedFrom`) carries the root tank's fill flow. (b) Every
+          // tree pipe root-ward of an INLINE tank with a capacity (a roof
+          // tank above its transfer pump, a ground tank below a meter root)
+          // carries that tank's fill flow, the fills of several tanks summed
+          // on their shared pipe (W-3), plus the demand curve of the units
+          // NOT beyond a filled tank. The walk from a tank stops at the next
+          // filled tank root-ward (that tank distributes it). A tank with no
+          // capacity keeps today's basis (its units; the app flags it).
+          // Order-independent: sums over the fixed tree. `// VERIFY` refill
+          // defaults (`SniProfile.tankFillBasis`).
+          final fillFlowOf = <String, double>{};
+          final fillDirectUnits = <String, double>{};
+          if (service == ServiceType.coldWater) {
+            final filled = <String, double>{
+              for (final n in component)
+                if (n != root)
+                  if (tankFillFlow(net.nodeById(n)) case final q?)
+                    n: q.cubicMetersPerSecond,
+            };
+            if (filled.isNotEmpty) {
+              final parentEdgeOf = <String, String>{};
+              final belowUnits = <String, double>{};
+              for (final pe in edgeParents.entries) {
+                final e = net.edgeById(pe.key);
+                if (e == null) continue;
+                parentEdgeOf[e.fromId == pe.value ? e.toId : e.fromId] =
+                    pe.key;
+                belowUnits[pe.value] =
+                    (belowUnits[pe.value] ?? 0.0) + (edgeUnits[pe.key] ?? 0.0);
+              }
+              for (final t in (filled.keys.toList()..sort())) {
+                final below = belowUnits[t] ?? 0.0;
+                final seenT = <String>{t};
+                var cur = t;
+                while (true) {
+                  final pe = parentEdgeOf[cur];
+                  if (pe == null) break;
+                  fillFlowOf[pe] = (fillFlowOf[pe] ?? 0.0) + filled[t]!;
+                  fillDirectUnits[pe] =
+                      (fillDirectUnits[pe] ?? (edgeUnits[pe] ?? 0.0)) - below;
+                  final up = edgeParents[pe]!;
+                  if (up == root || filled.containsKey(up) || !seenT.add(up)) {
+                    break;
+                  }
+                  cur = up;
+                }
+              }
+            }
+            // The root tank's mains feed: its OWN fill flow when it has a
+            // capacity; else what it delivers (F2) — the units on its loaded
+            // outgoing edges, where a filled tank beyond takes its fill flow
+            // in place of its units.
+            if (mainsFeedFrom.isNotEmpty) {
+              final rootFill = tankFillFlow(net.nodeById(root));
+              var outFill = 0.0;
+              var outUnits = 0.0;
+              for (final pe in edgeParents.entries) {
+                if (pe.value != root) continue;
+                final u = edgeUnits[pe.key] ?? 0.0;
+                if (u <= 0 || mainsFeedFrom.containsKey(pe.key)) continue;
+                outFill += fillFlowOf[pe.key] ?? 0.0;
+                outUnits += fillFlowOf.containsKey(pe.key)
+                    ? (fillDirectUnits[pe.key] ?? 0.0)
+                    : u;
+              }
+              for (final id in mainsFeedFrom.keys) {
+                if (rootFill != null) {
+                  fillFlowOf[id] = rootFill.cubicMetersPerSecond;
+                  fillDirectUnits[id] = 0.0;
+                } else if (outFill > 0) {
+                  fillFlowOf[id] = outFill;
+                  fillDirectUnits[id] = outUnits;
+                }
+              }
+            }
+          }
           fixtureUnitsOut?.addAll(edgeUnits);
           for (final entry in edgeUnits.entries) {
             final edgeFlush = pipeFlush(mainsFeedFrom.containsKey(entry.key)
                 ? tankServesValve
                 : (valvesBeyond[entry.key] ?? 0) > 0);
-            allFlows[entry.key] = profile.probableFlowForFixtureUnits(
-              entry.value,
-              system: edgeFlush,
-            );
-            if (profile.demandCurveExceeded(entry.value,
-                system: edgeFlush)) {
+            final fill = fillFlowOf[entry.key];
+            final units = fill == null
+                ? entry.value
+                : math.max(0.0, fillDirectUnits[entry.key] ?? 0.0);
+            allFlows[entry.key] = fill == null
+                ? profile.probableFlowForFixtureUnits(units, system: edgeFlush)
+                : FlowRate(fill +
+                    (units > 1e-9
+                        ? profile
+                            .probableFlowForFixtureUnits(units,
+                                system: edgeFlush)
+                            .cubicMetersPerSecond
+                        : 0.0));
+            if (units > 1e-9 &&
+                profile.demandCurveExceeded(units, system: edgeFlush)) {
               demandExtrapolatedEdges.add(entry.key);
             }
             // Supply flows AWAY from the source root, so it comes FROM the

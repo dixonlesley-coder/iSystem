@@ -111,6 +111,11 @@ enum RptStringKey {
   // Backlog G-2 — {tag} {n} {col} {hourly} {df} {rec} {sf} {st} {tank}
   // {kwreq} {kw} {ph}
   wsWaterHeater,
+  // Backlog W-1 — {tag} {kind} {cap} {h} {lps}
+  wsTankFill,
+  wsTankFillUnset, // {tag} {kind} {h}
+  wsTankKindGround,
+  wsTankKindRoof,
   wsLegionella, // {c}
 
   // Pressure-zone table.
@@ -592,6 +597,14 @@ const Map<RptStringKey, String> kReportStringsEn = {
           '{df} = recovery **{rec} L/h** · storage {rec} x {sf} = {st} L '
           '-> **{tank} L** · {kwreq} kW required -> **{kw} kW** element '
           '({ph}) _(ASHRAE fixture demand — // VERIFY)_',
+  RptStringKey.wsTankFill:
+      '- Tank {tag} ({kind}): capacity {cap} L · refill {h} h · fill flow '
+          '**{lps} L/s** (capacity / refill time) _(// VERIFY refill time)_',
+  RptStringKey.wsTankFillUnset:
+      '- Tank {tag} ({kind}): capacity not set · refill {h} h · fill pipe '
+          'sized on the peak demand it distributes',
+  RptStringKey.wsTankKindGround: 'ground tank',
+  RptStringKey.wsTankKindRoof: 'roof tank',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -1154,6 +1167,15 @@ const Map<RptStringKey, String> kReportStringsId = {
           'x {df} = pemulihan **{rec} L/jam** · tampungan {rec} x {sf} = '
           '{st} L -> **{tank} L** · perlu {kwreq} kW -> elemen **{kw} kW** '
           '({ph}) _(permintaan alat plambing ASHRAE — // VERIFY)_',
+  RptStringKey.wsTankFill:
+      '- Tangki {tag} ({kind}): kapasitas {cap} L · pengisian {h} jam · debit '
+          'pengisian **{lps} L/s** (kapasitas / waktu pengisian) _(// VERIFY '
+          'waktu pengisian)_',
+  RptStringKey.wsTankFillUnset:
+      '- Tangki {tag} ({kind}): kapasitas belum diisi · pengisian {h} jam · '
+          'pipa pengisi diukur dari kebutuhan puncak yang dibagikannya',
+  RptStringKey.wsTankKindGround: 'tangki bawah',
+  RptStringKey.wsTankKindRoof: 'tangki atap',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '

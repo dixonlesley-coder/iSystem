@@ -48,6 +48,7 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
+import 'package:mechx_engine/sizing/tank_fill.dart' show tankFillFlow, tankRefillHoursOf;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show firePressureClassLabel;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
@@ -78,6 +79,7 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
+import '../../store/tank_fill_store.dart' show tankFillsProvider;
 import '../widgets/locale_number.dart' show parseLocaleNumber;
 import '../../store/inspector_store.dart';
 import '../../store/assemblies_store.dart';
@@ -357,6 +359,18 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
             design: h,
             phases: waterHeaterPhases(h.elementKw),
           ),
+    ],
+    // Backlog W-1 — each cold-water tank's fill (capacity, refill time, the
+    // fill flow its feed was sized on), under its plan tag.
+    tankFills: [
+      for (final t in ref.read(tankFillsProvider))
+        (
+          tag: nodeTagMap[t.tankId] ?? t.tankId,
+          roof: t.roof,
+          capacityLitres: t.capacityLitres,
+          refillHours: t.refillHours,
+          fillFlow: t.fillFlow,
+        ),
     ],
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
@@ -6289,6 +6303,47 @@ class _SelectionSection extends ConsumerWidget {
                 (v == null || v <= 0) ? null : v,
               ),
             ),
+            // Backlog W-1 — the refill time this tank fills in, and the fill
+            // flow its feed (meter feed / transfer pipework) is sized on:
+            // capacity / refill time. No capacity ⇒ no fill flow is printed
+            // (never fabricated).
+            const SizedBox(height: MechXSpacing.xs),
+            Text(
+              'Refill time',
+              style: context.type.caption.copyWith(
+                color: context.colors.textMuted,
+              ),
+            ),
+            const SizedBox(height: MechXSpacing.xxs),
+            Builder(builder: (context) {
+              final hours = tankRefillHoursOf(node);
+              final fill = tankFillFlow(node);
+              final hTxt = hours == hours.roundToDouble()
+                  ? hours.toStringAsFixed(0)
+                  : hours.toStringAsFixed(1);
+              final suffix = node.tankRefillHours == null ? ' (default)' : '';
+              final flowTxt = fill == null
+                  ? ' · fill flow: set the capacity'
+                  : ' · fill ${fill.inLitersPerSecond.toStringAsFixed(2)} L/s';
+              return SteppedValueField(
+                display: '$hTxt h$suffix$flowTxt',
+                label: 'Refill time',
+                editSeed: node.tankRefillHours == null ? '' : hTxt,
+                gap: MechXSpacing.sm,
+                min: 0,
+                onDecrement: () {
+                  final next = hours - 0.5;
+                  ctrl.setNodeTankRefillHours(
+                      node.id, next <= 0 ? hours : next);
+                },
+                onIncrement: () =>
+                    ctrl.setNodeTankRefillHours(node.id, hours + 0.5),
+                onSubmit: (v) => ctrl.setNodeTankRefillHours(
+                  node.id,
+                  (v == null || v <= 0) ? null : v,
+                ),
+              );
+            }),
           ],
           // A motorised component (pump / fan / air unit) is INTER-RELATED with
           // the electrical model: it feeds the MEP equipment panel as its own

@@ -52,6 +52,7 @@ import 'annotation_store.dart'
         roomTerminalOwnerOf,
         roomUnitOwnerId;
 import 'app_state.dart';
+import 'tank_fill_store.dart' show tankFillsProvider;
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
@@ -1546,6 +1547,41 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           locate: IssueLocation(t.sheetId, nodeId: t.tankId),
         ));
     }
+  }
+
+  // ── 5a-bis-3. Cold-water tank fill basis (backlog W-1) ──────────────────
+  // Judge-only, located on the tank: a tank whose fill pipe is DRAWN but
+  // whose capacity is not entered keeps the demand basis (the diversified
+  // peak it distributes); an info says so. Never a fabricated capacity.
+  final sizingNow = ref.watch(sizingProvider);
+  for (final t in ref.watch(tankFillsProvider)) {
+    if (!t.fillDrawn || t.fillFlow != null) continue;
+    double inflow = 0;
+    for (final e in net.edges) {
+      if (e.service != ServiceType.coldWater) continue;
+      if (e.fromId != t.tankId && e.toId != t.tankId) continue;
+      final sz = sizingNow[e.id];
+      if (sz == null || sz.flowFromId == null || sz.flowFromId == t.tankId) {
+        continue;
+      }
+      if (sz.flow.cubicMetersPerSecond > inflow) {
+        inflow = sz.flow.cubicMetersPerSecond;
+      }
+    }
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'tank-fill-capacity-unset:${t.tankId}',
+      title: str(StringKey.issueTankFillCapacityUnsetTitle),
+      message: str.format(StringKey.issueTankFillCapacityUnsetMessage, {
+        'tank': fireTankTags[t.tankId] ?? t.tankId,
+        'flow': FlowRate(inflow).inLitersPerSecond.toStringAsFixed(2),
+        'hours': t.refillHours.toStringAsFixed(t.refillHours ==
+                t.refillHours.roundToDouble()
+            ? 0
+            : 1),
+      }),
+      locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+    ));
   }
 
   // ── 5a-ter. Combined fire system whose sprinkler sets the head (info) ─────

@@ -825,6 +825,8 @@ enum StringKey {
   issueFireTankUndersizedMessage,
   issueFireTankUnsetTitle,
   issueFireTankUnsetMessage,
+  issueTankFillCapacityUnsetTitle,
+  issueTankFillCapacityUnsetMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
   issueFireGravityHeadMessage, // {avail} {need}
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
@@ -2480,6 +2482,10 @@ const Map<StringKey, String> _en = {
       'Fire tank capacity not set',
   StringKey.issueFireTankUnsetMessage:
       'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
+  StringKey.issueTankFillCapacityUnsetTitle:
+      'Tank capacity not set: fill sized on peak demand',
+  StringKey.issueTankFillCapacityUnsetMessage:
+      'Tank {tank} has no capacity entered, so its fill pipe is sized on the diversified peak demand it distributes ({flow} L/s), not on a fill rate. Enter the capacity: the fill flow is then capacity / refill time ({hours} h).',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
       'reaches {churn} kPa, above the {limit} kPa (350 psi) maximum of a '
@@ -4198,6 +4204,10 @@ const Map<StringKey, String> _id = {
       'Kapasitas tangki kebakaran belum diisi',
   StringKey.issueFireTankUnsetMessage:
       'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
+  StringKey.issueTankFillCapacityUnsetTitle:
+      'Kapasitas tangki belum diisi: pengisian diukur dari kebutuhan puncak',
+  StringKey.issueTankFillCapacityUnsetMessage:
+      'Tangki {tank} belum diisi kapasitasnya, sehingga pipa pengisinya diukur dari kebutuhan puncak yang dibagikannya ({flow} L/s), bukan dari laju pengisian. Isi kapasitasnya: debit pengisian = kapasitas / waktu pengisian ({hours} jam).',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
       'rating) mencapai {churn} kPa, di atas maksimum satu zona {limit} kPa '

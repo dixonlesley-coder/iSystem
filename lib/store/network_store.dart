@@ -1377,6 +1377,19 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// Backlog W-1 — set the refill time (hours) of a tank component node; its
+  /// fill flow is capacity / refill time. Pass null (or a non-positive value)
+  /// to revert to the tank type's default (`// VERIFY`).
+  void setNodeTankRefillHours(String id, double? hours) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final clear = hours == null || hours <= 0;
+    _replaceNode(node.copyWith(
+      tankRefillHours: clear ? null : hours,
+      clearTankRefillHours: clear,
+    ));
+  }
+
   /// Set the explicit electrical load (W) on a motorised equipment node (pump /
   /// fan / air unit) — its draw on the electrical panel. Pass null to revert to
   /// the component's default rating.
@@ -3195,6 +3208,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        tankRefillHours: n.tankRefillHours,
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
@@ -3296,6 +3310,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        tankRefillHours: n.tankRefillHours,
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
