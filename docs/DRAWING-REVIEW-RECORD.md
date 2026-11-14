@@ -1271,3 +1271,23 @@ office 297, apartment 690, tower 1552). Pages: apartment 74 -> 75 (riser 9 -> 10
 unchanged; only the riser sheets changed (plan PDFs byte-identical to `drawings-t`). Tower riser pages to
 re-check (relative to `drawings-u/`): `tower/png/Menara Contoh 30-riser-sld-p17.png` (Lantai 2-3),
 `-p18.png` (Lantai 1), `-p19.png` (Lantai 1 - PLANT), `-p20.png` (pump-set detail).
+
+## Reviewer re-check of fix rounds 3-5 (2026-11-14)
+
+Failed sheets only, viewed as rendered PNGs after each round (sets `drawings-s`, `-t`, `-u`).
+
+| Finding | Sheet re-checked | Verdict |
+|---|---|---|
+| S1 E-501 caption overlap | tower E-501 p1 | PASS (captions wrap, clear) |
+| S2 E-501 essential bus figure | tower E-501 p1 | PASS (demand 358.2 kVA, genset basis 360.6 kVA named) |
+| S3 legend lists an undrawn essential supply | house E-301 p1 | PASS |
+| S4 PP-E feeder unlabelled | apartment E-401 p3 | PASS (DARI mark prints cable, device, length) |
+| S5 key bubbles over duct labels | tower M-116 | round 3: FAIL (key leaders through the DETAIL A caption); round 4: PASS |
+| S6 key bubbles over fixture labels | shophouse M-103 | PASS |
+| O1 typical detail level codes | tower M-507 | round 3: one UP/DN mark and a tag crossed by another run; round 4: PASS |
+| O2 plant page duties | tower M-201 plant page | round 3: FAIL (key circles on TK-03 / P-04); round 4: circles clear but leaders up to the sheet height, crossing (item 8 FAIL); round 5: PASS (own `Lantai 1 - PLANT` page, short leaders) |
+| O3 ATS and near-empty E-301 pages | tower E-301 p1, p4 | PASS (ATS on the genset tie; 7 pages -> 4; p4 is the PP-E continuation diagram) |
+| Item 8 on other risers (found by the round-5 pre-check) | tower M-201 p18, apartment M-201 p1 | PASS |
+
+Observation, not a failure: tower M-201 p18 (Lantai 1) draws its fixture branches in a narrow band
+while the sheet has spare height; every element is keyed and legible.
