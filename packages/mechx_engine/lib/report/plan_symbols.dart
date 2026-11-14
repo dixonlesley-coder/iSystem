@@ -2047,7 +2047,11 @@ LeaderedLabelPlacement _placeKeyTag({
             }
           }
         }
-        if (best == null || cost < best.cost) {
+        // Fix round 5 — the 64-direction / longer-reach pass only takes a
+        // CLEAR slot; an unresolved key keeps the least-bad slot of the
+        // first pass (counted: the sheet stamps or the cluster becomes a
+        // detail), never a stretched leader.
+        if (best == null || (cost < best.cost && (dirs == 32 || cost == 0))) {
           best = (x: cx, y: cy, cost: cost, lead: lead);
         }
         if (cost == 0) break;

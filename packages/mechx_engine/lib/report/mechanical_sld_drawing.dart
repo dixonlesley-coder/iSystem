@@ -102,6 +102,14 @@ const double kMechRiserMaxLeaderLabelHeights = 4.0;
 /// hugging the element first): 6 label heights, still a short local tie.
 const double kMechRiserMaxKeyLeaderLabelHeights = 6.0;
 
+/// Fix round 5 (2026-11-14) — the HARD cap on any riser key leader, in label
+/// heights (anchor to circle edge), the key ROWS included: a key that finds
+/// no clear slot within it is counted as an overprint, so the page
+/// escalation (pitch / band, single-floor pages, column split, plant row /
+/// page) gives the layout room instead of a leader stretched across the
+/// sheet. Tighter than the plan's `kPlanKeyTagLeaderReachFactor` (12).
+const double kMechRiserKeyLeaderCapLabelHeights = 10.0;
+
 /// Drawing review R2 — which of the extras (plant detail, reference
 /// callouts, system notes) a riser page draws: `auto` on the page carrying
 /// the building's lowest floor, `none`, or `only` them (a continuation sheet).
@@ -3172,7 +3180,13 @@ class _LabelPlacer {
         t += p.overlap(q);
       }
       for (final (x1, y1, x2, y2) in _leaders) {
-        if (_segmentHitsRect(x1, y1, x2, y2, q)) t += size;
+        // Fix round 5 — a drawn leader may not pass through the CIRCLE (its
+        // full radius + a hairline), not only through its 0.85 r box: a
+        // later key grazed an earlier key's leader.
+        if (_segmentHitsRect(x1, y1, x2, y2, q) ||
+            _segPointDist(cx, cy, x1, y1, x2, y2) < r + 0.1 * size) {
+          t += size;
+        }
       }
       return t;
     }
@@ -3316,6 +3330,9 @@ class _LabelPlacer {
             final dx = cx - anchorX, dy = cy - anchorY;
             final d = math.sqrt(dx * dx + dy * dy);
             if (d < r + 3) continue;
+            // Fix round 5 — never a leader beyond the hard cap (the rows
+            // used to fan leaders across the whole band / plant row).
+            if (d - r > kMechRiserKeyLeaderCapLabelHeights * size) continue;
             final q = _LabelRect(
                 cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
             var c = rectCost(q);
@@ -3718,6 +3735,19 @@ double _segmentClipLength(
   }
   if (t0 >= t1) return 0;
   return (t1 - t0) * math.sqrt(dx * dx + dy * dy);
+}
+
+/// Fix round 5 — the distance from ([px], [py]) to the segment
+/// ([x1], [y1])-([x2], [y2]).
+double _segPointDist(
+    double px, double py, double x1, double y1, double x2, double y2) {
+  final dx = x2 - x1, dy = y2 - y1;
+  final ll = dx * dx + dy * dy;
+  final t = ll == 0
+      ? 0.0
+      : (((px - x1) * dx + (py - y1) * dy) / ll).clamp(0.0, 1.0);
+  final ex = x1 + t * dx - px, ey = y1 + t * dy - py;
+  return math.sqrt(ex * ex + ey * ey);
 }
 
 bool _segmentHitsRect(
