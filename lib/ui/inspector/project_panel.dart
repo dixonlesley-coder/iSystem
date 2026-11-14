@@ -12,6 +12,7 @@ import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/number_format.dart' show formatTankCapacity;
 import 'package:mechx_engine/report/plan_detail.dart'
     show PlanDetailCallout, PlanDetailMatch;
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
@@ -5235,7 +5236,7 @@ class _ResultsSection extends ConsumerWidget {
                     headline: formatReserveDays(days),
                     label:
                         '${context.strings(StringKey.reserveHeadlineLabel)} · '
-                        '${(r.storedLitres! / 1000).toStringAsFixed(1)} m3 / '
+                        '${formatTankCapacity(r.storedLitres!)} / '
                         '${(r.dailyLitres! / 1000).toStringAsFixed(1)} m3 per day',
                   ),
                   if (excluded > 0)
@@ -6427,10 +6428,10 @@ class _SelectionSection extends ConsumerWidget {
             SteppedValueField(
               display: node.tankCapacityLitres == null
                   ? switch (ref.watch(autoTankCapacitiesProvider)[node.id]) {
-                      final a? => '${a.litres.round()} L (auto)',
+                      final a? => '${formatTankCapacity(a.litres)} (auto)',
                       null => '—',
                     }
-                  : '${node.tankCapacityLitres!.round()} L',
+                  : formatTankCapacity(node.tankCapacityLitres!),
               label: 'Tank capacity',
               editSeed: node.tankCapacityLitres == null
                   ? ''

@@ -623,7 +623,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
           '-> **{tank} L** · {kwreq} kW required -> **{kw} kW** element '
           '({ph}) _(ASHRAE fixture demand — // VERIFY)_',
   RptStringKey.wsTankFill:
-      '- Tank {tag} ({kind}): capacity {cap} L · refill {h} h · fill flow '
+      '- Tank {tag} ({kind}): capacity {cap} · refill {h} h · fill flow '
           '**{lps} L/s** (capacity / refill time) _(// VERIFY refill time)_',
   RptStringKey.wsTankFillUnset:
       '- Tank {tag} ({kind}): capacity not set · refill {h} h · fill pipe '
@@ -642,10 +642,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '- Daily water demand: {pop} persons x {lpd} L/person/day = **{m3} '
           'm3/day** · average draw {lps} L/s _(// VERIFY per-person figure)_',
   RptStringKey.wsReserveTank:
-      '- Storage {tag} ({kind}): {cap} L{fire} -> {dom} L domestic',
+      '- Storage {tag} ({kind}): {cap}{fire} -> {dom} domestic',
   RptStringKey.wsReserveFireShare: ' less the fire reserve {fire} L',
   RptStringKey.wsReserveTotal:
-      '- Water reserve: **{m3} m3** stored / daily demand = **{days}** '
+      '- Water reserve: **{m3}** stored / daily demand = **{days}** '
           '_(informational, no threshold)_',
   RptStringKey.wsReserveDays: '{d} days',
   RptStringKey.wsReserveDaysHours: '{d} days ({h} h)',
@@ -1230,7 +1230,7 @@ const Map<RptStringKey, String> kReportStringsId = {
           '{st} L -> **{tank} L** · perlu {kwreq} kW -> elemen **{kw} kW** '
           '({ph}) _(permintaan alat plambing ASHRAE — // VERIFY)_',
   RptStringKey.wsTankFill:
-      '- Tangki {tag} ({kind}): kapasitas {cap} L · pengisian {h} jam · debit '
+      '- Tangki {tag} ({kind}): kapasitas {cap} · pengisian {h} jam · debit '
           'pengisian **{lps} L/s** (kapasitas / waktu pengisian) _(// VERIFY '
           'waktu pengisian)_',
   RptStringKey.wsTankFillUnset:
@@ -1251,10 +1251,10 @@ const Map<RptStringKey, String> kReportStringsId = {
           'm3/hari** · pemakaian rata-rata {lps} L/s _(// VERIFY angka per '
           'orang)_',
   RptStringKey.wsReserveTank:
-      '- Tampungan {tag} ({kind}): {cap} L{fire} -> {dom} L domestik',
+      '- Tampungan {tag} ({kind}): {cap}{fire} -> {dom} domestik',
   RptStringKey.wsReserveFireShare: ' dikurangi cadangan kebakaran {fire} L',
   RptStringKey.wsReserveTotal:
-      '- Cadangan air: **{m3} m3** tersimpan / kebutuhan harian = **{days}** '
+      '- Cadangan air: **{m3}** tersimpan / kebutuhan harian = **{days}** '
           '_(informasi, tanpa ambang)_',
   RptStringKey.wsReserveDays: '{d} hari',
   RptStringKey.wsReserveDaysHours: '{d} hari ({h} jam)',

@@ -387,7 +387,8 @@ void main() {
           if (b is RptTable)
             for (final r in b.rows) r[2],
       ];
-      expect(cells, ['60.0 m3', '- (*)', '- (*)']);
+      // Backlog W-7 — the one capacity formatter: '60 m3' (was '60.0 m3').
+      expect(cells, ['60 m3', '- (*)', '- (*)']);
       final notes = [
         for (final b in blocks)
           if (b is RptNote) b.text,

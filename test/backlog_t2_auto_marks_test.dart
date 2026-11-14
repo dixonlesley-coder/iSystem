@@ -45,28 +45,31 @@ List<String> _riserTexts(WidgetRef ref) => [
 const _note = '(auto) = sized by the app from daily demand; not entered';
 
 void main() {
-  // House: RT auto 650 L = 0.65 m3 → '0.7 m3' (one decimal) + '(auto)'.
-  // Shophouse (backlog T-3 'Ruko / rukan' preset): GT 500 L → '0.5 m3', RT
-  // 250 L = 0.25 m3 → '0.3 m3', each '(auto)'. Office: GT 10 000 L → schedule '10.0 m3', riser '10 m3', both
-  // '(auto)'; the fire tank FT (never auto-sized) keeps 'capacity not set'.
+  // Backlog W-7 — the one capacity formatter: whole litres below 1 m3, m3 to
+  // 3 decimals trimmed above (was one-decimal m3: 650 L printed '0.7 m3',
+  // 250 L '0.3 m3'). House: RT auto 650 L → '650 L (auto)'. Shophouse
+  // (T-3 'Ruko / rukan'): GT 500 L → '500 L (auto)', RT 250 L → '250 L
+  // (auto)'. Office: GT 10 000 L → '10 m3 (auto)' on both M-601 (was '10.0
+  // m3') and M-201; the fire tank FT (never auto-sized) keeps 'capacity not
+  // set'.
   final cases = <String, ({Map<String, String> schedule, Set<String> riser})>{
     'house': (
-      schedule: {'TK-01': '0.7 m3 (auto)'},
-      riser: {'TK-01 Roof tank · 0.7 m3 (auto)', 'Roof tank: 0.7 m3 (auto)'},
+      schedule: {'TK-01': '650 L (auto)'},
+      riser: {'TK-01 Roof tank · 650 L (auto)', 'Roof tank: 650 L (auto)'},
     ),
     'shophouse': (
       schedule: {
-        'TK-01': '0.5 m3 (auto)', 'TK-02': '0.3 m3 (auto)', //
-        'TK-03': '0.5 m3 (auto)', 'TK-04': '0.3 m3 (auto)',
-        'TK-05': '0.5 m3 (auto)', 'TK-06': '0.3 m3 (auto)',
+        'TK-01': '500 L (auto)', 'TK-02': '250 L (auto)', //
+        'TK-03': '500 L (auto)', 'TK-04': '250 L (auto)',
+        'TK-05': '500 L (auto)', 'TK-06': '250 L (auto)',
       },
       riser: {
-        'TK-01 Ground tank · 0.5 m3 (auto)',
-        'TK-02 Roof tank · 0.3 m3 (auto)',
+        'TK-01 Ground tank · 500 L (auto)',
+        'TK-02 Roof tank · 250 L (auto)',
       },
     ),
     'office': (
-      schedule: {'TK-01': '10.0 m3 (auto)', 'TK-02': 'capacity not set'},
+      schedule: {'TK-01': '10 m3 (auto)', 'TK-02': 'capacity not set'},
       riser: {'TK-01 Ground tank · 10 m3 (auto)', 'Ground tank: 10 m3 (auto)'},
     ),
   };

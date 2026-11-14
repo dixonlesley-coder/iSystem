@@ -27,6 +27,7 @@ import '../sizing/tank_fill.dart' show MainsPressureCheck, WaterReserve;
 import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
+import 'number_format.dart' show formatTankCapacity;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 import 'riser_tags.dart' show elementTags;
@@ -960,17 +961,17 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         'tag': d.reserveTankTags[t.tankId] ?? t.tankId,
         'kind': strings(
             t.roof ? RptStringKey.wsTankKindRoof : RptStringKey.wsTankKindGround),
-        'cap': t.capacityLitres!.toStringAsFixed(0),
+        'cap': formatTankCapacity(t.capacityLitres!),
         'fire': t.fireReserveLitres > 0
             ? strings.format(RptStringKey.wsReserveFireShare,
                 {'fire': t.fireReserveLitres.toStringAsFixed(0)})
             : '',
-        'dom': WaterReserve.domesticLitres(t).toStringAsFixed(0),
+        'dom': formatTankCapacity(WaterReserve.domesticLitres(t)),
       }));
     }
     final days = wr.days;
     ws.writeln(strings.format(RptStringKey.wsReserveTotal, {
-      'm3': (wr.storedLitres! / 1000).toStringAsFixed(2),
+      'm3': formatTankCapacity(wr.storedLitres!),
       'days': days == null
           ? strings(RptStringKey.wsReserveNoDemand)
           : days < 1
@@ -1004,7 +1005,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         : strings.format(RptStringKey.wsTankFill, {
             'tag': t.tag,
             'kind': kind,
-            'cap': cap.toStringAsFixed(0),
+            'cap': formatTankCapacity(cap),
             'h': num(t.refillHours),
             'lps': q.inLitersPerSecond.toStringAsFixed(3),
           }));
@@ -1209,7 +1210,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'm3': (t.requiredLitres / 1000).toStringAsFixed(1),
               'cap': t.capacityLitres == null
                   ? strings(RptStringKey.fireTankReserveUnset)
-                  : '${t.capacityLitres!.toStringAsFixed(0)} L',
+                  : formatTankCapacity(t.capacityLitres!),
               'verdict': t.capacityLitres == null
                   ? ''
                   : t.capacityLitres! + 1e-9 < t.requiredLitres

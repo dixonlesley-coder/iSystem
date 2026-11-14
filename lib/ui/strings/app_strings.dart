@@ -2873,7 +2873,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueTankCapacityUnsetMessage:
       'Tank {tank} has no capacity entered and none can be auto-sized: the population is not set, so there is no daily demand. Its fill pipe stays on the peak-demand basis. Enter the population (Building page) or the tank capacity.',
   StringKey.reserveHeadlineLabel: 'Water reserve',
-  StringKey.reserveHeadlineValue: '{days} ({stored} m3 stored / {daily} m3 per day)',
+  StringKey.reserveHeadlineValue: '{days} ({stored} stored / {daily} m3 per day)',
   StringKey.reserveExcluded: 'Reserve excludes {n} tank(s) with no capacity set',
   StringKey.issueMainsPressureTitle: 'Mains pressure too low to fill the tank',
   StringKey.issueMainsPressureMessage:
@@ -3025,9 +3025,9 @@ const Map<StringKey, String> _en = {
   StringKey.issueRoomTrunkOverCapacityMessage:
       '{room} needs {flow} m3/s; even the largest standard trunk ({size}) runs at {velocity} m/s. Split the room across several units / trunks or lower its ACH.',
   StringKey.schematicNotesRoofTank:
-      'Roof tank: {m3} m3',
+      'Roof tank: {m3}',
   StringKey.schematicNotesGroundTank:
-      'Ground tank: {m3} m3',
+      'Ground tank: {m3}',
   StringKey.schematicNotesOccupancy:
       'Occupancy: {label}',
   StringKey.schematicNotesPeakFlow:
@@ -4637,7 +4637,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueTankCapacityUnsetMessage:
       'Tangki {tank} belum diisi kapasitasnya dan tidak dapat diukur otomatis: jumlah penghuni belum diisi, sehingga tidak ada kebutuhan harian. Pipa pengisinya tetap pada dasar kebutuhan puncak. Isi jumlah penghuni (halaman Bangunan) atau kapasitas tangki.',
   StringKey.reserveHeadlineLabel: 'Cadangan air',
-  StringKey.reserveHeadlineValue: '{days} ({stored} m3 tersimpan / {daily} m3 per hari)',
+  StringKey.reserveHeadlineValue: '{days} ({stored} tersimpan / {daily} m3 per hari)',
   StringKey.reserveExcluded: 'Cadangan tidak menghitung {n} tangki tanpa kapasitas',
   StringKey.issueMainsPressureTitle: 'Tekanan PDAM terlalu rendah untuk mengisi tangki',
   StringKey.issueMainsPressureMessage:
@@ -4789,9 +4789,9 @@ const Map<StringKey, String> _id = {
   StringKey.issueRoomTrunkOverCapacityMessage:
       '{room} memerlukan {flow} m3/s; saluran standar terbesar ({size}) pun mengalir {velocity} m/s. Bagi ruangan ke beberapa unit / saluran atau turunkan ACH-nya.',
   StringKey.schematicNotesRoofTank:
-      'Tangki atap: {m3} m3',
+      'Tangki atap: {m3}',
   StringKey.schematicNotesGroundTank:
-      'Tangki bawah: {m3} m3',
+      'Tangki bawah: {m3}',
   StringKey.schematicNotesOccupancy:
       'Hunian: {label}',
   StringKey.schematicNotesPeakFlow:

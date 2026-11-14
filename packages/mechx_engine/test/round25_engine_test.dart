@@ -302,10 +302,11 @@ void main() {
       final rows = buildEquipmentScheduleRows(data);
       expect(rows.map((r) => r.category).toSet(), {EquipmentCategory.tank});
       expect(rows.map((r) => r.tag), ['TK-01', 'TK-02', 'TK-03']);
-      // 60 000 L = 60.0 m3, 20 000 L = 20.0 m3.
-      expect(rows[0].duty, '60.0 m3');
+      // 60 000 L = 60 m3, 20 000 L = 20 m3 (backlog W-7: the one capacity
+      // formatter, trailing zeros trimmed; was '60.0 m3').
+      expect(rows[0].duty, '60 m3');
       expect(rows[0].service, contains('Ground tank'));
-      expect(rows[1].duty, '20.0 m3');
+      expect(rows[1].duty, '20 m3');
       expect(rows[1].service, contains('Roof tank'));
       expect(rows[2].duty, 'capacity not set');
       expect(buildEquipmentScheduleMarkdown(data), contains('## Tanks'));

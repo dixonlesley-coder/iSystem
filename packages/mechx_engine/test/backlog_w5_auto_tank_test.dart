@@ -168,8 +168,9 @@ void main() {
         role: NodeRole.plant,
         component: NodeComponent.roofTank,
         tankCapacityLitres: 650);
-    expect(equipmentDetail(n), '0.7 m3');
-    expect(equipmentDetail(n.copyWith(tankCapacityAuto: true)), '0.7 m3 (auto)');
+    // Backlog W-7 — whole litres below 1 m3 (was '0.7 m3', +7.7 %).
+    expect(equipmentDetail(n), '650 L');
+    expect(equipmentDetail(n.copyWith(tankCapacityAuto: true)), '650 L (auto)');
     final md = buildEquipmentScheduleMarkdown(const EquipmentScheduleData(
       projectName: 'P',
       date: '2026-11-14',
@@ -177,7 +178,7 @@ void main() {
         TankScheduleItem(tag: 'TK-01', roof: true, capacityLitres: 650, auto: true),
       ],
     ));
-    expect(md, contains('| 0.7 m3 (auto) |'));
+    expect(md, contains('| 650 L (auto) |'));
     expect(md, contains('(auto) = sized by the app from daily demand; not entered.'));
   });
 }

@@ -36,6 +36,7 @@ import '../electrical/sources.dart'
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower, Power;
+import 'number_format.dart' show formatTankCapacity;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
@@ -466,7 +467,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
               : RptStringKey.esGroundTankService),
       // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
       duty: cap != null && cap > 0
-          ? '${_fmt(cap / 1000.0, dp: 1)} m3${t.auto ? ' (auto)' : ''}'
+          ? '${formatTankCapacity(cap)}${t.auto ? ' (auto)' : ''}'
           : strings(RptStringKey.esTankCapacityUnset),
       size: '',
       modelSpec: t.modelSpec ?? specFor(t.tag),

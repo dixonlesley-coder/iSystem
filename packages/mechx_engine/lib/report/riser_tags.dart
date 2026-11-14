@@ -17,7 +17,7 @@ library;
 import 'package:mechx_engine/geometry/building.dart' show BuildingLevels, Floor;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
-    show signedElevationText;
+    show formatTankCapacity, signedElevationText;
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
@@ -867,14 +867,11 @@ String? equipmentDetail(NetNode node,
     case NodeComponent.expansionTank:
       final litres = node.tankCapacityLitres;
       if (litres == null || litres <= 0) return null;
-      final m3 = litres / 1000.0;
-      // Whole-m3 for big cisterns, one decimal for small tanks; strip a '.0'.
-      // ASCII 'm3' — matching the plant-detail callout, the notes card and the
-      // export (the PDF sanitizer would mangle a real superscript to '?').
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
-      // Backlog T-2 — an app-sized capacity says so on every drawing.
-      return node.tankCapacityAuto ? '$clean m3 (auto)' : '$clean m3';
+      // Backlog W-7 — the ONE capacity formatter (litres below 1 m3, else
+      // m3 to 3 decimals), ASCII 'm3' (the PDF sanitizer would mangle a
+      // superscript). Backlog T-2 — an app-sized capacity says so.
+      final cap = formatTankCapacity(litres);
+      return node.tankCapacityAuto ? '$cap (auto)' : cap;
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
     case NodeComponent.ahu:

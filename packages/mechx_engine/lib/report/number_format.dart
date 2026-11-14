@@ -96,3 +96,22 @@ String signedElevationText(double meters) {
   final s = meters.abs().toStringAsFixed(2);
   return (meters < 0 && s != '0.00') ? '-$s' : '+$s';
 }
+
+/// Backlog W-7 (2026-11-14) — the ONE tank-capacity formatter every printed
+/// surface uses (M-601 schedule, riser tag / KETERANGAN / pipe-key rows,
+/// calc report, inspector, the canvas schematic, the water-reserve lines).
+/// Below 1000 L: whole litres ('250 L', '650 L', '999 L'). From 1000 L:
+/// m3 with up to 3 decimals, trailing zeros trimmed ('1 m3', '1.2 m3',
+/// '2.25 m3', '10 m3', '85.172 m3', '150 m3') — so a printed capacity never
+/// differs from the stored one by more than 0.5 L (well under 0.5 %), where
+/// the old one-decimal m3 printed 250 L as '0.3 m3' (+20 %). ASCII 'm3'.
+String formatTankCapacity(double litres) {
+  if (!litres.isFinite) return kNonFiniteNumber;
+  if (litres.round() < 1000) return '${litres.round()} L';
+  var s = (litres / 1000.0).toStringAsFixed(3);
+  if (s.contains('.')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return '$s m3';
+}

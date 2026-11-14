@@ -664,7 +664,9 @@ void main() {
       expect(id(StringKey.electricalFeedCurrentSuffix), ' (saat ini)');
       expect(en(StringKey.electricalFeedCurrentSuffix), ' (current)');
       expect(id(StringKey.inspectorOccupancyPublic), 'Kantor / publik');
-      expect(en.format(StringKey.schematicNotesRoofTank, {'m3': '12'}),
+      // Backlog W-7 — the placeholder carries the formatted capacity with
+      // its unit (`formatTankCapacity`).
+      expect(en.format(StringKey.schematicNotesRoofTank, {'m3': '12 m3'}),
           'Roof tank: 12 m3');
       expect(feedChooserItems(
               candidates: const [(id: 'a', label: 'MDP')],

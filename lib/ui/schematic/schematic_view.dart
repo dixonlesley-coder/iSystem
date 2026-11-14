@@ -32,6 +32,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
     show flowFromBySizing, kPumpSetValveTrain, plantMoverCaptions;
+import 'package:mechx_engine/report/number_format.dart' show formatTankCapacity;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -4142,9 +4143,8 @@ class _AutoSchematicPainter extends CustomPainter {
       if (n.component != component) continue;
       final litres = n.tankCapacityLitres;
       if (litres == null || litres <= 0) continue;
-      final m3 = litres / 1000.0;
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      // Backlog W-7 — the ONE capacity formatter (unit included).
+      return formatTankCapacity(litres);
     }
     return null;
   }
@@ -4266,7 +4266,7 @@ class _AutoSchematicPainter extends CustomPainter {
       final m3 = _tankM3(NodeComponent.roofTank);
       _drawText(
         canvas,
-        m3 != null ? 'ROOF TANK $m3 m3' : 'ROOF TANK',
+        m3 != null ? 'ROOF TANK $m3' : 'ROOF TANK',
         Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
@@ -4403,7 +4403,7 @@ class _AutoSchematicPainter extends CustomPainter {
         final m3 = _tankM3(NodeComponent.groundTank);
         _drawText(
           canvas,
-          m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+          m3 != null ? 'GROUND TANK $m3' : 'GROUND TANK',
           Offset(cx + glyph / 2 + 8, gy + glyph / 2 - 6),
           fontSize: 9,
           color: colors.textSecondary,
@@ -4421,7 +4421,7 @@ class _AutoSchematicPainter extends CustomPainter {
       final m3 = _tankM3(NodeComponent.groundTank);
       _drawText(
         canvas,
-        m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+        m3 != null ? 'GROUND TANK $m3' : 'GROUND TANK',
         Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
@@ -5652,9 +5652,8 @@ class _SystemNotes extends ConsumerWidget {
       if (n.component != component) continue;
       final litres = n.tankCapacityLitres;
       if (litres == null || litres <= 0) continue;
-      final m3 = litres / 1000.0;
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      // Backlog W-7 — the ONE capacity formatter (unit included).
+      return formatTankCapacity(litres);
     }
     return null;
   }

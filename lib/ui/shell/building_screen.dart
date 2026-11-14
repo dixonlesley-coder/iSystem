@@ -7,7 +7,8 @@ import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
 import 'package:mechx_engine/standards/sni.dart'
     show Occupancy, kSniDailyDemandUses;
 import 'package:mechx_engine/units.dart';
-import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
+import 'package:mechx_engine/report/number_format.dart'
+    show formatTankCapacity, signedElevationText;
 import 'package:mechx_engine/report/riser_tags.dart' show fflLabel;
 
 import '../../store/app_state.dart'
@@ -1062,7 +1063,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             caption('${context.strings(StringKey.reserveHeadlineLabel)}: '
                 '${context.strings.format(StringKey.reserveHeadlineValue, {
                   'days': formatReserveDays(reserve.days!),
-                  'stored': (reserve.storedLitres! / 1000).toStringAsFixed(1),
+                  'stored': formatTankCapacity(reserve.storedLitres!),
                   'daily': (reserve.dailyLitres! / 1000).toStringAsFixed(1),
                 })}'),
           if (reserve.excludedTankIds.isNotEmpty)

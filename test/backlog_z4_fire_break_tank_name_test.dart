@@ -45,11 +45,12 @@ void main() {
     final tag = equipmentNodeTags(c.read(sizingNetworkProvider))['BT']!;
     expect(tag, 'TK-04');
 
-    // Equipment schedule: 'Fire break tank (fire zone relay)', 90.0 m3.
+    // Equipment schedule: 'Fire break tank (fire zone relay)', 90 m3
+    // (backlog W-7: the one capacity formatter; was '90.0 m3').
     final rows = buildEquipmentScheduleRows(gatherEquipmentScheduleData(ref));
     final bt = rows.singleWhere((r) => r.tag == tag);
     expect(bt.service, 'Fire break tank (fire zone relay)');
-    expect(bt.duty, '90.0 m3');
+    expect(bt.duty, '90 m3');
     expect(rows.where((r) => r.service.startsWith('Roof tank')), hasLength(1));
 
     // Issued riser: 'TK-04 Fire break tank · 90 m3' (was 'TK-04 Roof tank ·
