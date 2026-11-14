@@ -1232,3 +1232,25 @@ PP-E on E-301; apartment `demand 120.9 kVA · genset basis 121 kVA` = PP-E. PNG 
 `shophouse/png/Ruko Contoh-plan-3-Lantai 3-p1.png`, `tower/png/Menara Contoh 30-plan-7-Lantai 7-detail-p1.png`,
 `tower/png/Menara Contoh 30-riser-sld-p17.png` (PLANT), `tower/png/Menara Contoh 30-electrical-overview-sld-p1.png`
 and `-p4.png` (last).
+
+## Fix round 4 (2026-11-13)
+
+Three residual legibility defects of the fix-round-3 re-check, fixed in the shared pure layout layer
+(the PDF and the DXF place from one layout), each with a test in
+`packages/mechx_engine/test/drawing_fix_round4_test.dart` and a scripted class in
+`tool/ref_drawings_precheck.py` (item 6). No sizing figure was recalculated.
+
+| # | Root cause (what the obstacle set / test was missing) | Fix | Pre-check |
+|---|---|---|---|
+| R1 | `_placeKeyTag` tested a key leader against placed tags (labels) and runs only. Detail captions, bubble letters, UP/DN marks, tie figures, grid bubbles and mark texts are registered as occupied BOXES, so the key-12 leaders on tower M-116 ran through 'DETAIL A - LIHAT M-509'. | `PlanLabelLayout.addTextBox` registers every text-bearing box; a key leader crossing one (inflated 0.2 text heights: a box stops at its baseline) costs like one through a tag. The captions are placed first, so the key placed second respects them. | "key and detail-bubble leaders clear of every text": a straight line ending radially on a key / bubble circle may touch no other glyph (plans, details, risers). |
+| R2 | The riser `_placeKey` tested a circle against every ink box with a 0.85 r box (a 0.5-unit pipe and a 20-unit glyph alike), and its on-element last resort exempted every ink box holding the anchor, the element's own SYMBOL included, and ran before the key rows: keys 24 / 25 of the tower Lantai 1-2 plant were drawn on TK-03 / P-04. | `_LabelPlacer.reserveGlyph` marks a drawn symbol's full extent (equipment glyph, fixture terminal, junction box, sewer terminus, HWR pump); a key keeps its full radius + 0.2 label heights from every glyph, its own included; the on-element fallback may overlay only its own pipe, so a crowded symbol key steps out to the key rows on a leader. | "riser key circles clear of every symbol": no key circle within 0.3 pt of a closed thin-stroke glyph, a junction box or a symbol circle (its own radial leader excepted). |
+| R3 | Three ways a run printed through plan text: the UP/DN fallback (every quadrant crossed by a run) stacked the mark testing boxes only, so the DN50 drain struck through the 'DN' at the M-507 stack (and every stack detail) uncounted; the A5 flow chevron was drawn by the exporters but never registered with the layout (the 'N' of UP/DN on 20 tower plans); a run key skipped its own run (the pipe through the key number). The reviewed tag itself ('D-Ln · DN40 / 1.5 m - 1:50') measured clear in the PDF: the nearest foreign run (the other LAV drain) is 3.5 pt from its glyphs. | The mark steps out on an 8-direction ring clear of runs before the stack, and a stacked mark crossed by a run is counted; `planFlowChevronArms` (the exporters' own geometry) is registered as the run's linework (`layoutPlanAnnotations(flowFromIds:)`, plan PDF + both DXF paths); a run key's number box must clear its own run. A key with no clear slot within 6 text heights tries 64 directions and rings out to `kPlanKeyTagLeaderReachFactor` (12) before the stamp. Tag blocks already cleared foreign runs (`_kRunClearFactor`) on plans and details with measured Helvetica, rotated quads. | "no linework through a tag on plans and details": no straight stroke (grid chain excepted) crosses a printed glyph quad (Helvetica advance, 0.12 em below .. 0.72 em above the baseline, rotated text included). |
+
+Result on the regenerated set (`drawings-t`, scratchpad): zero FAIL on all five buildings (PASS: house 143,
+shophouse 220, office 286, apartment 651, tower 1480). Drawing-PDF pages: house 14 -> 15 (Lantai 2
+detail), shophouse 26 -> 27 (Lantai 3 detail), office 32, apartment 72 -> 74 (riser 8 -> 9, Lantai 3
+detail), tower 160 -> 165 (riser 18 -> 20; Lantai 8 / 13 / 14 details, a second detail on Lantai 28 / 29,
+two fewer Lantai 16 detail sheets): every added sheet holds keys that used to print over a run, a symbol
+or a leader. PNGs to re-check (relative to `drawings-t/`): `tower/png/Menara Contoh 30-plan-16-Lantai 16-p1.png`,
+`tower/png/Menara Contoh 30-riser-sld-p19.png` (Lantai 1 + PLANT), `tower/png/Menara Contoh 30-riser-sld-p18.png`
+(Lantai 1-4), `tower/png/Menara Contoh 30-plan-7-Lantai 7-detail-p1.png`.

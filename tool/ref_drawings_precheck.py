@@ -20,7 +20,9 @@ numbers unique + drawing list, 5 smallest text pt, 6 stamped overlap warning,
 part, plans + risers + single-lines + schedules), 6 the supply / drainage
 notes clear of linework, 21 panel-schedule totals add up to the DAYA rows
 (E-201 / E-601), 23 no orphan schedule page, 24 cross-document figures, 25
-PDF vs DXF text. Report only:
+PDF vs DXF text; fix round 4: 6 key / detail-bubble leaders clear of every
+text, riser key circles clear of every symbol, no stroke through a printed
+glyph on a plan / detail sheet. Report only:
 it never edits a drawing.
 
 Needs: pdftoppm + pdftotext (poppler), ImageMagick `montage`, python3 with
@@ -514,6 +516,274 @@ def symbol_text_hits(pdf):
     return out
 
 
+# ── Fix round 4 (2026-11-13) helpers ────────────────────────────────────────
+def _page_lines(pg):
+    """Every straight stroked segment on a page: (x1, y1, x2, y2, width,
+    colour) in pdfplumber's top-down coordinates (lines and rect edges)."""
+    out = []
+    for l in pg.lines:
+        pts = l.get('pts') or [(l['x0'], l['top']), (l['x1'], l['bottom'])]
+        for a, b in zip(pts, pts[1:]):
+            out.append((a[0], a[1], b[0], b[1], l.get('linewidth') or 0.0,
+                        l.get('stroking_color')))
+    for r in pg.rects:
+        if not r.get('stroke', True):
+            continue
+        x0, t, x1, bt = r['x0'], r['top'], r['x1'], r['bottom']
+        for a, b in (((x0, t), (x1, t)), ((x1, t), (x1, bt)),
+                     ((x1, bt), (x0, bt)), ((x0, bt), (x0, t))):
+            out.append((a[0], a[1], b[0], b[1], r.get('linewidth') or 0.0,
+                        r.get('stroking_color')))
+    return out
+
+
+def _grey(col):
+    """The setting-out grid's chain grey (a tag may cross a grid line)."""
+    return (isinstance(col, (list, tuple)) and len(col) == 3 and
+            all(abs(c - 0.55) < 0.02 for c in col))
+
+
+def _seg_hits_quad(x1, y1, x2, y2, q):
+    """Does the segment touch the INTERIOR of the convex quad [q]?"""
+    def inside(px, py):
+        sg = 0
+        for i in range(4):
+            ax, ay = q[i]
+            bx, by = q[(i + 1) % 4]
+            c = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+            if abs(c) < 1e-9:
+                return False
+            t = 1 if c > 0 else -1
+            if sg and t != sg:
+                return False
+            sg = t
+        return True
+    if inside(x1, y1) or inside(x2, y2):
+        return True
+
+    def o(px, py, qx, qy, rx, ry):
+        return (qx - px) * (ry - py) - (qy - py) * (rx - px)
+    for i in range(4):
+        ax, ay = q[i]
+        bx, by = q[(i + 1) % 4]
+        d1, d2 = o(ax, ay, bx, by, x1, y1), o(ax, ay, bx, by, x2, y2)
+        d3, d4 = o(x1, y1, x2, y2, ax, ay), o(x1, y1, x2, y2, bx, by)
+        if (d1 > 1e-9) != (d2 > 1e-9) and (d3 > 1e-9) != (d4 > 1e-9) and \
+                min(abs(d1), abs(d2), abs(d3), abs(d4)) > 1e-9:
+            return True
+    return False
+
+
+def _shrunk(q, f=0.1):
+    """[q] shrunk about its centre by [f] (a tangent touch is not a hit)."""
+    cx = sum(p[0] for p in q) / 4
+    cy = sum(p[1] for p in q) / 4
+    return [(cx + (x - cx) * (1 - f), cy + (y - cy) * (1 - f)) for x, y in q]
+
+
+def _seg_point_dist(px, py, x1, y1, x2, y2):
+    dx, dy = x2 - x1, y2 - y1
+    ll = dx * dx + dy * dy
+    t = 0.0 if ll == 0 else max(0.0, min(1.0, ((px - x1) * dx +
+                                               (py - y1) * dy) / ll))
+    return ((px - x1 - t * dx) ** 2 + (py - y1 - t * dy) ** 2) ** 0.5
+
+
+def _circle_marks(pg, chars, quads):
+    """[(cx, cy, r, mark, own char indices)] for every circle on the page
+    holding a KEY number (digits) or a DETAIL bubble letter (capitals)."""
+    out = []
+    for cx, cy, r in page_circles(pg):
+        own = [k for k in range(len(chars))
+               if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                      for x, y in quads[k])]
+        mark = ''.join(chars[k]['text'] for k in
+                       sorted(own, key=lambda k: chars[k]['x0']))
+        if re.fullmatch(r'\d{1,3}|[A-Z]{1,2}', mark):
+            out.append((cx, cy, r, mark, set(own)))
+    return out
+
+
+def _leaders(lines, marks):
+    """The leaders of [marks]: a straight line with one end ON the circle
+    (within 0.6 pt of its perimeter), the other outside it, running
+    radially (its extension passes within 0.3 r of the centre)."""
+    out = []
+    for (x1, y1, x2, y2, w, col) in lines:
+        if _grey(col):
+            continue
+        for cx, cy, r, mark, own in marks:
+            d1 = ((x1 - cx) ** 2 + (y1 - cy) ** 2) ** 0.5
+            d2 = ((x2 - cx) ** 2 + (y2 - cy) ** 2) ** 0.5
+            if not ((abs(d1 - r) < 0.6 and d2 > r + 0.5) or
+                    (abs(d2 - r) < 0.6 and d1 > r + 0.5)):
+                continue
+            ll = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+            if ll < 1e-6:
+                continue
+            perp = abs((x2 - x1) * (y1 - cy) - (y2 - y1) * (x1 - cx)) / ll
+            if perp < 0.3 * r:
+                out.append(((x1, y1, x2, y2), mark, own))
+                break
+    return out
+
+
+def leader_text_hits(pdf):
+    """Fix round 4 (R1) - {page: [(mark, text hit)]}: a KEY or DETAIL-bubble
+    leader that runs through the printed glyph of any text (a tag, a detail
+    caption, an UP/DN mark, another key's number)."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            marks = _circle_marks(pg, chars, quads)
+            hits = []
+            for (x1, y1, x2, y2), mark, own in _leaders(_page_lines(pg), marks):
+                bx0, bx1 = min(x1, x2), max(x1, x2)
+                by0, by1 = min(y1, y2), max(y1, y2)
+                bad = []
+                for k, q in enumerate(quads):
+                    if k in own:
+                        continue
+                    if max(p[0] for p in q) < bx0 or min(p[0] for p in q) > bx1 \
+                            or max(p[1] for p in q) < by0 or \
+                            min(p[1] for p in q) > by1:
+                        continue
+                    if _seg_hits_quad(x1, y1, x2, y2, _shrunk(q)):
+                        bad.append(chars[k]['text'])
+                if bad:
+                    hits.append((mark, ''.join(bad)[:20]))
+            if hits:
+                out[i] = hits
+    return out
+
+
+def riser_key_symbol_hits(pdf, clear=0.3):
+    """Fix round 4 (R2) - {page: [(key, n strokes)]}: on a riser sheet, a KEY
+    circle within [clear] pt of a drawn SYMBOL - a closed glyph of thin
+    strokes (a tank, a pump's impeller, a fixture triangle, a valve body), a
+    junction box or a symbol circle (a pump / fan body). Pipes (the heavier
+    strokes), open marks (flow chevrons) and its own leader are not symbols."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            keys = [m for m in _circle_marks(pg, chars, quads)
+                    if m[3].isdigit()]
+            if not keys:
+                continue
+            lines = _page_lines(pg)
+            # Pipes are the heaviest strokes on a riser; symbols, leaders,
+            # chevrons and rules are drawn lighter.
+            thin = 0.85 * max([l[4] for l in lines] or [0.0])
+            # Closed shapes of thin strokes: a connected component with at
+            # least as many strokes as distinct end points holds a cycle.
+            tl = [l for l in lines if l[4] <= thin and not _grey(l[5])]
+            parent = {}
+
+            def find(a):
+                while parent.setdefault(a, a) != a:
+                    parent[a] = parent[parent[a]]
+                    a = parent[a]
+                return a
+
+            def pt(x, y):
+                return (round(x * 10), round(y * 10))
+            for (x1, y1, x2, y2, _, _) in tl:
+                ra, rb = find(pt(x1, y1)), find(pt(x2, y2))
+                if ra != rb:
+                    parent[ra] = rb
+            n_edges, n_nodes = defaultdict(int), defaultdict(set)
+            for (x1, y1, x2, y2, _, _) in tl:
+                root = find(pt(x1, y1))
+                n_edges[root] += 1
+                n_nodes[root] |= {pt(x1, y1), pt(x2, y2)}
+            sym = [l for l in tl
+                   if n_edges[find(pt(l[0], l[1]))] >=
+                   len(n_nodes[find(pt(l[0], l[1]))])]
+            key_centres = {(round(k[0], 1), round(k[1], 1)) for k in keys}
+            circles = [c for c in page_circles(pg)
+                       if (round(c[0], 1), round(c[1], 1)) not in key_centres
+                       and c[2] <= 15]
+            hits = []
+            for cx, cy, r, mark, _ in keys:
+                n = 0
+                for (x1, y1, x2, y2, _, _) in sym:
+                    d1 = ((x1 - cx) ** 2 + (y1 - cy) ** 2) ** 0.5
+                    d2 = ((x2 - cx) ** 2 + (y2 - cy) ** 2) ** 0.5
+                    ll = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+                    radial = ll > 1e-6 and abs(
+                        (x2 - x1) * (y1 - cy) - (y2 - y1) * (x1 - cx)) / ll \
+                        < 0.3 * r
+                    if radial and min(abs(d1 - r), abs(d2 - r)) < 0.6:
+                        continue  # its own leader, ending on the circle
+                    if _seg_point_dist(cx, cy, x1, y1, x2, y2) - r < clear:
+                        n += 1
+                for ox, oy, orr in circles:
+                    d = ((ox - cx) ** 2 + (oy - cy) ** 2) ** 0.5
+                    if d - r - orr < clear and d + orr > r and d + r > orr:
+                        n += 1
+                if n:
+                    hits.append((mark, n))
+            if hits:
+                out[i] = hits
+    return out
+
+
+def foreign_line_tag_hits(pdf):
+    """Fix round 4 (R3) - {page: [text]}: on a plan / detail sheet, a printed
+    glyph (a pipe / duct tag, an UP/DN mark, a key number) crossed by a
+    straight stroke - another run, its flow chevron, a leader. Measured on
+    the glyph quads (Helvetica advance, rotated text included); a tag may
+    still cross a setting-out GRID line (grey chain), and a tangent touch
+    is forgiven."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            lines = [l for l in _page_lines(pg) if not _grey(l[5])]
+            cell = 24.0
+            grid = defaultdict(list)
+            for l in lines:
+                x1, y1, x2, y2 = l[:4]
+                for gx in range(int(min(x1, x2) // cell),
+                                int(max(x1, x2) // cell) + 1):
+                    for gy in range(int(min(y1, y2) // cell),
+                                    int(max(y1, y2) // cell) + 1):
+                        grid[(gx, gy)].append(l)
+            bad = []
+            for ch in pg.chars:
+                if not ch['text'].strip():
+                    continue
+                q = _shrunk(glyph_quad(ch, H))
+                xs, ys = [p[0] for p in q], [p[1] for p in q]
+                seen = set()
+                hit = False
+                for gx in range(int(min(xs) // cell), int(max(xs) // cell) + 1):
+                    for gy in range(int(min(ys) // cell),
+                                    int(max(ys) // cell) + 1):
+                        for l in grid.get((gx, gy), ()):
+                            if id(l) in seen:
+                                continue
+                            seen.add(id(l))
+                            if _seg_hits_quad(*l[:4], q):
+                                hit = True
+                                break
+                        if hit:
+                            break
+                    if hit:
+                        break
+                if hit:
+                    bad.append(ch['text'])
+            if bad:
+                out[i] = bad
+    return out
+
+
 def red_strokes(pgp):
     """Stroked linework in the essential (red) ink on a page."""
     def red(col):
@@ -1001,6 +1271,66 @@ def run_building(root, b):
                      ', '.join(f'key {k} on "{t}"' for k, t in h[:6]))
             else:
                 emit(6, 'PASS', lab, 'every key circle clear of text')
+
+    # ── Fix round 4 (2026-11-13) ─────────────────────────────────────────
+    # R1 (item 6) - a key / detail-bubble leader never runs through text.
+    lines += ['', '## Item 6 - key and detail-bubble leaders clear of every '
+              'text (scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-(plan-\d+-.+|riser-sld)$', st) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = leader_text_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} leader(s) through text: ' +
+                     ', '.join(f'{m} through "{t}"' for m, t in h[:6]))
+            else:
+                emit(6, 'PASS', lab, 'every key / bubble leader clear of text')
+
+    # R2 (item 6) - a riser key circle never sits on (or tight to) a symbol.
+    lines += ['', '## Item 6 - riser key circles clear of every symbol '
+              '(scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not st.endswith('-riser-sld'):
+            continue
+        hits = riser_key_symbol_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} key circle(s) on a symbol: ' +
+                     ', '.join(f'key {k} ({c} stroke(s))' for k, c in h[:6]))
+            else:
+                emit(6, 'PASS', lab, 'every key circle clear of the symbols')
+
+    # R3 (item 6) - no foreign linework through a tag on a plan / detail.
+    lines += ['', '## Item 6 - no linework through a tag on plans and details '
+              '(scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-plan-\d+-.+$', st) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = foreign_line_tag_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} glyph(s) crossed by a line: "' +
+                     ''.join(h)[:40] + '"')
+            else:
+                emit(6, 'PASS', lab, 'no stroke crosses a printed glyph')
 
     # S3 (item 9) - an SLD-family legend keys 'Essential' only when the page
     # draws essential (red) linework: a red NOTE is not an essential supply.

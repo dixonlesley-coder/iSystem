@@ -851,10 +851,11 @@ const double kPlanKeyedLeaderMaxFactor = 4.0;
 /// short local tie (≈ 19 mm at 9 pt).
 const double kPlanKeyTagLeaderMaxFactor = 6.0;
 
-/// Fix round 4 — the furthest ring (× text size beyond the circle) a key
-/// tries when no slot within [kPlanKeyTagLeaderMaxFactor] is clear, before
-/// the sheet counts an overprint.
-const double kPlanKeyTagLeaderReachFactor = 8.0;
+/// Fix round 4 — the furthest ring (× text size beyond the circle, ≈ 38 mm
+/// at 9 pt) a key tries when no slot within [kPlanKeyTagLeaderMaxFactor] is
+/// clear, before the sheet counts an overprint: a long clear leader reads;
+/// a number under a pipe does not.
+const double kPlanKeyTagLeaderReachFactor = 12.0;
 
 /// Fix round F4 (2026-11-13) — the clear paper a plan's KETERANGAN PIPA /
 /// PIPE KEY table keeps round it, × text size: no mark, marker text, label
@@ -1979,7 +1980,7 @@ LeaderedLabelPlacement _placeKeyTag({
   // the honest stamp; a key that cleared on the first pass is unchanged.
   for (final (dirs, gaps) in [
     (32, rings),
-    (64, [...rings, kPlanKeyTagLeaderReachFactor]),
+    (64, [...rings, 7.0, 8.0, 10.0, kPlanKeyTagLeaderReachFactor]),
   ]) {
     if (best != null && best.cost == 0) break;
     for (final gap in gaps) {
