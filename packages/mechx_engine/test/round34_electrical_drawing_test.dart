@@ -173,7 +173,9 @@ void main() {
         buildElectricalOverview(project: project, result: r, sourceChain: true);
     expect(sldSinglePageMinLabelPt(whole), lessThan(kMinPlotLabelPt));
     final pages = paginatedElectricalOverviewSheets(project: project, result: r);
-    expect(pages.length, greaterThan(1));
+    // Drawing backlog C-3 — the 14 identical sub-boards now ride one typical
+    // node (their feeders tabulated), so the tier may fit one page.
+    expect(pages, isNotEmpty);
     for (final p in pages) {
       expect(sldSinglePageMinLabelPt(p),
           greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
@@ -184,7 +186,7 @@ void main() {
       for (final p in pages) {
         n += p.prims
             .whereType<SldLabel>()
-            .where((l) => l.bold && l.text == 'SDP-$i')
+            .where((l) => l.text == 'SDP-$i') // a node or a table row
             .length;
       }
       expect(n, 1, reason: 'SDP-$i');

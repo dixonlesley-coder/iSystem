@@ -65,6 +65,21 @@ DuctProduct defaultDuctProductForService(ServiceType service) =>
 DuctProduct effectiveDuctProductFor(NetEdge edge) =>
     edge.ductProduct ?? defaultDuctProductForService(edge.service);
 
+/// Backlog F-1 — the Darcy wall roughness ε of a duct of [service] when no
+/// product is chosen: the roughness of [defaultDuctProductForService] (PU
+/// 0.03 mm for AC supply / return air, BJLS 0.09 mm for exhaust). The ONE
+/// basis the room-air equipment estimate (`sizeRoomAir`) and an unset drawn
+/// duct ([effectiveDuctRoughnessFor], `duct_static`) both read, so the two
+/// statics never differ by material.
+Roughness defaultDuctRoughnessForService(ServiceType service) =>
+    ductRoughnessFor(defaultDuctProductForService(service));
+
+/// Backlog F-1 — the Darcy wall roughness ε of a drawn duct [edge]: its
+/// [effectiveDuctProductFor] product's roughness (the service default when
+/// unset — [defaultDuctRoughnessForService]). Call only for air edges.
+Roughness effectiveDuctRoughnessFor(NetEdge edge) =>
+    ductRoughnessFor(effectiveDuctProductFor(edge));
+
 /// A horizontal [run] (length from the sheet's calibrated scale) or a vertical
 /// [riser] (length from a true-elevation delta — never from a PDF, §10). A
 /// riser also covers a "drop" between a ceiling main and a fixture or the
@@ -167,6 +182,12 @@ enum NodeComponent {
   acCassette,
   acSplitWall,
   acDucted,
+  // Backlog G-2 (2026-11-13) — an electric storage WATER HEATER (role:
+  // plant): the source of a hot-water service fed from a cold-water pipe.
+  // Its recovery / storage / element are sized from the hot fixtures it
+  // serves (`sizing/water_heater.dart`) and it is an electrical load
+  // (heating, cos φ 1). Appended last so stored indices never shift.
+  waterHeater,
 }
 
 /// Round 33 (hydraulics-3-1) — the ONE non-demand TERMINAL predicate: a
@@ -281,7 +302,8 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.exhaustFan ||
         NodeComponent.acCassette ||
         NodeComponent.acSplitWall ||
-        NodeComponent.acDucted =>
+        NodeComponent.acDucted ||
+        NodeComponent.waterHeater =>
           NodeRole.plant,
         // Inline valves + meters / strainer / expansion tank + FDC inlet +
         // inline dampers / VAV.
@@ -328,6 +350,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.acCassette => 'Cassette AC',
         NodeComponent.acSplitWall => 'Split wall AC',
         NodeComponent.acDucted => 'Ducted AC',
+        NodeComponent.waterHeater => 'Water heater',
       };
 
   /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /
@@ -375,7 +398,8 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.fcu ||
         NodeComponent.acCassette ||
         NodeComponent.acSplitWall ||
-        NodeComponent.acDucted =>
+        NodeComponent.acDucted ||
+        NodeComponent.waterHeater =>
           true,
         _ => false,
       };
@@ -396,6 +420,9 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.acSplitWall => 0.9,
         NodeComponent.acCassette => 1.8,
         NodeComponent.acDucted => 2.6,
+        // Backlog G-2 — an unsized heater's representative element (the
+        // smallest ladder rung); a sized one is fed its own element.
+        NodeComponent.waterHeater => 1.5,
         _ => 0.0,
       };
 }
@@ -459,6 +486,14 @@ class NetNode {
   /// footprint × depth). Null for a non-tank node or an unspecified size.
   final double? tankCapacityLitres;
 
+  /// Backlog W-1 (2026-11-14) — the REFILL TIME (hours) of a storage TANK
+  /// node: its fill flow is [tankCapacityLitres] / this
+  /// (`sizing/tank_fill.dart` `tankFillFlow`). Null ⇒ the type default
+  /// (`kGroundTankRefillHoursDefault` / `kRoofTankRefillHoursDefault`,
+  /// `// VERIFY`). Additive — the sizer reads it only on a tank with a
+  /// capacity, so a null value on an old file is byte-identical.
+  final double? tankRefillHours;
+
   /// Explicit electrical load (W) for a motorised equipment node (pump / fan /
   /// air unit) — overrides the component's [NodeComponentInfo.defaultMotorKw]
   /// when the mechanical node is fed into the electrical model. Null ⇒ use the
@@ -513,6 +548,7 @@ class NetNode {
     this.roofAreaM2,
     this.component,
     this.tankCapacityLitres,
+    this.tankRefillHours,
     this.electricalLoadW,
     this.faceWidthMm,
     this.faceHeightMm,
@@ -543,6 +579,8 @@ class NetNode {
     bool clearComponent = false,
     double? tankCapacityLitres,
     bool clearTankCapacity = false,
+    double? tankRefillHours,
+    bool clearTankRefillHours = false,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
     double? faceWidthMm,
@@ -575,6 +613,9 @@ class NetNode {
         tankCapacityLitres: clearTankCapacity
             ? null
             : (tankCapacityLitres ?? this.tankCapacityLitres),
+        tankRefillHours: clearTankRefillHours
+            ? null
+            : (tankRefillHours ?? this.tankRefillHours),
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),
@@ -653,12 +694,36 @@ bool nodeCarriesContent(NetNode n) =>
     n.customFixtureId != null ||
     n.airflow != null ||
     n.tankCapacityLitres != null ||
+    n.tankRefillHours != null ||
     n.roofAreaM2 != null ||
     n.electricalLoadW != null ||
     n.faceWidthMm != null ||
     n.faceHeightMm != null ||
     n.elevation != null ||
     n.mountHeight != null;
+
+/// Height of a hose-cabinet landing valve above its own finished floor (m).
+///
+/// Backlog D-1 (2026-11-13) — the ONE hose-outlet height: it sets a datum-less
+/// [NodeComponent.hydrantBox] / [NodeComponent.hoseReel] node's elevation
+/// ([nodeElevation]), so the pipe leg to the outlet, the standpipe lift
+/// (`fire_standpipe.dart`, `fire_index_friction.dart`) and the outlet
+/// pressures (`standpipe_outlet_pressure.dart`) all read the same 1.2 m.
+///
+/// // VERIFY — representative Indonesian hydrant-box mounting (≈ 0.9–1.5 m,
+/// 1.2 m typical), general practice NOT an SNI clause. Surfaced via
+/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
+const double kHoseOutletHeightM = 1.2;
+
+/// Backlog D-3 (2026-11-13) — height of a datum-less water meter
+/// ([NodeComponent.waterMeter]) above its own floor surface (m). A meter is
+/// set near the floor (in its box / on the incoming main at low level), not
+/// at the ceiling main: the stub to a slab-mounted ground tank measures its
+/// plan length + |0.5 − the tank's datum|, with no false storey-high leg.
+///
+/// // VERIFY — notAnSniClause: a drafting convention, not an SNI figure; set
+/// the node's elevation / mounting height for the real meter position.
+const double kWaterMeterHeightM = 0.5;
 
 /// True elevation of [node] (§10), used for riser/drop length and static lift:
 ///   • explicit [NetNode.elevation] if set;
@@ -667,7 +732,12 @@ bool nodeCarriesContent(NetNode n) =>
 ///   • [NodeRole.fixture] → fixture height above its floor — except a GRAVITY
 ///     outlet: [NodeComponent.floorDrain] / [NodeComponent.cleanout] at its
 ///     floor surface, [NodeComponent.roofDrain] at the roof on the top storey
-///     (its own floor surface below it);
+///     (its own floor surface below it); a hose outlet
+///     ([NodeComponent.hydrantBox] / [NodeComponent.hoseReel]) at
+///     [kHoseOutletHeightM] above its floor (backlog D-1); a
+///     [NodeComponent.sprinklerHead] AT its floor's ceiling plane, the datum
+///     a bare main takes (backlog D-2); a [NodeComponent.waterMeter] at
+///     [kWaterMeterHeightM] above its floor (backlog D-3);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
 ///       – [NodeComponent.roofTank] → roof level on the top storey (it sits
 ///         on the roof slab); drawn BELOW the top storey, its own floor
@@ -716,6 +786,27 @@ Length nodeElevation(
         return building.elevationOf(node.floorIndex);
       }
       return building.roofElevation;
+    // Backlog D-1 (2026-11-13) — a hose outlet sits at the ONE landing-valve
+    // height the standpipe lift and the outlet pressures use (1.2 m), not at
+    // the 1.1 m plumbing fixture height: its pipe leg, its static and the lift
+    // now agree.
+    case NodeComponent.hydrantBox:
+    case NodeComponent.hoseReel:
+      return Length(
+          building.elevationOf(node.floorIndex).meters + kHoseOutletHeightM);
+    // Backlog D-2 (2026-11-13) — a pendent / upright sprinkler head hangs AT
+    // the ceiling plane of its floor (the bare main's datum, where the
+    // sprinkler lift is already taken), not at the 1.1 m tap height: its run
+    // has no drop ([runConnectionElevation]) and its displayed elevation,
+    // static and the BOM agree.
+    case NodeComponent.sprinklerHead:
+      return building.ceilingElevationOf(node.floorIndex, mounting);
+    // Backlog D-3 (2026-11-13) — a water meter sits near its floor
+    // ([kWaterMeterHeightM]), not at the ceiling main a bare `main` takes:
+    // that added a false storey-high leg to every meter stub.
+    case NodeComponent.waterMeter:
+      return Length(
+          building.elevationOf(node.floorIndex).meters + kWaterMeterHeightM);
     default:
       break;
   }
@@ -737,6 +828,12 @@ Length nodeElevation(
         case NodeComponent.acCassette:
         case NodeComponent.acSplitWall:
         case NodeComponent.acDucted:
+        // Backlog G-2 — an electric storage water heater is wall-hung in the
+        // ceiling space beside the main that feeds it (its cold feed and hot
+        // outlet run level with the ceiling mains). VERIFY — notAnSniClause
+        // (a modelling datum; set the node's mount height / elevation for a
+        // floor-standing vessel).
+        case NodeComponent.waterHeater:
           return building.ceilingElevationOf(node.floorIndex, mounting);
         case null:
           // Round 17 (report-recompute-2-component-less-source-at-roof-on-
@@ -800,11 +897,21 @@ Length nodeElevation(
 /// then roof − foot datum, not one storey short. Drainage / rainwater keep the
 /// under-slab datum. `// VERIFY` notAnSniClause (the VTR is taken at the roof
 /// slab; the upstand above it is not modelled).
+///
+/// Reference house M1 (2026-11-13, regression-stack-vent-from-soil-stack-top-
+/// zero-length) — only a VENT-ONLY bare junction on the top storey is the
+/// VTR. A vent-riser end that is ALSO a node of a DRAINAGE edge (given [net]:
+/// the soil-stack top a stack vent rises from) is where the vent leaves the
+/// soil stack, so it keeps its DRAINAGE under-slab datum: a stack vent drawn
+/// from the top-floor drainage junction to a roof VTR measured 0 m (both
+/// ends at the roof) instead of roof − under-slab. Without [net] the Round 22
+/// rule applies unchanged.
 Length gravityRiserEndElevation(
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
   ServiceType? service,
+  Network? net,
 ]) {
   final bareJunction = node.elevation == null &&
       node.mountHeight == null &&
@@ -815,7 +922,11 @@ Length gravityRiserEndElevation(
   final f = node.floorIndex.clamp(0, building.levelCount - 1);
   if (service == ServiceType.vent &&
       building.levelCount > 1 &&
-      f == building.levelCount - 1) {
+      f == building.levelCount - 1 &&
+      !(net != null &&
+          net
+              .edgesAt(node.id)
+              .any((e) => e.service == ServiceType.drainage))) {
     return building.roofElevation;
   }
   if (f == 0) return building.elevationOf(0);
@@ -833,15 +944,18 @@ Length gravityRiserEndElevation(
 /// diffuser / grille / sprinkler head at the ceiling, exactly the datum a RUN
 /// leg uses — so one physical duct measures the same whether it is drawn as a
 /// single riser or as a run + riser. [nodeElevation] stays the STATIC datum
-/// of the pressure solves.
+/// of the pressure solves. Pass [net] so a vent riser's soil-stack-top end
+/// reads its drainage datum (see [gravityRiserEndElevation]); every length
+/// consumer that holds the network does.
 Length riserEndElevation(
   NetEdge edge,
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
+  Network? net,
 ]) =>
     edge.service.regime == FlowRegime.gravity
-        ? gravityRiserEndElevation(node, building, mounting, edge.service)
+        ? gravityRiserEndElevation(node, building, mounting, edge.service, net)
         : runConnectionElevation(node, building, mounting);
 
 /// The elevation a node is SHOWN at (inspector readout, hover FFL chip): a
@@ -862,27 +976,29 @@ Length displayedNodeElevation(
       continue;
     }
     if (e.service.regime == FlowRegime.gravity) {
-      return riserEndElevation(e, node, building, mounting);
+      return riserEndElevation(e, node, building, mounting, net);
     }
     pressurized ??= e;
   }
   if (pressurized != null) {
-    return riserEndElevation(pressurized, node, building, mounting);
+    return riserEndElevation(pressurized, node, building, mounting, net);
   }
   return nodeElevation(node, building, mounting);
 }
 
 /// The vertical length of a riser [edge] between its ends [a] and [b]
-/// (`|Δ` [riserEndElevation]`|`) — never measured from the PDF.
+/// (`|Δ` [riserEndElevation]`|`) — never measured from the PDF. Pass [net]
+/// (see [riserEndElevation]).
 Length riserElevationDelta(
   NetEdge edge,
   NetNode a,
   NetNode b,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
+  Network? net,
 ]) =>
-    Length((riserEndElevation(edge, b, building, mounting).meters -
-            riserEndElevation(edge, a, building, mounting).meters)
+    Length((riserEndElevation(edge, b, building, mounting, net).meters -
+            riserEndElevation(edge, a, building, mounting, net).meters)
         .abs());
 
 /// A pipe/duct/riser segment between two nodes, carrying one [service].
@@ -1033,8 +1149,9 @@ double runPixelLength(NetEdge edge, Network net) {
 /// (supply diffuser / linear diffuser / return or exhaust grille) or a
 /// sprinkler head is a [NodeRole.fixture] for DEMAND, but it hangs AT the
 /// ceiling, not at the plumbing fixture height — so a run from a ceiling main
-/// to it has no vertical leg. Plumbing fixtures, water outlets, hose reels and
-/// hydrant boxes keep the fixture height. Round 34: a datum-less AHU /
+/// to it has no vertical leg. Plumbing fixtures and water outlets keep the
+/// fixture height; hose reels and hydrant boxes their [kHoseOutletHeightM]
+/// (backlog D-1, via [nodeElevation]). Round 34: a datum-less AHU /
 /// supply fan / exhaust fan connects at [MountingHeights.airUnitConnection]
 /// above its floor surface (capped at the ceiling). Pure.
 Length runConnectionElevation(
@@ -1151,7 +1268,7 @@ Length edgeLength(
   final b = net.nodeById(edge.toId);
   if (a == null || b == null) return const Length(0);
   if (edge.kind == EdgeKind.riser) {
-    return riserElevationDelta(edge, a, b, building, mounting);
+    return riserElevationDelta(edge, a, b, building, mounting, net);
   }
   final cal = calibrationBySheet[a.sheetId];
   if (cal == null) return const Length(0);
@@ -1159,4 +1276,32 @@ Length edgeLength(
   final vertical =
       runVerticalLeg(edge, net, building: building, mounting: mounting).meters;
   return Length(horizontal + vertical);
+}
+
+/// Drawing-review D7 (2026-11-13) — does [edge] count against the export
+/// ZERO-LENGTH guard? The guard exists to catch work drawn on an UNCALIBRATED
+/// sheet (every run there resolves to 0 m). A deliberate SPLICE — a run whose
+/// two ends coincide (0 px) on a CALIBRATED sheet, e.g. the 0 m link joining a
+/// PRV node into a riser — is a real, honestly-zero run and is NOT counted. A
+/// riser keeps its elevation-delta rule (a 0 m riser still blocks). Pure; the
+/// ONE predicate every export path's guard uses.
+bool edgeBlocksExportAsZeroLength(
+  NetEdge edge,
+  Network net, {
+  required Map<String, ScaleCalibration> calibrationBySheet,
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final len = edgeLength(edge, net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting);
+  if (len.meters > 0) return false;
+  if (edge.kind == EdgeKind.riser) return true;
+  final a = net.nodeById(edge.fromId);
+  final b = net.nodeById(edge.toId);
+  if (a == null || b == null) return false;
+  final calibrated = calibrationBySheet[a.sheetId] != null &&
+      calibrationBySheet[b.sheetId] != null;
+  return !(calibrated && runPixelLength(edge, net) == 0);
 }

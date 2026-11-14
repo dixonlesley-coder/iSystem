@@ -161,6 +161,29 @@ class ElectricalCircuitResult {
   /// floor, never the engineer's cable override (no '(set)' mark).
   final bool cableRaisedForAds;
 
+  /// Reference tower T3 (2026-11-13) — true when this FEEDER's conductor was
+  /// stepped up the section ladder by `computeSystem` so the auto-sized ways
+  /// of the board(s) it feeds meet their cumulative voltage-drop limit: an
+  /// ENGINE floor, never the engineer's cable override.
+  final bool cableRaisedForDownstreamVd;
+
+  /// Backlog B-1 (2026-11-13) — true when this AUTO-sized FEEDER's conductor
+  /// was stepped up the section ladder so its device can reach the
+  /// selectivity floor (1.6 × the fed board's incomer) with In ≤ Iz: an
+  /// ENGINE raise (`raised-for-selectivity`), never the engineer's override.
+  final bool cableRaisedForSelectivity;
+
+  /// Backlog B-2 (2026-11-13) — true when this FINAL way's conductor was
+  /// stepped up the section ladder by `computeSystem` so its own cumulative
+  /// (origin → load) voltage drop meets its limit: the least-copper cure
+  /// chose this way over the feeders above it (`raised-for-cumulative-vd`).
+  final bool cableRaisedForCumulativeVd;
+
+  /// Backlog B-2 — the cos φ the way's voltage drop was computed at (the fed
+  /// board's real pf for a feeder), so `computeSystem` can rank the drop a
+  /// larger section saves without re-solving. Null on a legacy result.
+  final double? vdCosPhi;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -184,6 +207,10 @@ class ElectricalCircuitResult {
     this.motorLeads,
     this.motorLeadsPeCsaMm2,
     this.cableRaisedForAds = false,
+    this.cableRaisedForDownstreamVd = false,
+    this.cableRaisedForSelectivity = false,
+    this.cableRaisedForCumulativeVd = false,
+    this.vdCosPhi,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -216,6 +243,10 @@ class ElectricalCircuitResult {
         motorLeads: motorLeads,
         motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
         cableRaisedForAds: cableRaisedForAds,
+        cableRaisedForDownstreamVd: cableRaisedForDownstreamVd,
+        cableRaisedForSelectivity: cableRaisedForSelectivity,
+        cableRaisedForCumulativeVd: cableRaisedForCumulativeVd,
+        vdCosPhi: vdCosPhi,
       );
 }
 
@@ -531,6 +562,24 @@ class ElectricalSystemResult {
   /// every message keeps its legacy wording ⇒ byte-identical.
   final Set<String> feederFloorsCapped;
 
+  /// Backlog B-3 (2026-11-13) — the DISCONNECTION floor (kVA per set) of an
+  /// UNFORCED standby genset: the smallest ladder rating, above the running
+  /// and motor-start floors, at which no auto-sized way or feeder of a
+  /// genset-backed board fails automatic disconnection on the alternator
+  /// fault (after the T4 cable growth). Every genset sizing reads it
+  /// (`sizeGenerator(minKvaForAds:)`). Null ⇒ the running / start floors
+  /// already hold ADS (or nothing cures it) ⇒ byte-identical.
+  final double? gensetAdsFloorKva;
+
+  /// Bounded B-1 (2026-11-13) — the AUTO-sized feeders whose selectivity
+  /// growth was refused, and why: the floor rung needs more than
+  /// `kSelectivityGrowthMaxRungs` cable sizes (or parallel runs / the ladder
+  /// top), a device above the upstream incomer, or a cable that cannot hold
+  /// ADS within the bound. Such a feeder keeps the cable and device it has
+  /// without the selectivity step; `faultStudy` words its `non-selective`
+  /// finding on the device remedy. Empty ⇒ byte-identical.
+  final Map<String, SelectivityRefusal> feederSelectivityRefused;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -541,7 +590,32 @@ class ElectricalSystemResult {
     required this.warnings,
     this.feederFloorsApplied = const {},
     this.feederFloorsCapped = const {},
+    this.gensetAdsFloorKva,
+    this.feederSelectivityRefused = const {},
   });
+}
+
+/// Backlog B-1 (bounded 2026-11-13) — the most section RUNGS the selectivity
+/// growth may add to an auto-sized feeder cable above the cable its other
+/// rules need (load, own VD, ADS, cumulative VD). Buying discrimination with
+/// copper is sensible only for a small step; beyond it discrimination is a
+/// DEVICE matter (a selective time-delayed / category B, electronic-trip
+/// breaker, or the manufacturer's discrimination tables), so a larger need
+/// is refused and the `non-selective` warning says so.
+/// // VERIFY — design policy, not a PUIL / IEC clause.
+const int kSelectivityGrowthMaxRungs = 2;
+
+/// Bounded B-1 — why an auto-sized feeder's selectivity growth was refused.
+enum SelectivityRefusal {
+  /// More than `kSelectivityGrowthMaxRungs` cable sizes (or parallel runs /
+  /// the section ladder top) would be needed.
+  cableSteps,
+
+  /// The floor rung sits above the incomer of the board the feeder is on.
+  upstreamIncomer,
+
+  /// The grown cable cannot hold automatic disconnection within the bound.
+  disconnection,
 }
 
 // ── Round 35 — one service-current basis (elec-core-2) ──────────────────────

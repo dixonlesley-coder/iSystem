@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
@@ -20,10 +21,18 @@ import '../../store/app_state.dart'
         occupancyProvider,
         rainfallIntensityProvider,
         runoffCoefficientProvider,
+        mainsHeadProvider,
+        populationProvider,
+        demandPerPersonProvider,
+        demandPerPersonOverrideProvider,
+        dailyDemandLitresProvider,
+        groundStorageDaysProvider,
+        roofStorageFractionProvider,
         statusMessageProvider;
 import '../../store/floor_remap.dart'
     show FloorPlacedWorkCount, floorPlacedWorkCount;
 import '../../store/history_store.dart';
+import '../../store/tank_fill_store.dart' show waterReserveProvider;
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -648,6 +657,14 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     final occ = ref.watch(occupancyProvider);
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
+    final mainsHead = ref.watch(mainsHeadProvider);
+    final population = ref.watch(populationProvider);
+    final perPerson = ref.watch(demandPerPersonProvider);
+    final perPersonOverride = ref.watch(demandPerPersonOverrideProvider);
+    final daily = ref.watch(dailyDemandLitresProvider);
+    final reserve = ref.watch(waterReserveProvider);
+    final groundDays = ref.watch(groundStorageDaysProvider);
+    final roofFraction = ref.watch(roofStorageFractionProvider);
     final slope = ref.watch(drainageSlopeProvider);
     final hwFlow = ref.watch(hotWaterFlowTempProvider);
     final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
@@ -867,6 +884,166 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             ],
           ),
           caption(context.strings(StringKey.buildingInputCaptionRunoff)),
+          // Backlog W-2 — the available mains (PDAM) head at the meter: a
+          // judge-only input beside the other water design inputs.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(
+                      context.strings(StringKey.buildingInputMainsHead))),
+              SteppedValueField(
+                display: '${mainsHead.toStringAsFixed(1)} m',
+                editSeed: mainsHead.toStringAsFixed(1),
+                label: context.strings(StringKey.buildingInputMainsHead),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                max: 100,
+                onDecrement: () =>
+                    setMainsHeadUndoable(ref.read, mainsHead - 1.0),
+                onIncrement: () =>
+                    setMainsHeadUndoable(ref.read, mainsHead + 1.0),
+                onSubmit: (v) {
+                  if (v != null) setMainsHeadUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionMainsHead)),
+          // Backlog W-4 — the population (no default: unset = unknown) and
+          // the per-person daily demand (occupancy default, overridable);
+          // the daily demand they give is stated once, here.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(
+                      context.strings(StringKey.buildingInputPopulation))),
+              SteppedValueField(
+                display: population == null ? '-' : '$population',
+                editSeed: population == null ? '' : '$population',
+                label: context.strings(StringKey.buildingInputPopulation),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                onDecrement: () => setPopulationUndoable(
+                    ref.read, population == null ? null : population - 1),
+                onIncrement: () =>
+                    setPopulationUndoable(ref.read, (population ?? 0) + 1),
+                onSubmit: (v) => setPopulationUndoable(
+                    ref.read, v == null || v <= 0 ? null : v.round()),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputDemandPerPerson))),
+              SteppedValueField(
+                display: '${perPerson.toStringAsFixed(0)} L'
+                    '${perPersonOverride == null ? ' (default)' : ''}',
+                editSeed: perPersonOverride == null
+                    ? ''
+                    : perPersonOverride.toStringAsFixed(0),
+                label:
+                    context.strings(StringKey.buildingInputDemandPerPerson),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                max: 2000,
+                onDecrement: () =>
+                    setDemandPerPersonUndoable(ref.read, perPerson - 10),
+                onIncrement: () =>
+                    setDemandPerPersonUndoable(ref.read, perPerson + 10),
+                onSubmit: (v) => setDemandPerPersonUndoable(
+                    ref.read, v == null || v <= 0 ? null : v),
+              ),
+            ],
+          ),
+          // Backlog W-5 — the auto tank capacity targets.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputGroundStorageDays))),
+              SteppedValueField(
+                display: '${groundDays.toStringAsFixed(2)} d',
+                editSeed: groundDays.toStringAsFixed(2),
+                label: context
+                    .strings(StringKey.buildingInputGroundStorageDays),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.1,
+                max: 30,
+                onDecrement: () =>
+                    setGroundStorageDaysUndoable(ref.read, groundDays - 0.25),
+                onIncrement: () =>
+                    setGroundStorageDaysUndoable(ref.read, groundDays + 0.25),
+                onSubmit: (v) {
+                  if (v != null) setGroundStorageDaysUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputRoofStorageFraction))),
+              SteppedValueField(
+                display: roofFraction.toStringAsFixed(2),
+                editSeed: roofFraction.toStringAsFixed(2),
+                label: context
+                    .strings(StringKey.buildingInputRoofStorageFraction),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.05,
+                max: 5,
+                onDecrement: () => setRoofStorageFractionUndoable(
+                    ref.read, roofFraction - 0.05),
+                onIncrement: () => setRoofStorageFractionUndoable(
+                    ref.read, roofFraction + 0.05),
+                onSubmit: (v) {
+                  if (v != null) setRoofStorageFractionUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionStorageTargets)),
+          caption(daily == null
+              ? context.strings(StringKey.buildingInputCaptionDailyDemandUnset)
+              : context.strings.format(StringKey.buildingInputCaptionDailyDemand,
+                  {
+                    'm3': (daily / 1000).toStringAsFixed(2),
+                    'lps': (daily / 86400).toStringAsFixed(4),
+                  })),
+          // Backlog W-4 — the water reserve beside its inputs (the same
+          // `waterReserveProvider` the Results headline and report read).
+          if (reserve.days != null)
+            caption('${context.strings(StringKey.reserveHeadlineLabel)}: '
+                '${context.strings.format(StringKey.reserveHeadlineValue, {
+                  'days': formatReserveDays(reserve.days!),
+                  'stored': (reserve.storedLitres! / 1000).toStringAsFixed(1),
+                  'daily': (reserve.dailyLitres! / 1000).toStringAsFixed(1),
+                })}'),
+          if (reserve.excludedTankIds.isNotEmpty)
+            caption(context.strings.format(StringKey.reserveExcluded,
+                {'n': '${reserve.excludedTankIds.length}'})),
           // M13 — the laid drainage gradient. Typed and displayed as the
           // drafting fraction (1:100), which is how a plumber reads a fall;
           // stored as m/m. Steps of 10 in N (1:100 → 1:90 → 1:80).

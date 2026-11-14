@@ -116,6 +116,72 @@ enum PipeMaterial { pvc, hdpe, copper, galvanizedIron, ductileIron, steel }
 /// and flush-valve branches; they converge above ~1000 UBAP.
 enum FlushSystem { flushTank, flushValve }
 
+/// Backlog W-1 (2026-11-14) — the default REFILL TIME of a cold-water
+/// GROUND tank (hours): its fill flow (the meter feed's design flow) is the
+/// tank's capacity / this. // VERIFY — design policy (owner's decision),
+/// NOT an SNI 8153 clause; surfaced via [SniProfile.tankFillBasis].
+const double kGroundTankRefillHoursDefault = 4.0;
+
+/// Backlog W-1 — the default REFILL TIME of a ROOF tank (hours): its fill
+/// flow (the transfer duty and pipework design flow) is its capacity / this.
+/// // VERIFY — design policy, NOT an SNI 8153 clause.
+const double kRoofTankRefillHoursDefault = 1.0;
+
+/// Backlog W-2 / W-3 (2026-11-14) — the residual head a storage tank's
+/// INLET (float / ball valve) needs to pass its fill flow (m): added to the
+/// mains-pressure requirement at a ground tank and to a transfer pump's head
+/// at each roof tank. // VERIFY — general practice (≈ 0.5 bar for a float
+/// valve at full flow), NOT an SNI 8153 clause.
+const double kTankInletResidualHeadM = 5.0;
+
+/// Backlog W-2 (2026-11-14) — the default AVAILABLE MAINS (PDAM) pressure at
+/// the water meter, as head (m). Deliberately LOW: the engineer enters the
+/// utility's figure on the Building page. // VERIFY — PDAM service pressure
+/// varies by city and hour; NOT an SNI clause.
+const double kDefaultMainsHeadM = 10.0;
+
+/// Backlog W-5 (2026-11-14) — the default GROUND storage target: days of
+/// the daily demand an auto-sized ground tank (or a system's only tank)
+/// holds. // VERIFY — design policy, NOT an SNI clause; surfaced via
+/// [SniProfile.tankStorageTargets].
+const double kGroundStorageDaysDefault = 1.0;
+
+/// Backlog W-5 — the default ROOF tank target: the fraction of the daily
+/// demand an auto-sized roof tank fed from a ground tank holds. // VERIFY.
+const double kRoofStorageFractionDefault = 0.20;
+
+/// Backlog W-5 — the standard tank sizes an auto capacity rounds UP to
+/// (litres); above the last entry: 5 m3 steps to 100 m3, then 10 m3 steps
+/// ([standardTankLitres]). // VERIFY — common Indonesian fibreglass / HDPE /
+/// panel tank sizes.
+const List<double> kTankSizeLadderLitres = [
+  250, 500, 650, 1000, 1200, 2000, 3000, 5000, 8000, 10000,
+];
+
+/// Backlog W-5 — [rawLitres] rounded UP to the standard ladder.
+double standardTankLitres(double rawLitres) {
+  for (final l in kTankSizeLadderLitres) {
+    if (rawLitres <= l + 1e-9) return l;
+  }
+  if (rawLitres <= 100000 + 1e-9) {
+    return (rawLitres / 5000 - 1e-12).ceil() * 5000.0;
+  }
+  return (rawLitres / 10000 - 1e-12).ceil() * 10000.0;
+}
+
+/// Backlog W-4 (2026-11-14) — the default DAILY WATER DEMAND per person
+/// (litres / person / day) per occupancy class, the SNI 03-7065 "pemakaian
+/// air rata-rata per orang per hari" method: private (rumah tinggal) 120,
+/// public (kantor) 50, assembly (gedung pertunjukan, per seat) 10.
+/// // VERIFY — SNI 03-7065-2005 style figures NOT confirmed verbatim;
+/// surfaced via [SniProfile.dailyDemandPerPersonTable]. Editable per
+/// project.
+double dailyDemandPerPersonDefault(Occupancy o) => switch (o) {
+      Occupancy.private => 120.0,
+      Occupancy.public => 50.0,
+      Occupancy.assembly => 10.0,
+    };
+
 /// Occupancy class for UBAP fixture-unit loads (SNI 8153:2015 Tabel 3 columns):
 /// pribadi (private) / umum (public) / tempat berkumpul (assembly).
 enum Occupancy { private, public, assembly }
@@ -125,12 +191,23 @@ enum PlumbingFixture {
   waterClosetFlushValve, // kloset, katup gelontor
   waterClosetFlushTank, // kloset, tangki gelontor
   urinalFlushTank, // peturasan, tangki gelontor
+  // Backlog D-5 (2026-11-13) — a flush-VALVE urinal (peturasan, katup
+  // gelontor): counted as a flush-valve node (the valve demand-curve branch
+  // and the 98.067 kPa SNI floor), see [isFlushValveFixture].
+  urinalFlushValve,
   lavatory, // wastafel / bak cuci tangan
   shower,
   bathtub, // bak rendam
   kitchenSink, // bak cuci dapur
   hoseBibb, // keran taman
 }
+
+/// Backlog D-5 (2026-11-13) — a FLUSH-VALVE fixture (a flush-valve WC or
+/// urinal): it selects the flush-valve branch of the demand curve for its
+/// supply system and carries the 1 kgf/cm² flush-valve minimum pressure.
+bool isFlushValveFixture(PlumbingFixture? f) =>
+    f == PlumbingFixture.waterClosetFlushValve ||
+    f == PlumbingFixture.urinalFlushValve;
 
 /// Interface every standards profile satisfies. Keeps standards swappable.
 abstract interface class StandardsProfile {
@@ -322,6 +399,13 @@ class SniProfile implements StandardsProfile {
         (PlumbingFixture.waterClosetFlushTank, _) => 2.5,
         (PlumbingFixture.urinalFlushTank, Occupancy.assembly) => 3.0,
         (PlumbingFixture.urinalFlushTank, _) => 2.0,
+        // Backlog D-5 — the urinal flush-VALVE row of the same table (UPC
+        // 2012 Table 610.3 'urinal, > 1.0 GPF': public 5, assembly 6). The
+        // table has no lower private figure the profile trusts for a valve
+        // urinal, so private takes the public 5 (never below). VERIFY
+        // (listed in [verifyChecklist]).
+        (PlumbingFixture.urinalFlushValve, Occupancy.assembly) => 6.0,
+        (PlumbingFixture.urinalFlushValve, _) => 5.0,
         (PlumbingFixture.lavatory, _) => 1.0,
         (PlumbingFixture.shower, _) => 2.0,
         (PlumbingFixture.bathtub, _) => 4.0,
@@ -435,6 +519,109 @@ class SniProfile implements StandardsProfile {
         PipeMaterial.steel => const Roughness(4.5e-5),
       };
 
+  /// Backlog D-5 (2026-11-13) — the flush-VALVE urinal's UBAP (private /
+  /// public 5, assembly 6) and DFU (4, the urinal row), with the flush-valve
+  /// 1 kgf/cm² floor. `// VERIFY` against SNI 8153 Tabel 3.
+  StandardValue<String> get urinalFlushValveLoads => const StandardValue(
+        'urinal, flush valve: UBAP 5 (private / public), 6 (assembly); '
+        'DFU 4; min 98 kPa (flush valve)',
+        unit: 'table',
+        citation: 'UPC 2012 Table 610.3 / IPC Table 709.1 — urinal with '
+            'flushometer (NOT a confirmed SNI 8153 Tabel 3 row)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A flush-valve urinal loads 5 UBAP (6 in assembly; private '
+            'takes the public figure, never below) and 4 DFU, and is a '
+            'flush-valve node: the valve branch of the demand curve and the '
+            '1 kgf/cm² (98 kPa) minimum apply. Confirm against SNI 8153 '
+            'Tabel 3.',
+      );
+
+  /// Backlog W-1 / W-2 / W-3 (2026-11-14) — the ONE verify-checklist entry
+  /// behind a tank's fill flow and the mains / transfer heads that deliver it
+  /// (`sizing/tank_fill.dart`). `notAnSniClause` (design policy / general
+  /// practice): printed in the calc report's Unverified section, no Review
+  /// advisory.
+  StandardValue<Object?> get tankFillBasis => const StandardValue<Object?>(
+        'refill time: ground tank $kGroundTankRefillHoursDefault h, roof tank '
+        '$kRoofTankRefillHoursDefault h; tank inlet residual '
+        '$kTankInletResidualHeadM m; mains head at the meter '
+        '$kDefaultMainsHeadM m (default)',
+        unit: 'table',
+        citation: 'tank fill rate = capacity / refill time; float-valve inlet '
+            'residual; PDAM mains pressure (NOT SNI 8153 figures)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A tank fills at its capacity / refill time (default ground '
+            '4 h, roof 1 h, editable per tank): the meter feed of a ground '
+            'tank and the transfer pipework / pump of a roof tank are sized on '
+            'it. The tank inlet (float valve) needs 5 m residual; the mains at '
+            'the meter is assumed 10 m unless the utility figure is entered. '
+            'Confirm against the project brief and the PDAM.',
+      );
+
+  /// Backlog W-5 (2026-11-14) — the auto tank capacity basis: storage
+  /// targets and the standard size ladder. `notAnSniClause` like
+  /// [tankFillBasis].
+  StandardValue<Object?> get tankStorageTargets => const StandardValue<Object?>(
+        'auto tank capacity: ground $kGroundStorageDaysDefault day(s) of the '
+        'daily demand, roof tank ${kRoofStorageFractionDefault * 100} % of it '
+        '(a system\'s only tank: the ground target); rounded up to 250 / 500 '
+        '/ 650 / 1000 / 1200 / 2000 / 3000 / 5000 / 8000 / 10 000 L, then 5 m3 '
+        'to 100 m3, then 10 m3 steps',
+        unit: 'table',
+        citation: 'storage targets and standard tank sizes (design policy, NOT '
+            'SNI figures)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A domestic tank with no capacity entered is sized from its '
+            'share of the daily demand (fixture units it serves among tanks '
+            'of its role) x its target, rounded up to the ladder; an entered '
+            'capacity always wins. Both targets are editable on the Building '
+            'page. Confirm against the project brief.',
+      );
+
+  /// Backlog W-4 (2026-11-14) — the per-person daily water demand table
+  /// ([dailyDemandPerPersonDefault]) behind the daily demand and the
+  /// domestic water reserve in days (`WaterReserve`).
+  /// `notAnSniClause` like [tankFillBasis] (printed in the calc report's
+  /// Unverified section, no Review advisory).
+  StandardValue<Object?> get dailyDemandPerPersonTable =>
+      const StandardValue<Object?>(
+        'daily demand per person: private (rumah tinggal) 120, public '
+        '(kantor) 50, assembly (gedung pertunjukan, per seat) 10 L/person/day',
+        unit: 'L/person/day',
+        citation: 'SNI 03-7065-2005 style per-person daily water use (NOT '
+            'confirmed verbatim)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'Daily demand = population x litres per person per day (the '
+            'occupancy default, editable per project); the water reserve is '
+            'the domestic storage / the daily demand, in days. The population is entered by the '
+            'engineer and never derived. Confirm the per-person figures '
+            'against SNI 03-7065 and the project brief.',
+      );
+
+  /// Backlog G-2 (2026-11-13) — the ONE verify-checklist entry behind the
+  /// water-heater duty (`sizing/water_heater.dart`): the ASHRAE fixture-
+  /// demand table rows, demand / storage factors and the heating constants.
+  /// Classed `notAnSniClause` like the other general-practice plumbing
+  /// items: printed in the calc report's Unverified section, no Review
+  /// advisory.
+  StandardValue<Object?> get waterHeaterFixtureDemand =>
+      const StandardValue<Object?>(
+        'apartment: LAV 2, bath 20, kitchen sink 10, shower 30 gal/h, demand '
+        '0.30, storage 1.25; office: LAV 6, kitchen sink 20, shower 30 gal/h, '
+        'demand 0.30, storage 2.00; 60 °C stored, 25 °C inlet, η 0.98',
+        unit: 'table',
+        citation: 'ASHRAE HVAC Applications, Service Water Heating — hot water '
+            'demand per fixture (water heater sizing; NOT an SNI 03-7065 '
+            'clause)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'Water heater recovery = Σ fixture gal/h x demand factor; '
+            'storage = recovery x storage-capacity factor (rounded up to '
+            '50..2000 L); element kW = recovery L/h x 4.186 x (60 - 25) / '
+            '3600 / 0.98 (rounded up to 1.5..36 kW). Private occupancy reads '
+            'the apartment column, public / assembly the office column. '
+            'Confirm against SNI 03-7065 / ASHRAE.',
+      );
+
   // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
 
   /// mech-building-6 — the share of a fixture's TOTAL UBAP loaded onto EACH of
@@ -478,6 +665,16 @@ class SniProfile implements StandardsProfile {
         mandatoryPressureReliefThreshold,
         minResidualPressureFlushValve,
         minResidualPressureFaucet,
+        // Backlog D-5 — the flush-valve urinal's loads.
+        urinalFlushValveLoads,
+        // Backlog G-2 — the water-heater fixture-demand basis.
+        waterHeaterFixtureDemand,
+        // Backlog W-1..W-3 — the tank fill-rate basis.
+        tankFillBasis,
+        // Backlog W-4 — the per-person daily demand table.
+        dailyDemandPerPersonTable,
+        // Backlog W-5 — the auto tank capacity basis.
+        tankStorageTargets,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(
@@ -650,6 +847,52 @@ class SniProfile implements StandardsProfile {
               'rated head) exceeds 2413 kPa (350 psi) at any point must be '
               'split into vertical pressure zones. Judge-only. Confirm vs '
               'SNI 03-1745.',
+        ),
+        // Backlog A-3 — `kFirePressureClassPn16Kpa` (fire_pump_rating.dart)
+        // and `kStandpipePrvSetResidualKpa` (standpipe_outlet_pressure.dart).
+        const StandardValue<Object?>(
+          1600.0,
+          unit: 'kPa',
+          citation: 'Fire pipework pressure classes: standard <= 1210 kPa '
+              '(175 psi), PN16 <= 1600 kPa, PN25 <= 2413 kPa (350 psi); '
+              'pressure-regulating hose valve set 690 kPa (NFPA 14; NOT '
+              'confirmed vs SNI 03-1745)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'The churn pressure at the pump discharge sets the class of '
+              'the fire pipe, valves and fittings downstream of the pump; '
+              'above 2413 kPa the standpipe must be zoned. A hose outlet whose '
+              'static exceeds 1207 kPa is designated a pressure-regulating '
+              'hose valve set to 690 kPa residual. Confirm vs SNI 03-1745 and '
+              'the product listings.',
+        ),
+        // Backlog A-2 — `kFireReserveStandpipeMin` /
+        // `kFireReserveLightHazardMin` (fire_water_reserve.dart).
+        const StandardValue<Object?>(
+          30.0,
+          unit: 'min',
+          citation: 'NFPA 14 9.2 / NFPA 13 — fire-water reserve duration: '
+              'standpipe 30 min, light-hazard sprinkler 30 min (ordinary '
+              '60, extra 90) (NOT confirmed vs SNI 03-1745 / 03-3989)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire tank must hold the governing fire system\'s rated '
+              'demand flow for the required duration (V = Q x t). Judge-only: '
+              'a set capacity below it warns, an unset capacity states the '
+              'requirement. Confirm the durations vs SNI 03-1745 / 03-3989.',
+        ),
+        // Backlog Z-1 — `kFireBreakTankDurationMin` (fire_zones.dart).
+        const StandardValue<Object?>(
+          30.0,
+          unit: 'min',
+          citation: 'NFPA 14 / NFPA 20 break-tank practice — a fire zone '
+              'break tank holds 30 min of the relay pump\'s rated flow, '
+              'refilled automatically at least at that flow (NOT confirmed '
+              'vs SNI 03-1745)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A designed fire zone draws from a break tank the zone below '
+              'fills: required capacity = the upper zone pump\'s rated flow x '
+              '30 min, required fill flow = that rated flow; the lower pump '
+              'is rated on max(own zone, the fill). Judge-only on the entered '
+              'capacity (never auto-sized). Confirm vs SNI 03-1745.',
         ),
         const StandardValue<Object?>(
           25.0,

@@ -4,7 +4,8 @@
 // On a COMBINED sprinkler + hydrant system the hose basis (standpipe flow at
 // the 6.9 bar hydrant residual) reads only the HYDRANT outlets' index-path
 // friction; the sprinkler riser's friction belongs to its own remote-area
-// duty. The pump is rated on the larger head at that basis's own flow.
+// duty. The pump is rated at the larger flow and the larger head (reference
+// apartment A1; Round 37 rated the larger head at that basis's own flow).
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/electrical_feed.dart';
@@ -34,14 +35,19 @@ NetNode _n(String id, double x, double y,
 
 NetEdge _e(String id, String a, String b,
         {ServiceType s = ServiceType.fireHydrant,
-        EdgeKind k = EdgeKind.run}) =>
-    NetEdge(id: id, fromId: a, toId: b, service: s, kind: k);
+        EdgeKind k = EdgeKind.run,
+        Diameter? size}) =>
+    NetEdge(
+        id: id, fromId: a, toId: b, service: s, kind: k, sizeOverride: size);
 
 /// 13 storeys x 3.5 m, ordinary hazard, calibrated at 0.01 m/px. GT -> HP ->
 /// header FH -> a hydrant stack with a hose box per floor; with [sprinkler]
 /// a sprinkler riser off FH serves 4 heads per floor.
 Network _tower(
-    {required bool sprinkler, int stacks = 1, double sprinklerY = 400}) {
+    {required bool sprinkler,
+    int stacks = 1,
+    double sprinklerY = 400,
+    Diameter? feedMain}) {
   final nodes = <NetNode>[
     _n('GT', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
     _n('HP', 50, 0, role: NodeRole.plant, c: NodeComponent.pump),
@@ -72,9 +78,10 @@ Network _tower(
     if (sprinkler) {
       nodes.add(_n('Q$f', 150, sprinklerY, floor: f));
       edges.add(f == 0
-          ? _e('q0', 'FH', 'Q0', s: ServiceType.fireSprinkler)
+          ? _e('q0', 'FH', 'Q0',
+              s: ServiceType.fireSprinkler, size: feedMain)
           : _e('qr$f', 'Q${f - 1}', 'Q$f',
-              s: ServiceType.fireSprinkler, k: EdgeKind.riser));
+              s: ServiceType.fireSprinkler, k: EdgeKind.riser, size: feedMain));
       for (var h = 1; h <= 4; h++) {
         nodes.add(_n('H$f-$h', 150 + 300.0 * h, sprinklerY,
             floor: f, role: NodeRole.fixture, c: NodeComponent.sprinklerHead));
@@ -147,11 +154,13 @@ void main() {
     }
   });
 
-  // Round 37 r2 — the recorded 'larger head at its own flow, never both'
-  // decision rates a SPRINKLER-governed combined system at the small
-  // remote-area flow; that is now a judge-only Review warning. A 200 m
+  // Round 37 r2, superseded by reference apartment A1 — a combined pump is
+  // rated at the LARGER flow and the LARGER head: here the standpipe flow
+  // (one stack, 500 gpm = 31.545 L/s) at the sprinkler head. A 200 m
   // sprinkler feed main (sized at up to 6 m/s) pushes the sprinkler head
-  // above the 128.54 m standpipe head.
+  // above the standpipe head (12 x 3.5 + 1.2 + 15 + 70.336 = 128.536 m); the
+  // INFO `combined-fire-sprinkler-governs` names the split (the sprinkler
+  // sets the HEAD, the standpipe the FLOW).
   test('a sprinkler-governed combined system raises combined-fire-sprinkler-'
       'governs (locatable to the duty pump); a hose-governed one does not',
       () {
@@ -171,20 +180,40 @@ void main() {
       return c;
     }
 
-    final gov = build(_tower(sprinkler: true, sprinklerY: 20000));
+    // Reference tower T2 — an AUTO-SIZED 200 m feed main is now enlarged
+    // until the sprinkler point no longer exceeds the standpipe head, so the
+    // hose basis governs; the sprinkler governs only on a HAND-PICKED feed
+    // main (never enlarged), which is the case below.
+    final auto = build(_tower(sprinkler: true, sprinklerY: 20000));
+    final ba = auto.read(firePumpBasisByNodeProvider)['HP']!;
+    expect(ba.sprinklerGovernsCombined, isFalse);
+    expect(auto.read(sprinklerFeedEnlargedProvider), contains('q0'));
+    final gov = build(_tower(
+        sprinkler: true, sprinklerY: 20000, feedMain: Diameter.mm(40)));
     final b = gov.read(firePumpBasisByNodeProvider)['HP']!;
     expect(b.sprinklerGovernsCombined, isTrue);
     expect(b.head.meters, greaterThan(b.standpipe!.pumpHead.meters));
+    // Rated flow = max(Q_standpipe, Q_sprinkler) = the standpipe 31.545.
     expect(b.flow.inLitersPerSecond,
-        lessThan(b.standpipe!.requiredFlow.inLitersPerSecond));
+        closeTo(b.standpipe!.requiredFlow.inLitersPerSecond, 1e-12));
+    expect(b.flow.inLitersPerSecond, closeTo(500 * 0.0630902, 1e-3));
+    expect(b.standpipe!.pumpHead.meters,
+        closeTo(12 * 3.5 + 1.2 + 15 + 690e3 / (1000 * 9.81), 1e-6));
+    // The NFPA 20 curve is on that point: overload 1.5 Q at 0.65 H.
+    expect(b.rating.ratedFlow.inLitersPerSecond,
+        closeTo(b.flow.inLitersPerSecond, 1e-12));
+    expect(b.rating.ratedHead.meters, closeTo(b.head.meters, 1e-12));
+    expect(b.rating.overload.flow.inLitersPerSecond,
+        closeTo(1.5 * b.flow.inLitersPerSecond, 1e-9));
     final issues = gov
         .read(designIssuesProvider)
         .where((i) => i.kind == 'combined-fire-sprinkler-governs:HP')
         .toList();
     expect(issues, hasLength(1));
-    expect(issues.single.severity, IssueSeverity.warning);
+    expect(issues.single.severity, IssueSeverity.info);
     expect(issues.single.locate?.nodeId, 'HP');
-    expect(issues.single.message, contains('31.5 L/s at 128.5 m'));
+    expect(issues.single.message, contains('standpipe head (128.5 m)'));
+    expect(issues.single.message, contains('standpipe flow (31.5 L/s)'));
 
     final hose = build(_tower(sprinkler: true));
     expect(

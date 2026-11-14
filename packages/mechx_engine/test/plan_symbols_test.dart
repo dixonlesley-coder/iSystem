@@ -155,10 +155,12 @@ void main() {
 
     test('the first placement matches the greedy geometry exactly', () {
       // Horizontal edge midpoint (50,0), upper side d = 0.7·9 = 6.3, width
-      // w = 4·9·0.55 = 19.8 → anchor x0 = 50 − 19.8/2 = 40.1, y0 = 0 + 6.3.
+      // measured in Helvetica (fix round 3): 'DN50' = 722 + 722 + 556 + 556 =
+      // 2 556 u × 9 / 1000 = 23.004 → anchor x0 = 50 − 23.004/2 = 38.498,
+      // y0 = 0 + 6.3.
       final p = placeEdgeLabelLeadered(
           ax: 0, ay: 0, bx: 100, by: 0, text: 'DN50', textSize: 9, placed: []);
-      expect(p.x, closeTo(40.1, 1e-9));
+      expect(p.x, closeTo(38.498, 1e-9));
       expect(p.y, closeTo(6.3, 1e-9));
       expect(p.angleDeg, closeTo(0, 1e-9));
     });
@@ -171,22 +173,23 @@ void main() {
       // dropped, never fused (the OLD placer returned null here).
       final placed = <LabelBox>[];
       final a = placeEdgeLabelLeadered(
-          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN15', textSize: 9, placed: placed);
+          ax: 0, ay: 0, bx: 40, by: 0, text: 'DN15', textSize: 9, placed: placed);
       final b = placeEdgeLabelLeadered(
-          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN25', textSize: 9, placed: placed);
+          ax: 0, ay: 0, bx: 40, by: 0, text: 'DN25', textSize: 9, placed: placed);
       final c = placeEdgeLabelLeadered(
-          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN32', textSize: 9, placed: placed);
+          ax: 0, ay: 0, bx: 40, by: 0, text: 'DN32', textSize: 9, placed: placed);
       expect(a.leaderAnchor, isNull); // first clears (upper)
       expect(b.leaderAnchor, isNull); // second clears (lower)
       expect(c.leaderAnchor, isNotNull); // third escaped → leadered
-      // R5 RE-DERIVATION: the escape row is one line pitch out
+      // R5 RE-DERIVATION (fix round 3: measured widths, 'DN15' = 23.004, so
+      // the edges are 40 long): the escape row is one line pitch out
       // (d = 0.7·9 + 1.3·9 = 18), and its LEADER must not strike through tag
-      // `a` (box x 5.1..24.9 above the run). A perpendicular leader from the
-      // midpoint (x = 15) would cross it, as would the stations 7.5 / 22.5 /
-      // 11.25 / 18.75; the first station in preference order whose leader
-      // clears is the 1/8 point, x = 30 × 0.125 = 3.75.
-      expect(c.leaderAnchor!.x, closeTo(3.75, 1e-9));
-      expect(c.leaderEnd!.x, closeTo(3.75, 1e-9));
+      // `a` (box x 20 ± 11.502 = 8.498..31.502 above the run). A
+      // perpendicular leader from the midpoint (x = 20) would cross it, as
+      // would the stations 10 / 30 / 15 / 25; the first station in preference
+      // order whose leader clears is the 1/8 point, x = 40 × 0.125 = 5.
+      expect(c.leaderAnchor!.x, closeTo(5, 1e-9));
+      expect(c.leaderEnd!.x, closeTo(5, 1e-9));
       // Leader tip 0.15·9 short of the block's near edge: 18 − 1.35 = 16.65.
       expect(c.leaderEnd!.y, closeTo(16.65, 1e-9));
       // All three boxes recorded — no label was dropped.

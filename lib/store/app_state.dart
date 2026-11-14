@@ -7,6 +7,7 @@ import 'package:mechx_engine/sizing/hot_water.dart' show kHotWaterFlowTempC;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart'
     show kDefaultRunoffCoefficient;
+import 'package:mechx_engine/sizing/tank_fill.dart' show dailyDemandLitres;
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../ai/ai_client.dart';
@@ -84,6 +85,86 @@ class RainfallController extends Notifier<double> {
   void set(double v) => state = v.clamp(50.0, 600.0).toDouble();
   void nudge(double delta) => set(state + delta);
 }
+
+/// Backlog W-2 (2026-11-14) — the AVAILABLE MAINS (PDAM) pressure at the
+/// water meter, as head (m). Default [kDefaultMainsHeadM] (10 m, `// VERIFY`,
+/// deliberately low). Judge-only input: the mains-pressure check at each
+/// meter feeding a ground tank reads it; no size depends on it.
+final mainsHeadProvider =
+    NotifierProvider<MainsHeadController, double>(MainsHeadController.new);
+
+class MainsHeadController extends Notifier<double> {
+  @override
+  double build() => kDefaultMainsHeadM; // VERIFY — PDAM service pressure
+
+  void set(double v) => state = v.clamp(0.0, 100.0).toDouble();
+}
+
+/// Backlog W-4 (2026-11-14) — the building POPULATION (persons) the daily
+/// water demand is computed on. NO default: null = unknown, and no daily
+/// demand is printed or judged (never derived or invented).
+final populationProvider =
+    NotifierProvider<PopulationController, int?>(PopulationController.new);
+
+class PopulationController extends Notifier<int?> {
+  @override
+  int? build() => null;
+
+  void set(int? v) => state = (v == null || v <= 0) ? null : v;
+}
+
+/// Backlog W-5 (2026-11-14) — the ground storage target (days of the daily
+/// demand) an auto-sized ground tank holds; default 1.0 (`// VERIFY`).
+final groundStorageDaysProvider =
+    NotifierProvider<GroundStorageDaysController, double>(
+        GroundStorageDaysController.new);
+
+class GroundStorageDaysController extends Notifier<double> {
+  @override
+  double build() => kGroundStorageDaysDefault;
+
+  void set(double v) => state = v.clamp(0.1, 30.0).toDouble();
+}
+
+/// Backlog W-5 — the roof tank target (fraction of the daily demand) an
+/// auto-sized roof tank fed from a ground tank holds; default 0.20.
+final roofStorageFractionProvider =
+    NotifierProvider<RoofStorageFractionController, double>(
+        RoofStorageFractionController.new);
+
+class RoofStorageFractionController extends Notifier<double> {
+  @override
+  double build() => kRoofStorageFractionDefault;
+
+  void set(double v) => state = v.clamp(0.05, 5.0).toDouble();
+}
+
+/// Backlog W-4 — the per-project OVERRIDE of the daily demand per person
+/// (L/person/day); null ⇒ the occupancy default
+/// (`dailyDemandPerPersonDefault`, `// VERIFY`).
+final demandPerPersonOverrideProvider =
+    NotifierProvider<DemandPerPersonController, double?>(
+        DemandPerPersonController.new);
+
+class DemandPerPersonController extends Notifier<double?> {
+  @override
+  double? build() => null;
+
+  void set(double? v) =>
+      state = (v == null || v <= 0) ? null : v.clamp(1.0, 2000.0).toDouble();
+}
+
+/// Backlog W-4 — the daily demand per person in force: the override, else
+/// the occupancy default.
+final demandPerPersonProvider = Provider<double>((ref) =>
+    ref.watch(demandPerPersonOverrideProvider) ??
+    dailyDemandPerPersonDefault(ref.watch(occupancyProvider)));
+
+/// Backlog W-4 — THE daily water demand (litres / day) = population x
+/// L/person/day; null when the population is unknown. Every surface (the
+/// Building page, the calc report, the tank judge) reads this one value.
+final dailyDemandLitresProvider = Provider<double?>((ref) => dailyDemandLitres(
+    ref.watch(populationProvider), ref.watch(demandPerPersonProvider)));
 
 /// Design storm runoff coefficient C (dimensionless, 0–1) — the fraction of
 /// design rainfall that becomes runoff at the outlet (rational method). Pairs

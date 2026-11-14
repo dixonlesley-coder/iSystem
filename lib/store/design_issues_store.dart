@@ -21,11 +21,18 @@ import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
+import 'package:mechx_engine/sizing/cooling_load.dart'
+    show roomCoolingCheck, standardAcCapacities;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show firePumpsDrawnBackwards, moversDrawnBackwards;
+import 'package:mechx_engine/units.dart' show FlowRate;
+import 'package:mechx_engine/sizing/fire_water_reserve.dart'
+    show FireTankVerdict;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
-    show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
+    show kStandpipeMaxSystemPressureKpa;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
+    show kStandpipePrvSetResidualKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/puil.dart';
@@ -36,18 +43,32 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
-import 'annotation_store.dart' show roomAreasProvider, roomSizingProvider, roomTerminalOwnerOf;
+import 'annotation_store.dart'
+    show
+        RoomArea,
+        roomAreasProvider,
+        roomCoolingLoadProvider,
+        roomSizingProvider,
+        roomTerminalOwnerOf,
+        roomUnitOwnerId;
 import 'app_state.dart';
+import 'tank_fill_store.dart'
+    show mainsPressureChecksProvider, tankFillsProvider, waterReserveProvider;
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
 import 'fire_store.dart'
     show
+        fireBreakTankChecksProvider,
+        fireBreakTankIdsProvider,
         fireOverPressureProvider,
         firePumpDutyProvider,
+        fireZoneLinesProvider,
         fireSystemBasesProvider,
+        fireTankReservesProvider,
         kMinFireStageHeadM,
         sprinklerPumpCheckProvider,
+        sprinklerRemoteAreaProvider,
         standpipeOutletOverPressureProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
@@ -214,8 +235,22 @@ String _verifyLabel(StandardValue<Object?> v) {
 /// The unconnected-element defects of the (drag-frozen) network, computed ONCE
 /// per edit for the issue fan-in and its batch actions (drafting-feel perf —
 /// each read used to re-walk the whole network).
-final networkElementDefectsProvider = Provider<List<NetworkElementDefect>>(
-    (ref) => networkElementDefects(ref.watch(sizingNetworkProvider)));
+///
+/// Backlog D-6 — a cassette / split-wall AC is exempt from the orphan check
+/// only when it lies inside a drawn room ([roomUnitOwnerId], the same
+/// smallest-containing-room rule the cooling shares use); the app passes
+/// those ids to the pure engine judge.
+final networkElementDefectsProvider =
+    Provider<List<NetworkElementDefect>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final rooms = ref.watch(roomAreasProvider);
+  return networkElementDefects(net, selfContainedUnitsInRooms: {
+    for (final n in net.nodes)
+      if (isSelfContainedAcUnit(n.component) &&
+          roomUnitOwnerId(n, rooms) != null)
+        n.id,
+  });
+});
 
 final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
@@ -301,8 +336,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // elevation / mount height is the engineer's datum and is not flagged).
   if (levelCount > 1) {
     final top = levelCount - 1;
+    // Backlog Z-4 — a fire zone break tank is meant to sit mid-height.
+    final breakTanks = ref.watch(fireBreakTankIdsProvider);
     for (final n in net.nodes) {
       if (n.component != NodeComponent.roofTank) continue;
+      if (breakTanks.contains(n.id)) continue;
       if (n.elevation != null || n.mountHeight != null) continue;
       if (n.floorIndex < 0 || n.floorIndex >= top) continue;
       final elev = nodeElevation(n, project.building).meters;
@@ -1267,6 +1305,52 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           ref.watch(downfeedSniMinimumResidualProvider) ??
           const SniProfile().minResidualPressureFaucet.value;
       final residualShown = short?.residual ?? delivered.minResidual;
+      // Backlog D-7 (apartment backlog e) — when drawn booster(s) serve only
+      // SOME floors, the recommended head is for the GRAVITY floors the
+      // boosters do not serve: name those floors and say so, so the figure
+      // never reads as a second duty for the drawn booster. No number
+      // changes. Concerned = delivery nodes below the target that no drawn
+      // (non-transfer) booster serves.
+      final targetKpa = ref.watch(targetResidualProvider).inKiloPascals;
+      final boosters = [
+        for (final m in supplyMovers(net, ref.watch(sizingProvider),
+            excludeEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
+            rootFlowOf: (_) => const FlowRate(1)))
+          if (!m.transfer) m,
+      ];
+      final gravityFloors = <int>{};
+      if (boosters.isNotEmpty) {
+        for (final e in delivered.residualPressure.entries) {
+          final n = nodeById[e.key];
+          if (!isDeliveryFixture(n)) continue;
+          if (e.value.inKiloPascals >= targetKpa - 1e-9) continue;
+          if (boosters.any((b) => b.served.contains(e.key))) continue;
+          gravityFloors.add(n!.floorIndex);
+        }
+      }
+      final gravityNamed = gravityFloors.isNotEmpty &&
+          (node == null || gravityFloors.contains(node.floorIndex));
+      String nameOfFloor(int i) => floors.isEmpty
+          ? 'L${i + 1}'
+          : floors[i.clamp(0, floors.length - 1)].name;
+      String floorsText() {
+        final idx = gravityFloors.toList()..sort();
+        final parts = <String>[];
+        var i = 0;
+        while (i < idx.length) {
+          var j = i;
+          while (j + 1 < idx.length && idx[j + 1] == idx[j] + 1) {
+            j++;
+          }
+          parts.add(j == i
+              ? nameOfFloor(idx[i])
+              : str.format(StringKey.issueFloorRange,
+                  {'from': nameOfFloor(idx[i]), 'to': nameOfFloor(idx[j])}));
+          i = j + 1;
+        }
+        return parts.join(', ');
+      }
+
       warnings.add(DesignIssue(
         severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'downfeed-below-target',
@@ -1274,10 +1358,17 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             ? StringKey.issueDownfeedBelowTargetTitle
             : StringKey.issueDownfeedBelowComfortTitle),
         message: str.format(
-            belowSni
-                ? StringKey.issueDownfeedBelowTargetMessage
-                : StringKey.issueDownfeedBelowComfortMessage,
+            gravityNamed
+                ? (belowSni
+                    ? StringKey.issueDownfeedBelowTargetGravityMessage
+                    : StringKey.issueDownfeedBelowComfortGravityMessage)
+                : belowSni
+                    ? StringKey.issueDownfeedBelowTargetMessage
+                    : StringKey.issueDownfeedBelowComfortMessage,
             {
+          if (gravityNamed) 'floors': floorsText(),
+          if (gravityNamed)
+            'boosters': [for (final b in boosters) b.nodeId].join(', '),
           'floor': floorName,
           'sni': sniMin.inKiloPascals.toStringAsFixed(0),
           'residual': residualShown.inKiloPascals.toStringAsFixed(0),
@@ -1430,27 +1521,176 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 5a-ter. Combined fire system rated on its sprinkler point (warning) ───
-  // Round 37 r2 — a combined sprinkler + hydrant system is rated on the
-  // LARGER head at that basis's own flow (never Σ of the two conditions).
-  // When the sprinkler head wins, the rated point carries the small
-  // remote-area flow, so the hose (standpipe) flow at the standpipe head is
-  // not a rated point of the pump — judge-only, never resizes; locatable to
-  // the duty pump.
+  // ── 5a-bis-2. Fire-water reserve of every fire tank (backlog A-2) ───────
+  // Judge-only, located on the tank: a set capacity below the reserve
+  // (rated demand flow x duration) warns; an unset capacity raises an info
+  // stating the requirement (never a fabricated capacity).
+  final fireTankTags = equipmentNodeTags(net);
+  for (final t in ref.watch(fireTankReservesProvider)) {
+    final args = {
+      'tank': fireTankTags[t.tankId] ?? t.tankId,
+      'need': t.requiredLitres.toStringAsFixed(0),
+      'flow': t.reserve.ratedFlow.inLitersPerSecond.toStringAsFixed(2),
+      'min': t.reserve.durationMin.toStringAsFixed(0),
+      'cap': (t.capacityLitres ?? 0).toStringAsFixed(0),
+    };
+    switch (t.verdict) {
+      case FireTankVerdict.ok:
+        break;
+      case FireTankVerdict.undersized:
+        warnings.add(DesignIssue(
+          severity: IssueSeverity.warning,
+          kind: 'fire-tank-undersized:${t.tankId}',
+          title: str(StringKey.issueFireTankUndersizedTitle),
+          message: str.format(StringKey.issueFireTankUndersizedMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+      case FireTankVerdict.unset:
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-tank-capacity-unset:${t.tankId}',
+          title: str(StringKey.issueFireTankUnsetTitle),
+          message: str.format(StringKey.issueFireTankUnsetMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+    }
+  }
+
+  // ── 5a-bis-2b. Fire zone break tanks (backlog Z-2) ───────────────────
+  // Judge-only, located on the tank: 30 min of the relay pump's rated flow
+  // (`// VERIFY`), refilled at least at that flow. A fire tank is never
+  // auto-sized: an unset capacity states the requirement.
+  for (final t in ref.watch(fireBreakTankChecksProvider)) {
+    final args = {
+      'tank': fireTankTags[t.tankId] ?? t.tankId,
+      'zone': '${t.zoneNumber}',
+      'need': t.requiredLitres.toStringAsFixed(0),
+      'flow': t.requirement.ratedFlow.inLitersPerSecond.toStringAsFixed(2),
+      'min': t.requirement.durationMin.toStringAsFixed(0),
+      'cap': (t.capacityLitres ?? 0).toStringAsFixed(0),
+    };
+    switch (t.verdict) {
+      case FireTankVerdict.ok:
+        break;
+      case FireTankVerdict.undersized:
+        warnings.add(DesignIssue(
+          severity: IssueSeverity.warning,
+          kind: 'fire-break-tank-undersized:${t.tankId}',
+          title: str(StringKey.issueFireBreakTankUndersizedTitle),
+          message:
+              str.format(StringKey.issueFireBreakTankUndersizedMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+      case FireTankVerdict.unset:
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-break-tank-capacity-unset:${t.tankId}',
+          title: str(StringKey.issueFireBreakTankUnsetTitle),
+          message: str.format(StringKey.issueFireBreakTankUnsetMessage, args),
+          locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+        ));
+    }
+  }
+
+  // ── 5a-bis-3. Cold-water tank capacity / fill (backlog W-3, W-5) ────────
+  // Judge-only, located on the tank.
+  final dailyForAuto = ref.watch(dailyDemandLitresProvider);
+  for (final t in ref.watch(tankFillsProvider)) {
+    // Backlog W-3 — a roof tank no drawn pipe fills is never given an
+    // invented fill: an info locating it.
+    if (t.roof && !t.fillDrawn) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'roof-tank-fill-undrawn:${t.tankId}',
+        title: str(StringKey.issueRoofTankFillUndrawnTitle),
+        message: str.format(StringKey.issueRoofTankFillUndrawnMessage,
+            {'tank': fireTankTags[t.tankId] ?? t.tankId}),
+        locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+      ));
+      continue;
+    }
+    // Backlog W-5 — a domestic tank with no capacity entered is auto-sized
+    // from the daily demand; with no population it cannot be: a WARNING on
+    // the tank (sizing keeps the peak-demand fallback, nothing fabricated).
+    if (t.capacityLitres != null || dailyForAuto != null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'tank-capacity-unset:${t.tankId}',
+      title: str(StringKey.issueTankCapacityUnsetTitle),
+      message: str.format(StringKey.issueTankCapacityUnsetMessage,
+          {'tank': fireTankTags[t.tankId] ?? t.tankId}),
+      locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+    ));
+  }
+
+  // ── 5a-bis-5. Daily demand unknown (backlog W-4) ─────────────────────
+  // With no population there is no daily demand and so no water-reserve
+  // figure: one info saying why, only when some domestic tank has a
+  // capacity (otherwise there is nothing to report either way). The
+  // reserve itself is informational (owner: the fill rate is outside the
+  // designer's control, so nothing is judged).
+  final reserveNow = ref.watch(waterReserveProvider);
+  if (reserveNow.dailyLitres == null && reserveNow.storedLitres != null) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'daily-demand-unset',
+      title: str(StringKey.issueDailyDemandUnsetTitle),
+      message: str(StringKey.issueDailyDemandUnsetMessage),
+    ));
+  }
+
+  // ── 5a-bis-4. Mains pressure at each meter feeding a ground tank (W-2) ──
+  // Judge-only, located on the meter: the available mains head (project
+  // input) below lift + feed friction at the sized flow + the float-valve
+  // residual. Never resizes, never assumes mains-fed fixtures.
+  for (final c in ref.watch(mainsPressureChecksProvider)) {
+    if (c.ok) continue;
+    final meter = net.nodeById(c.meterId);
+    if (meter == null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'mains-pressure-insufficient:${c.meterId}',
+      title: str(StringKey.issueMainsPressureTitle),
+      message: str.format(StringKey.issueMainsPressureMessage, {
+        'meter': fireTankTags[c.meterId] ?? c.meterId,
+        'tank': fireTankTags[c.tankId] ?? c.tankId,
+        'avail': c.available.meters.toStringAsFixed(1),
+        'flow': c.flow.inLitersPerSecond.toStringAsFixed(2),
+        'req': c.required.meters.toStringAsFixed(2),
+        'lift': c.liftM.toStringAsFixed(2),
+        'fric': c.frictionM.toStringAsFixed(2),
+        'res': c.inletResidualM.toStringAsFixed(1),
+      }),
+      locate: IssueLocation(meter.sheetId, nodeId: c.meterId),
+    ));
+  }
+
+  // ── 5a-ter. Combined fire system whose sprinkler sets the head (info) ─────
+  // Reference apartment A1 (supersedes Round 37 r2) — a combined sprinkler +
+  // hydrant pump is rated at the LARGER flow and the LARGER head of the two
+  // bases. When the sprinkler head is the larger, the sprinkler system sets
+  // the pump HEAD while the standpipe sets the FLOW: an INFO naming the split
+  // (both points are covered), judge-only, locatable to the duty pump.
   for (final b in fireBases) {
     final st = b.standpipe;
     if (!b.sprinklerGovernsCombined || st == null) continue;
-    final pumpNode =
-        b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    // Reference apartment A2 — keyed and located on the DUTY pump (the
+    // draw-order / bore rank of the basis), never the first String-sorted
+    // id (a jockey 'FJ' sorted before the duty 'FP').
+    final pump = b.dutyPumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
+    final pumpNode = pump == null ? null : net.nodeById(pump);
     warnings.add(DesignIssue(
-      severity: IssueSeverity.warning,
-      kind: 'combined-fire-sprinkler-governs'
-          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      severity: IssueSeverity.info,
+      kind: 'combined-fire-sprinkler-governs${pump == null ? '' : ':$pump'}',
       title: str(StringKey.issueCombinedFireSprinklerGovernsTitle),
       message: str.format(StringKey.issueCombinedFireSprinklerGovernsMessage, {
         'sprHead': b.head.meters.toStringAsFixed(1),
-        'sprFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
-        'hoseFlow': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+        'sprFlow': ref
+            .watch(sprinklerRemoteAreaProvider)
+            .remoteAreaDemand
+            .inLitersPerSecond
+            .toStringAsFixed(1),
+        'hoseFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
         'hoseHead': st.pumpHead.meters.toStringAsFixed(1),
       }),
       locate: pumpNode == null
@@ -1487,6 +1727,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — a fire
   // pump whose churn pressure exceeds the standard component rating
   // (175 psi): judge-only, locatable to the duty pump.
+  final fireZoneLines = ref.watch(fireZoneLinesProvider);
+  String fireFloorName(int f) {
+    final floors = project.building.floors;
+    return f >= 0 && f < floors.length ? floors[f].name : 'F$f';
+  }
+
   for (final o in fireOverPressure) {
     final b = o.basis;
     // Round 52 — located at the pump whose discharge sees the maximum (a
@@ -1505,6 +1751,20 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     // maximum is its own kind (split into pressure zones), keyed on the
     // pump whose discharge sees the maximum.
     final sp = o.standpipe;
+    // Backlog Z-2 — with designed zones the warning names the zone (its
+    // floors) whose own churn still exceeds the single-zone maximum.
+    final zoneLine = fireZoneLines
+        .where((l) => identical(l.basis, b))
+        .firstOrNull;
+    final zonePrefix = zoneLine == null
+        ? ''
+        : str.format(StringKey.issueFireZonePrefix, {
+            'zone': '${zoneLine.zone.number}',
+            'floors': zoneLine.lowFloor == zoneLine.highFloor
+                ? fireFloorName(zoneLine.lowFloor)
+                : '${fireFloorName(zoneLine.lowFloor)}-'
+                    '${fireFloorName(zoneLine.highFloor)}',
+          });
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: '${sp ? 'standpipe-system-over-pressure' : 'fire-system-over-pressure'}'
@@ -1512,16 +1772,15 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       title: str(sp
           ? StringKey.issueStandpipeOverPressureTitle
           : StringKey.issueFireOverPressureTitle),
-      message: str.format(
+      message: zonePrefix + str.format(
           sp
               ? StringKey.issueStandpipeOverPressureMessage
               : StringKey.issueFireOverPressureMessage,
           {
         'churn': o.check.churnKpa.toStringAsFixed(0),
-        'limit': (sp
-                ? kStandpipeMaxSystemPressureKpa
-                : kFireComponentMaxPressureKpa)
-            .toStringAsFixed(0),
+        // Backlog A-3 — both kinds are judged against the 350 psi single-
+        // zone maximum (a lower churn sets a pipe pressure class instead).
+        'limit': kStandpipeMaxSystemPressureKpa.toStringAsFixed(0),
         'head': b.head.meters.toStringAsFixed(1),
         'share': share == null
             ? ''
@@ -1551,6 +1810,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final range = o.lowFloor == o.highFloor
         ? floorName(o.lowFloor)
         : '${floorName(o.lowFloor)}-${floorName(o.highFloor)}';
+    // Backlog A-3 — a static range is DESIGNATED pressure-regulating hose
+    // valves (the design states the device NFPA 14 7.2.3.2 asks for): an
+    // INFO listing the floors, no longer a warning.
+    if (!o.residual) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'standpipe-prv-hose-valves'
+            ':${pump ?? ''}:${o.lowFloor}-${o.highFloor}',
+        title: str(StringKey.issueStandpipePrvHoseValvesTitle),
+        message: str.format(StringKey.issueStandpipePrvHoseValvesMessage, {
+          'floors': range,
+          'max': o.maxKpa.toStringAsFixed(0),
+          'min': o.minKpa.toStringAsFixed(0),
+          'limit': o.limitKpa.toStringAsFixed(0),
+          'set': kStandpipePrvSetResidualKpa.toStringAsFixed(0),
+        }),
+        locate: at == null ? null : IssueLocation(at.sheetId, nodeId: at.id),
+      ));
+      continue;
+    }
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: '${o.residual ? 'hose-station-over-residual' : 'standpipe-outlet-over-pressure'}'
@@ -1703,6 +1982,42 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 5a-sexies. Too few / too small AC units (backlog A-4) ─────────────────
+  // Judge-only, located on the room (its sheet + its first AC unit): the AC
+  // indoor units a room OWNS give a combined nominal capacity below its
+  // cooling load (a share above the largest standard unit). A room with NO
+  // AC unit is un-designed, not undersized: no finding.
+  for (final r in rooms) {
+    final acs = [
+      for (final n in net.nodes)
+        if (RoomArea.isAcComponent(n.component) &&
+            roomUnitOwnerId(n, rooms) == r.id)
+          n,
+    ]..sort((a, b) => naturalIdCompare(a.id, b.id));
+    if (acs.isEmpty) continue;
+    final load = ref.watch(roomCoolingLoadProvider(r.id));
+    if (load == null) continue;
+    final chk =
+        roomCoolingCheck(loadBtuPerHr: load.btuPerHr, unitCount: acs.length);
+    if (chk == null || !chk.undersized) continue;
+    final (topPk, topBtu) = standardAcCapacities.last;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-cooling-undersized:${r.id}',
+      title: str(StringKey.issueRoomCoolingUndersizedTitle),
+      message: str.format(StringKey.issueRoomCoolingUndersizedMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'load': chk.loadBtuPerHr.toStringAsFixed(0),
+        'count': chk.unitCount,
+        'installed': chk.installedBtuPerHr.toStringAsFixed(0),
+        'top': topBtu.toStringAsFixed(0),
+        'needed': chk.unitsNeeded,
+        'topPk': topPk.toStringAsFixed(topPk == topPk.roundToDouble() ? 0 : 1),
+      }),
+      locate: IssueLocation(r.sheetId, nodeId: acs.first.id),
+    ));
+  }
+
   // ── 5a-ter. AC basis honesty (audit r8 fire-hvac-4) ────────────────────────
   // The 'Internal gains' basis omits envelope transmission + solar; while it is
   // active (and rooms exist) the engineer is told so — an INFO advisory.
@@ -1776,8 +2091,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // A plain kind lets it surface as its own compliance row + fail the verdict.
       kind: 'unfed-panel:${d.panelId}',
       title: str(StringKey.issueUnfedPanelTitle),
+      // Backlog E-1 — an explicit `false` is on no service; an unset flag
+      // (a legacy file) is still counted by the study as its own entrance.
       message: str.format(
-          StringKey.issueUnfedPanelMessage, {'panel': panel?.name ?? d.panelId}),
+          panel?.serviceEntrance == false
+              ? StringKey.issueUnfedPanelMessage
+              : StringKey.issueUnfedPanelLegacyMessage,
+          {'panel': panel?.name ?? d.panelId}),
       locate: IssueLocation('', panelId: d.panelId),
     ));
   }
@@ -1978,14 +2298,16 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
   var count = 0;
   for (final e in net.edges) {
     if (!sizing.containsKey(e.id)) continue;
-    final len = edgeLength(
+    // Drawing-review D7 — a 0 px splice on a calibrated sheet is not counted.
+    if (edgeBlocksExportAsZeroLength(
       e,
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
       mounting: project.mounting,
-    );
-    if (len.meters <= 0) count++;
+    )) {
+      count++;
+    }
   }
   return count;
 });
@@ -2011,14 +2333,15 @@ final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
   final seen = <String>{};
   for (final e in net.edges) {
     if (!sizing.containsKey(e.id)) continue;
-    final len = edgeLength(
+    if (!edgeBlocksExportAsZeroLength(
       e,
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
       mounting: project.mounting,
-    );
-    if (len.meters > 0) continue;
+    )) {
+      continue;
+    }
     final sheetId = net.nodeById(e.fromId)?.sheetId;
     if (sheetId == null) continue;
     if (seen.add(sheetId)) out.add(sheetId);

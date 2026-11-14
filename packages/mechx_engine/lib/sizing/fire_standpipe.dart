@@ -30,12 +30,15 @@ import 'package:mechx_engine/network/network.dart'
         NodeComponent,
         NodeRole,
         ServiceType,
-        isSupplyInletComponent;
+        isSupplyInletComponent,
+        kHoseOutletHeightM;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show fireRatingSystems, fireSystems, isFireSystemBoundary;
 import 'package:mechx_engine/standards/sni.dart'
     show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
+
+export 'package:mechx_engine/network/network.dart' show kHoseOutletHeightM;
 
 // ── Unit conversion ──────────────────────────────────────────────────────────
 
@@ -174,12 +177,12 @@ const List<StandardValue<Object?>> yardHydrantVerifyChecklist = [
 /// (status `notAnSniClause`).
 const double kFdcMinBoreMm = 100.0;
 
-/// Height of a hose-cabinet landing valve above its own finished floor (m).
-///
-/// // VERIFY — representative Indonesian hydrant-box mounting (≈ 0.9–1.5 m,
-/// 1.2 m typical), general practice NOT an SNI clause. Surfaced via
-/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
-const double kHoseOutletHeightM = 1.2;
+// [kHoseOutletHeightM] (the hose-cabinet landing-valve height, 1.2 m) is
+// declared in `network/network.dart` since backlog D-1 (2026-11-13): the same
+// constant sets the hydrant box / hose reel node's elevation
+// ([nodeElevation]) that the standpipe lift and the outlet pressures read, so
+// the pipe leg, the lift and the outlet pressure agree. Re-exported here so
+// every `show kHoseOutletHeightM` import keeps working.
 
 /// Round 21 (fire-3-fire-pipe-sized-on-domestic-velocity-cap) — the velocity
 /// cap the FIRE services (sprinkler + hydrant) are sized against, in m/s.

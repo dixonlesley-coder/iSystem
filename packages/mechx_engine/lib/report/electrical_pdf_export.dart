@@ -125,8 +125,11 @@ const double _drawInset = 12.0;
 /// bottom-left, the title block (height [titleBlockHeight], null = no chrome
 /// ⇒ the legacy 96 pt strip) the bottom-right.
 double _sldTitleStripH(SldSheet sheet, double? titleBlockHeight) {
-  final legendH =
-      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
+  // F8 follow-up — a long legend entry wraps inside the box, so the strip
+  // counts printed LINES, not entries.
+  final legendH = sheet.legend.isNotEmpty
+      ? 18.0 + sldLegendLineCount(sheet.legend) * 11.0
+      : 0.0;
   return titleBlockHeight != null
       ? math.max(titleBlockHeight, legendH) + 24.0
       : 96.0;
@@ -220,6 +223,52 @@ Uint8List electricalSldDetailToPdf({
       projectName: pname);
 }
 
+/// Drawing-review D6 (2026-11-13) — the PAGES [electricalSldDetailToPdf]
+/// issues, as sheets (the same one-page-vs-paginated decision), so the DXF of
+/// the detail single-line can carry exactly the PDF's pages
+/// (`sldSheetsToDxfSet`).
+List<SldSheet> electricalSldDetailSheets({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
+  String? projectName,
+}) {
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
+  final whole = buildElectricalSld(
+      project: project,
+      result: result,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds);
+  final minPt = sldSinglePageMinLabelPt(whole,
+      chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
+  if (minPt >= kMinPlotLabelPt - 1e-9 || result.order.isEmpty) return [whole];
+  final sheets = <SldSheet>[];
+  for (final id in result.order) {
+    sheets.addAll(electricalBoardScheduleSheets(
+        project: project,
+        result: result,
+        panelId: id,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+        breakerKaByCircuitId: breakerKaByCircuitId,
+        containmentByCircuitId: containmentByCircuitId,
+        adsFailedCircuitIds: adsFailedCircuitIds,
+        projectName: pname,
+        firstSheetNo: sheets.length + 1));
+  }
+  return sheets;
+}
+
 /// Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — ONE
 /// board's schedule as issuable sheets: `[whole]` when it prints at
 /// [kMinPlotLabelPt] on one A3 page, else the fewest equal WAY RANGES whose
@@ -238,16 +287,19 @@ List<SldSheet> electricalBoardScheduleSheets({
   Map<String, ConduitSpec>? containmentByCircuitId,
   Set<String>? adsFailedCircuitIds,
   String projectName = 'Untitled project',
+  int? firstSheetNo,
 }) {
-  SldSheet build(({int lo, int hi})? r) => buildElectricalSld(
-      project: project,
-      result: result,
-      onlyPanelId: panelId,
-      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-      breakerKaByCircuitId: breakerKaByCircuitId,
-      containmentByCircuitId: containmentByCircuitId,
-      adsFailedCircuitIds: adsFailedCircuitIds,
-      wayRange: r);
+  SldSheet build(({int lo, int hi})? r, {({int first, int last})? sheets}) =>
+      buildElectricalSld(
+          project: project,
+          result: result,
+          onlyPanelId: panelId,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+          adsFailedCircuitIds: adsFailedCircuitIds,
+          wayRange: r,
+          totalSheets: sheets);
   bool legible(SldSheet s) =>
       sldSinglePageMinLabelPt(s,
           chrome: chrome,
@@ -258,13 +310,22 @@ List<SldSheet> electricalBoardScheduleSheets({
   final ways = result.panels[panelId]?.circuits.length ?? 0;
   if (ways <= 1 || legible(whole)) return [whole];
   var pages = [whole];
+  var lastLo = 0;
   for (var g = 2; g <= ways; g++) {
     final size = (ways / g).ceil();
     pages = [
       for (var lo = 0; lo < ways; lo += size)
         build((lo: lo, hi: math.min(lo + size, ways) - 1)),
     ];
+    lastLo = (pages.length - 1) * size;
     if (pages.every(legible)) break;
+  }
+  // Drawing review F8 — the last page's TOTAL covers every page of the board:
+  // name the sheets (the set's own `Sheet i of N` numbers when the caller
+  // passes where this board starts) so the reader knows which rows add up.
+  if (pages.length > 1 && firstSheetNo != null) {
+    pages[pages.length - 1] = build((lo: lastLo, hi: ways - 1),
+        sheets: (first: firstSheetNo, last: firstSheetNo + pages.length - 1));
   }
   return pages;
 }
@@ -426,8 +487,8 @@ String _sldPageContent({
         '(${_pdfText(overlapNote)}) Tj ET');
   }
   // Round 43 — a page its pagination could not bring to the plotted floor.
-  final legNote = sldLegibilityWarning(sheet.belowMinLabelPt,
-      minPt: kMinPlotLabelPt);
+  final legNote =
+      sldLegibilityWarning(sheet.belowMinLabelPt, minPt: kMinPlotLabelPt);
   if (legNote != null) {
     cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
         '${_n(_margin + 6)} ${_n(_pageH - _margin - (overlapNote != null ? 24 : 12))} Td '
@@ -437,7 +498,7 @@ String _sldPageContent({
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
   if (sheet.legend.isNotEmpty) {
     const rowH = 11.0;
-    final lh = 18.0 + sheet.legend.length * rowH;
+    final lh = 18.0 + sldLegendLineCount(sheet.legend) * rowH;
     const lw = 240.0;
     const lx = _margin + 4;
     const ly = _margin + 2;
@@ -446,12 +507,19 @@ String _sldPageContent({
     cs.writeln('BT /F1 9 Tf 0 0 0 rg '
         '${_n(lx + 6)} ${_n(ly + lh - 12)} Td (${_pdfText('LEGEND')}) Tj ET');
     var row = 0;
+    // F8 follow-up (2026-11-13) — an entry longer than the box wraps onto
+    // the following lines, hanging after its `CODE  -  ` lead (the same
+    // wrap the DXF legend prints).
     for (final e in sheet.legend) {
-      final ry = ly + lh - 24 - row * rowH;
-      cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
-          '${_n(lx + 6)} ${_n(ry)} Td '
-          '(${_pdfText('${e.code}  -  ${e.meaning}')}) Tj ET');
-      row++;
+      final w = sldLegendEntryLines(e);
+      for (var k = 0; k < w.lines.length; k++) {
+        final ry = ly + lh - 24 - row * rowH;
+        final x = lx + 6 + (k == 0 ? 0 : w.indentEm * 7.5);
+        cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
+            '${_n(x)} ${_n(ry)} Td '
+            '(${_pdfText(w.lines[k])}) Tj ET');
+        row++;
+      }
     }
   }
 
@@ -588,7 +656,7 @@ Uint8List electricalSldToPdfPaginated({
             breakerIcuKaByPanelId: breakerIcuKaByPanelId,
             breakerKaByCircuitId: breakerKaByCircuitId,
             containmentByCircuitId: containmentByCircuitId,
-      adsFailedCircuitIds: adsFailedCircuitIds),
+            adsFailedCircuitIds: adsFailedCircuitIds),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -600,20 +668,21 @@ Uint8List electricalSldToPdfPaginated({
   }
   // Round 34 — a board too tall for one legible page continues on way-range
   // pages; `Sheet i of N` runs across the whole set.
-  final sheets = <SldSheet>[
-    for (final id in ids)
-      ...electricalBoardScheduleSheets(
-          project: project,
-          result: result,
-          panelId: id,
-          diagramTitle: diagramTitle,
-          chrome: chrome,
-          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-          breakerKaByCircuitId: breakerKaByCircuitId,
-          containmentByCircuitId: containmentByCircuitId,
-          adsFailedCircuitIds: adsFailedCircuitIds,
-          projectName: pname),
-  ];
+  final sheets = <SldSheet>[];
+  for (final id in ids) {
+    sheets.addAll(electricalBoardScheduleSheets(
+        project: project,
+        result: result,
+        panelId: id,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+        breakerKaByCircuitId: breakerKaByCircuitId,
+        containmentByCircuitId: containmentByCircuitId,
+        adsFailedCircuitIds: adsFailedCircuitIds,
+        projectName: pname,
+        firstSheetNo: sheets.length + 1));
+  }
   final pages = <String>[
     for (var i = 0; i < sheets.length; i++)
       _sldPageContent(
@@ -642,6 +711,7 @@ Uint8List electricalSldSheetsToPdf({
   List<String>? diagramTitles,
   DrawingChrome? chrome,
   String projectName = 'Untitled project',
+  List<String>? drawingNumbers,
 }) {
   if (sheets.isEmpty) {
     const blank = SldSheet(
@@ -674,7 +744,12 @@ Uint8List electricalSldSheetsToPdf({
         diagramTitle: (diagramTitles != null && i < diagramTitles.length)
             ? diagramTitles[i]
             : diagramTitle,
-        chrome: chrome,
+        // Drawing-review D1 — a set of DISTINCT drawings (the front matter)
+        // stamps each page's own number.
+        chrome: (drawingNumbers != null && i < drawingNumbers.length)
+            ? (chrome ?? const DrawingChrome())
+                .withDrawingNumber(drawingNumbers[i])
+            : chrome,
         sheetIndexOverride: i + 1,
         sheetTotalOverride: sheets.length,
       ),

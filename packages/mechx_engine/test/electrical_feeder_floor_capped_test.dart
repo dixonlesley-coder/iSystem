@@ -28,6 +28,7 @@ library;
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -55,11 +56,16 @@ ElectricalCircuitResult _way(ElectricalPanelResult r, String id) =>
 
 /// MDP --f1--> SP, SP carrying ONE three-phase heater at cosφ 1.0 so every
 /// current in the chain is a closed-form `P / (√3·V)`.
-ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
+ElectricalProject _twoBoard(
+        {required double loadW,
+        Current? feederOverride,
+        double? cableOverrideMm2,
+        ApparentPower? supplyVa}) =>
     ElectricalProject(
       id: 'pr',
       name: 'Building',
       earthingSystem: EarthingSystem.tnS,
+      supplyCapacityVa: supplyVa,
       panels: [
         ElectricalPanel(
           id: 'MDP',
@@ -76,6 +82,7 @@ ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
               length: const Length(25),
               feedsPanelId: 'SP',
               breakerOverrideA: feederOverride,
+              cableOverrideMm2: cableOverrideMm2,
             ),
           ],
         ),
@@ -106,7 +113,98 @@ String _nonSelectiveMessage(FaultStudyResult fs) =>
     fs.warnings.singleWhere((w) => w.code == 'non-selective').message;
 
 void main() {
+  // ── (A0) Backlog B-1: an AUTO-sized feeder cable grows to the floor ──────
+  group('(A0) an auto-sized feeder cable grows until the floor fits', () {
+    // Same 35 kW board as (A): SP incomer 63 A, load-sized f1 16 mm² (Iz 80).
+    // FLOOR target 1.6 × 63 = 100.8 A ⇒ rung 125 A. Backlog B-1 (2026-11-13,
+    // bounded): the cable is AUTO-sized, so it steps up the ladder to the
+    // smallest section whose Iz carries 125 A on method E: 25 mm² 105 < 125,
+    // 35 mm² 130 ≥ 125 ⇒ 35 mm² (two sizes up — the bound), device 125 A
+    // (125/63 = 1.98 ⇒ partial, the floor's own target ⇒ applied). MDP needs
+    // an incomer of at least 125 A for that (the upstream bound): a declared
+    // 197 kVA service floors it at 284.3 A ⇒ 315 A.
+    final project =
+        _twoBoard(loadW: 35000, supplyVa: const ApparentPower(197e3));
+    final sys = computeSystem(p, project);
+    final feeder = _way(sys.panels['MDP']!, 'f1');
+
+    test('the cable grows to 35 mm2 and the device reaches 125 A', () {
+      expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 63);
+      expect(feeder.cable.csaMm2, 35);
+      expect(feeder.cable.deratedIz.amperes, closeTo(130.0, 1e-9));
+      expect(feeder.breaker.ratingA.amperes, 125);
+      expect(feeder.cableRaisedForSelectivity, isTrue);
+      expect(sys.feederFloorsApplied, {'f1'});
+      expect(sys.feederFloorsCapped, isEmpty);
+    });
+
+    test('no selectivity finding is left on the engine\'s own pick', () {
+      final fs = faultStudy(sys, project, p);
+      expect(fs.warnings.map((w) => w.code), isNot(contains('non-selective')));
+      expect(fs.warnings.map((w) => w.code),
+          isNot(contains('selectivity-partial')));
+    });
+  });
+
+  // ── (A1) bounded B-1: the upstream incomer refuses the growth ────────────
+  test('(A1) a 125 A floor rung above MDP\'s own 63 A incomer is refused: '
+      'the cable stays, the warning names the device remedy', () {
+    // Without a declared service MDP's incomer is its own demand rung, 63 A,
+    // so a 125 A feeder device would sit above it: no growth, the pre-B-1
+    // device-only floor (80 A on 16 mm²) and a `non-selective` naming a
+    // selective device.
+    final project = _twoBoard(loadW: 35000);
+    final sys = computeSystem(p, project);
+    final f = _way(sys.panels['MDP']!, 'f1');
+    expect(sys.panels['MDP']!.incomer.breaker.ratingA.amperes, 63);
+    expect(f.cable.csaMm2, 16);
+    expect(f.breaker.ratingA.amperes, 80);
+    expect(f.cableRaisedForSelectivity, isFalse);
+    expect(sys.feederSelectivityRefused,
+        {'f1': SelectivityRefusal.upstreamIncomer});
+    expect(
+      _nonSelectiveMessage(faultStudy(sys, project, p)),
+      'Feeder to SP (80 A) may not discriminate with Sub incomer (63 A): the '
+      '1.6x ratio cannot be reached under the upstream 63 A incomer - use a '
+      'selective (time-delayed / category B, electronic-trip) device or check '
+      "the manufacturer's discrimination tables.",
+    );
+  });
+
+  // ── (A2) bounded B-1: more than two cable sizes is refused ───────────────
+  test('(A2) a floor needing more than two cable sizes is refused', () {
+    // The (A0) board with 100 % future headroom on SP: SP's incomer sizes on
+    // 2 × 50.5 = 101 A ⇒ 125 A, so the floor is 1.6 × 125 = 200 A. The
+    // load-sized 16 mm² would have to reach Iz ≥ 200 on method E: 25 105,
+    // 35 130, 50 160, 70 200 ⇒ four sizes up, past the two-size bound ⇒
+    // refused: 16 mm², the device-only floor at Iz 80 ⇒ 80 A, `non-selective`
+    // naming the device remedy.
+    final base = _twoBoard(loadW: 35000, supplyVa: const ApparentPower(197e3));
+    final project = base.withPanels([
+      base.panels.first,
+      base.panels.last
+          .copyWith(headroom: const HeadroomSpec(sparePercentage: 100)),
+    ]);
+    final sys = computeSystem(p, project);
+    final f = _way(sys.panels['MDP']!, 'f1');
+    expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 125);
+    expect(f.cable.csaMm2, 16);
+    expect(f.breaker.ratingA.amperes, 80);
+    expect(f.cableRaisedForSelectivity, isFalse);
+    expect(sys.feederSelectivityRefused, {'f1': SelectivityRefusal.cableSteps});
+    expect(
+      _nonSelectiveMessage(faultStudy(sys, project, p)),
+      'Feeder to SP (80 A) may not discriminate with Sub incomer (125 A): the '
+      "1.6x ratio cannot be reached within 2 cable sizes of the feeder's own "
+      '16 mm2 cable - use a selective (time-delayed / category B, '
+      "electronic-trip) device or check the manufacturer's discrimination "
+      'tables.',
+    );
+  });
+
   // ── (A) the cap bites, and the 1.6× target IS on the ladder ───────────────
+  // Backlog B-1: only a USER-FIXED cable is still capped, so the fixture pins
+  // the 16 mm² cable the load needs (the cable override).
   group('(A) a capped floor names the cap, its numbers and the cable lever', () {
     // SP: 35 kW 3φ at cosφ 1.0 ⇒ Ib = 35 000 / (√3·400) = 50.518 A → 50.5 A.
     //   A 3φ way loads all three lines ⇒ SP demand current 50.5 A ⇒ SP INCOMER
@@ -118,7 +216,7 @@ void main() {
     // FLOOR target = 1.6 × 63 = 100.8 A ⇒ floor RUNG = first ≥ 100.8 = 125 A.
     // CAP = largest rung ≤ Iz 80 = 80 A. 125 > 80 ⇒ THE CAP BITES: the device
     //   lifts 63 → 80 and stops, at 80/63 = 1.27× — still non-selective.
-    final project = _twoBoard(loadW: 35000);
+    final project = _twoBoard(loadW: 35000, cableOverrideMm2: 16);
     final sys = computeSystem(p, project);
     final feeder = _way(sys.panels['MDP']!, 'f1');
 
@@ -279,7 +377,7 @@ void main() {
 
   // ── (E) a legacy-constructed result reworks nothing ───────────────────────
   test('(E) an empty feederFloorsCapped keeps every message as it was', () {
-    final project = _twoBoard(loadW: 35000);
+    final project = _twoBoard(loadW: 35000, cableOverrideMm2: 16);
     final sys = computeSystem(p, project);
     // Rebuild the SAME result with the G3 set dropped (what a result
     // constructed the legacy way looks like) — the wording reverts verbatim.

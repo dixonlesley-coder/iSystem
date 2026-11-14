@@ -19,7 +19,7 @@
 library;
 
 import '../electrical/advanced_study.dart'
-    show gensetStartFloorFor, serviceTransformer;
+    show gensetAdsFloorFor, gensetStartFloorFor, serviceTransformer;
 import '../electrical/genset_backup.dart'
     show
         effectiveGeneratorBackupFraction,
@@ -47,6 +47,10 @@ enum EquipmentCategory {
   fan,
   airHandling,
   tank,
+
+  /// Backlog G-2 — electric storage water heaters (after the tanks; a
+  /// schedule with none is byte-identical).
+  waterHeater,
   panel,
   transformer,
   generator,
@@ -63,6 +67,7 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.fan => 'Fans',
         EquipmentCategory.airHandling => 'Air-handling (AHU / FCU / AC)',
         EquipmentCategory.tank => 'Tanks',
+        EquipmentCategory.waterHeater => 'Water heaters',
         EquipmentCategory.panel => 'Electrical panels',
         EquipmentCategory.transformer => 'Transformer',
         EquipmentCategory.generator => 'Standby generator',
@@ -154,6 +159,13 @@ class FanScheduleItem {
   /// under "Air-handling" rather than "Fans".
   final bool airHandling;
 
+  /// Backlog F-3 — the duty is a room-air ESTIMATE (`sizeRoomAir`: an assumed
+  /// 15 m run), not a drawn-duct solve: [FanDutyBasis.estimateNoDucts] when
+  /// no drawn system serves the room, [FanDutyBasis.estimateRoomOnly] when
+  /// ducts from a unit outside the room serve it. The duty cell says so.
+  /// Null (default) ⇒ a solved duty, byte-identical.
+  final FanDutyBasis? estimate;
+
   const FanScheduleItem({
     required this.duty,
     required this.service,
@@ -161,7 +173,20 @@ class FanScheduleItem {
     this.modelSpec,
     this.qty = 1,
     this.airHandling = false,
+    this.estimate,
   });
+}
+
+/// Backlog F-3 — which room-air ESTIMATE a scheduled fan duty is (see
+/// [FanScheduleItem.estimate]).
+enum FanDutyBasis {
+  /// No drawn duct system serves the room: the 15 m assumed-run estimate is
+  /// the only statement of its air handling.
+  estimateNoDucts,
+
+  /// Drawn ducts reach the room from a unit outside it; the room's own unit
+  /// is still costed on the room estimate.
+  estimateRoomOnly,
 }
 
 /// One placed AC unit (cassette / split-wall / ducted) to schedule — the same
@@ -214,10 +239,51 @@ class TankScheduleItem {
   final String? modelSpec;
   final int qty;
 
+  /// Backlog Z-4 — a fire ZONE BREAK tank (the zone chain's fill tank):
+  /// scheduled as 'Fire break tank', whatever its drawn tank typing.
+  final bool fireBreak;
+
   const TankScheduleItem({
     required this.tag,
     required this.roof,
     this.capacityLitres,
+    this.modelSpec,
+    this.qty = 1,
+    this.fireBreak = false,
+  });
+}
+
+/// Backlog G-2 (2026-11-13) — one placed water heater to schedule: its
+/// sized duty (`sizeWaterHeater`, the SAME design the panel way and the
+/// calc report read).
+class WaterHeaterScheduleItem {
+  final String tag;
+
+  /// Hot-water fixtures it serves (rated in the fixture-demand table).
+  final int fixtureCount;
+
+  /// Required recovery (probable maximum demand, L/h at 60 °C).
+  final double recoveryLph;
+
+  /// Required storage (L) and the selected standard tank (L).
+  final double storageRequiredL;
+  final double tankL;
+
+  /// The selected heating element (kW) and its supply phases.
+  final double elementKw;
+  final int phases;
+
+  final String? modelSpec;
+  final int qty;
+
+  const WaterHeaterScheduleItem({
+    required this.tag,
+    required this.fixtureCount,
+    required this.recoveryLph,
+    required this.storageRequiredL,
+    required this.tankL,
+    required this.elementKw,
+    required this.phases,
     this.modelSpec,
     this.qty = 1,
   });
@@ -238,6 +304,9 @@ class EquipmentScheduleData {
 
   /// Round 25 — drawn storage tanks (tanks section). Empty ⇒ byte-identical.
   final List<TankScheduleItem> tanks;
+
+  /// Backlog G-2 — placed water heaters. Empty ⇒ byte-identical.
+  final List<WaterHeaterScheduleItem> waterHeaters;
 
   /// Solved electrical system whose panels become one schedule row each. Null ⇒
   /// the panel section is skipped.
@@ -275,6 +344,7 @@ class EquipmentScheduleData {
     this.fans = const [],
     this.acUnits = const [],
     this.tanks = const [],
+    this.waterHeaters = const [],
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
@@ -346,7 +416,14 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       tag: tag,
       service: item.service,
       duty: '${_fmt(d.airflow.inLitersPerSecond, dp: 0)} L/s @ '
-          '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa',
+          '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa'
+          '${switch (item.estimate) {
+        null => '',
+        FanDutyBasis.estimateNoDucts =>
+          ' · ${strings(RptStringKey.esRoomEstimateNoDucts)}',
+        FanDutyBasis.estimateRoomOnly =>
+          ' · ${strings(RptStringKey.esRoomEstimateRoomOnly)}',
+      }}',
       size: strings.format(RptStringKey.esMotorSize,
           {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
@@ -377,9 +454,11 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     final cap = t.capacityLitres;
     rows.add(EquipmentScheduleRow(
       tag: t.tag,
-      service: strings(t.roof
-          ? RptStringKey.esRoofTankService
-          : RptStringKey.esGroundTankService),
+      service: strings(t.fireBreak
+          ? RptStringKey.esFireBreakTankService
+          : t.roof
+              ? RptStringKey.esRoofTankService
+              : RptStringKey.esGroundTankService),
       // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
       duty: cap != null && cap > 0
           ? '${_fmt(cap / 1000.0, dp: 1)} m3'
@@ -388,6 +467,29 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       modelSpec: t.modelSpec ?? specFor(t.tag),
       qty: t.qty,
       category: EquipmentCategory.tank,
+    ));
+  }
+
+  // ── Water heaters (backlog G-2) ──────────────────────────────────────────
+  for (final h in data.waterHeaters) {
+    rows.add(EquipmentScheduleRow(
+      tag: h.tag,
+      service: strings.format(
+          RptStringKey.esWaterHeaterService, {'fixtures': '${h.fixtureCount}'}),
+      duty: strings.format(RptStringKey.esWaterHeaterDuty, {
+        'recovery': _fmt(h.recoveryLph, dp: 1),
+        'storage': _fmt(h.storageRequiredL, dp: 1),
+      }),
+      size: strings.format(RptStringKey.esWaterHeaterSize, {
+        'tank': _fmt(h.tankL, dp: 0),
+        'kw': _fmt(h.elementKw, dp: 1),
+        'phases': strings(h.phases == 3
+            ? RptStringKey.sysThreePhase
+            : RptStringKey.sysSinglePhase),
+      }),
+      modelSpec: h.modelSpec ?? specFor(h.tag),
+      qty: h.qty,
+      category: EquipmentCategory.waterHeater,
     ));
   }
 
@@ -465,6 +567,10 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
                       // Round 70 — the set that starts its largest motor.
                       minKvaForStart: data.electrical != null
                           ? gensetStartFloorFor(ep, data.electrical!)
+                          : null,
+                      // Backlog B-3 — the disconnection floor.
+                      minKvaForAds: data.electrical != null
+                          ? gensetAdsFloorFor(data.electrical!)
                           : null);
                   return (unitKva: r.ratingKva, units: r.units);
                 })()
@@ -587,6 +693,7 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.fan => strings(RptStringKey.catFans),
       EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
       EquipmentCategory.tank => strings(RptStringKey.catTanks),
+      EquipmentCategory.waterHeater => strings(RptStringKey.catWaterHeaters),
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
       EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),
@@ -611,6 +718,19 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
     return blocks;
   }
 
+  // Drawing backlog C-5 (iii) — a tank with no capacity prints a dash in
+  // its duty cell, keyed '(*)' to ONE footnote; the notes print under the
+  // project line, so the issued sheet never ends on a page holding only
+  // the tail of a footnote (shophouse M-601 p3). The row model (CSV) keeps
+  // the words.
+  final unset = strings(RptStringKey.esTankCapacityUnset);
+  final anyUnset = rows.any(
+      (r) => r.category == EquipmentCategory.tank && r.duty == unset);
+  blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
+  if (anyUnset) {
+    blocks.add(RptNote(strings(RptStringKey.esTankCapacityUnsetNote)));
+  }
+
   // One section per non-empty category, in enum order.
   for (final cat in EquipmentCategory.values) {
     final inCat = [
@@ -631,13 +751,20 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
         ],
         [
           for (final r in inCat)
-            [r.tag, r.service, r.duty, r.size, r.modelSpec, '${r.qty}'],
+            [
+              r.tag,
+              r.service,
+              r.category == EquipmentCategory.tank && r.duty == unset
+                  ? '- (*)'
+                  : r.duty,
+              r.size,
+              r.modelSpec,
+              '${r.qty}',
+            ],
         ],
         mdSeparator: '| --- | --- | --- | --- | --- | --- |',
       ));
   }
-
-  blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
 
   return blocks;
 }

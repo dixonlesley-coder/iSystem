@@ -22,7 +22,7 @@ import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/custom_fixture.dart';
 import '../standards/sni.dart' show PlumbingFixture;
 import '../units.dart';
-import 'drawing_chrome.dart' show LabelBox;
+import 'drawing_chrome.dart' show LabelBox, helveticaTextWidth;
 import 'number_format.dart' show signedElevationText;
 import 'sld_sheet.dart';
 
@@ -290,6 +290,13 @@ List<SldPrim> planComponentPrims(
       ln(0.72, 0.50, 0.92, 0.50);
       ln(0.86, 0.44, 0.92, 0.50);
       ln(0.92, 0.50, 0.86, 0.56);
+    case NodeComponent.waterHeater:
+      // Backlog G-2 — a storage vessel with a zig-zag heating element.
+      rect(0.26, 0.16, 0.74, 0.84);
+      ln(0.36, 0.66, 0.44, 0.40);
+      ln(0.44, 0.40, 0.52, 0.66);
+      ln(0.52, 0.66, 0.60, 0.40);
+      ln(0.60, 0.40, 0.66, 0.66);
   }
   return out;
 }
@@ -413,6 +420,8 @@ String? equipmentTagPrefix(NodeComponent c) => switch (c) {
       NodeComponent.acSplitWall ||
       NodeComponent.acDucted =>
         'AC',
+      // Backlog G-2 — a water heater.
+      NodeComponent.waterHeater => 'WH',
       _ => null,
     };
 
@@ -477,7 +486,7 @@ String? fixturePlanCode(NetNode n,
     PlumbingFixture.waterClosetFlushValve ||
     PlumbingFixture.waterClosetFlushTank =>
       'WC',
-    PlumbingFixture.urinalFlushTank => 'UR',
+    PlumbingFixture.urinalFlushTank || PlumbingFixture.urinalFlushValve => 'UR',
     PlumbingFixture.lavatory => 'LAV',
     PlumbingFixture.shower => 'SH',
     PlumbingFixture.bathtub => 'BT',
@@ -830,6 +839,193 @@ const double kPlanLeaderMaxFactor = 8.0;
 /// this (a short leader that overprints beats a cross-sheet one).
 const double kPlanLeaderHardMaxFactor = 16.0;
 
+/// Drawing-review D5 (2026-11-13) — with a [PlanKeyRegistry] (the issued
+/// plan sheets) a tag is placed ONLY in a slot that overprints nothing, whose
+/// leader crosses nothing and is at most this many text heights long (≈ 12 mm
+/// at 9 pt on A3); otherwise the element gets a numbered KEY TAG and its text
+/// goes into the sheet's KETERANGAN PIPA / PIPE KEY table. A drafting rule.
+const double kPlanKeyedLeaderMaxFactor = 4.0;
+
+/// Drawing-review D5 — the longest leader of a plan KEY TAG, × text size: its
+/// small circle is tried hugging the element first; 6 text heights is still a
+/// short local tie (≈ 19 mm at 9 pt).
+const double kPlanKeyTagLeaderMaxFactor = 6.0;
+
+/// Fix round 4 — the furthest ring (× text size beyond the circle, ≈ 38 mm
+/// at 9 pt) a key tries when no slot within [kPlanKeyTagLeaderMaxFactor] is
+/// clear, before the sheet counts an overprint: a long clear leader reads;
+/// a number under a pipe does not.
+const double kPlanKeyTagLeaderReachFactor = 12.0;
+
+/// Fix round F4 (2026-11-13) — the clear paper a plan's KETERANGAN PIPA /
+/// PIPE KEY table keeps round it, × text size: no mark, marker text, label
+/// or run comes nearer (≈ 3 mm at 9 pt), unless no such spot exists.
+const double kPlanKeyTableMarginFactor = 1.0;
+
+/// Drawing-review D5 — the keyed texts of one plan sheet (text → key, in key
+/// order; identical typical texts share one key).
+class PlanKeyRegistry {
+  final Map<String, int> keyOf = <String, int>{};
+  int keyFor(String text) => keyOf.putIfAbsent(text, () => keyOf.length + 1);
+  bool get isEmpty => keyOf.isEmpty;
+}
+
+/// Drawing-review D5 — a placed key table: its text runs (baseline starts,
+/// upright) and ruling, in the output space, at [textSize].
+class PlanKeyTable {
+  final List<PlacedLabelLine> texts;
+  final List<LabelSegment> rules;
+  final double textSize;
+  const PlanKeyTable(this.texts, this.rules, this.textSize);
+}
+
+/// Drawing-review D5 — lay the KETERANGAN PIPA / PIPE KEY table of [keys]
+/// into the first clear spot of [layout] (nothing overprinted, no run
+/// through it) scanning [bounds] from its top-left on a text-height grid;
+/// with no clear spot it goes below [bounds] and is counted unresolved.
+/// Columns: KEY | SIZE-SERVICE-MATERIAL / TAG | LENGTH / LEVEL (the label's
+/// first ` · ` part, then the rest). Pure; the PDF and DXF draw the result.
+PlanKeyTable? placePlanKeyTable(
+  PlanLabelLayout layout,
+  PlanKeyRegistry keys, {
+  required double textSize,
+  required LabelBox bounds,
+}) {
+  if (keys.isEmpty) return null;
+  final ts = textSize;
+  double w(String t) => helveticaTextWidth(t, ts);
+  (String, String) split(String t) {
+    for (final sep in const [' - ', ' \u00b7 ']) {
+      final i = t.indexOf(sep);
+      if (i >= 0) return (t.substring(0, i), t.substring(i + sep.length));
+    }
+    return (t, '-');
+  }
+
+  final entries = keys.keyOf.entries.toList()
+    ..sort((a, b) => a.value.compareTo(b.value));
+  const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH / LEVEL'];
+  final rows = [
+    for (final e in entries) ['${e.value}', split(e.key).$1, split(e.key).$2],
+  ];
+  final colW = [
+    for (var c = 0; c < 3; c++)
+      [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) + ts,
+  ];
+  final pitch = 1.5 * ts;
+  final tableW = colW.fold(0.0, (a, b) => a + b);
+  double blockH(int n) => (n + 2) * pitch + 0.5 * ts;
+  // Is the box [b] clear of every mark, run and grid line (and of the blocks
+  // already chosen)?
+  // Fix round F4 (2026-11-13) — the spot keeps a [margin] of clear paper
+  // round the table: every mark, marker text, rotated label (all registered
+  // boxes / label quads) and run must stay that far off, so a riser's
+  // "DN / UP" mark or a label never TOUCHES the table even where the glyph
+  // estimate runs short. The margin-free test is the last resort only.
+  var margin = kPlanKeyTableMarginFactor * ts;
+  // The blocks of THIS table chosen so far: they may abut (a split table
+  // reads as one, continued), never overlap; the margin is kept from the
+  // drawing only.
+  final own = <LabelBox>[];
+  bool clear(LabelBox b) {
+    for (final o in own) {
+      if (b.minX < o.maxX - 1e-9 &&
+          o.minX < b.maxX - 1e-9 &&
+          b.minY < o.maxY - 1e-9 &&
+          o.minY < b.maxY - 1e-9) {
+        return false;
+      }
+    }
+    final g = (
+      minX: b.minX - margin,
+      minY: b.minY - margin,
+      maxX: b.maxX + margin,
+      maxY: b.maxY + margin,
+    );
+    return !layout.hitsBox(g) &&
+        !layout.hitsRun(b, clearance: math.max(0.25 * ts, margin)) &&
+        !layout.hitsGrid(b);
+  }
+
+  // The scan steps one text height; the tight-margin pass steps a quarter
+  // of one, so a band with only a few points of slack is not stepped over.
+  var xStep = ts;
+  (double, double)? spot(double h) {
+    for (var yTop = bounds.maxY; yTop - h >= bounds.minY; yTop -= ts) {
+      for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += xStep) {
+        if (clear((minX: x0, minY: yTop - h, maxX: x0 + tableW, maxY: yTop))) {
+          return (x0, yTop);
+        }
+      }
+    }
+    return null;
+  }
+
+  // One block when a clear spot holds it, else the rows split over 2..4
+  // blocks (each with its own heading row) in separate clear spots; none
+  // ⇒ one block below [bounds], counted unresolved (the honest stamp).
+  List<(double, double, int, int)>? plan;
+  for (var pass = 0; pass < 3 && plan == null; pass++) {
+    // A tighter (0.6 text height) margin before the margin-free resort.
+    if (pass > 0) margin = pass == 1 ? 0.6 * ts : 0;
+    if (pass > 0) xStep = ts / 4;
+    for (var k = 1; k <= 4 && plan == null; k++) {
+      final per = (rows.length / k).ceil();
+      final chosen = <(double, double, int, int)>[];
+      own.clear();
+      var ok = true;
+      for (var i = 0; i < rows.length; i += per) {
+        final n = math.min(per, rows.length - i);
+        final h = blockH(n);
+        final at = spot(h);
+        if (at == null) {
+          ok = false;
+          break;
+        }
+        final box =
+            (minX: at.$1, minY: at.$2 - h, maxX: at.$1 + tableW, maxY: at.$2);
+        own.add(box);
+        chosen.add((at.$1, at.$2, i, n));
+      }
+      own.clear();
+      if (ok) plan = chosen;
+    }
+  }
+  if (plan == null) {
+    layout.markUnresolved();
+    plan = [(bounds.minX, bounds.minY - 2 * ts, 0, rows.length)];
+  }
+  final texts = <PlacedLabelLine>[];
+  final rules = <LabelSegment>[];
+  for (final (x0, yTop, i0, n) in plan) {
+    texts.add((text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts));
+    final gridTop = yTop - pitch - 0.3 * ts;
+    final gridBot = gridTop - (n + 1) * pitch;
+    for (final r in [0, 1, n + 1]) {
+      final y = gridTop - r * pitch;
+      rules.add((x1: x0, y1: y, x2: x0 + tableW, y2: y));
+    }
+    var x = x0;
+    for (var c = 0; c <= 3; c++) {
+      rules.add((x1: x, y1: gridTop, x2: x, y2: gridBot));
+      if (c == 3) break;
+      texts.add(
+          (text: heads[c], x: x + 0.5 * ts, y: gridTop - pitch + 0.4 * ts));
+      for (var r = 0; r < n; r++) {
+        texts.add((
+          text: rows[i0 + r][c],
+          x: x + 0.5 * ts,
+          y: gridTop - (r + 2) * pitch + 0.4 * ts
+        ));
+      }
+      x += colW[c];
+    }
+    layout.addBox(
+        (minX: x0, minY: yTop - blockH(n), maxX: x0 + tableW, maxY: yTop));
+  }
+  return PlanKeyTable(texts, rules, ts);
+}
+
 /// R6: a point feature's tag (riser marker, equipment glyph) placed WITHOUT a
 /// leader keeps its near edge within this many text sizes of the feature;
 /// any slot further out is tied back by a leader from the feature, so a tag
@@ -903,8 +1099,15 @@ Map<String, List<LabelSegment>> planDuctOutlines(List<PlanDuctRun> runs) {
   }
 
   // The extended rectangle of a run: centre line p0 → p1, unit direction u.
-  final rect = <String, ({double x0, double y0, double ux, double uy,
-      double len, double half})>{};
+  final rect = <String,
+      ({
+    double x0,
+    double y0,
+    double ux,
+    double uy,
+    double len,
+    double half
+  })>{};
   for (final r in runs) {
     final dx = r.bx - r.ax, dy = r.by - r.ay;
     final l = math.sqrt(dx * dx + dy * dy);
@@ -923,13 +1126,20 @@ Map<String, List<LabelSegment>> planDuctOutlines(List<PlanDuctRun> runs) {
 
   // Parameter interval (0..1) of segment (x1,y1)-(x2,y2) strictly inside a
   // rectangle (shrunk by [eps]), or null.
-  (double, double)? inside(LabelSegment s, ({double x0, double y0, double ux,
-      double uy, double len, double half}) q) {
+  (double, double)? inside(
+      LabelSegment s,
+      ({
+        double x0,
+        double y0,
+        double ux,
+        double uy,
+        double len,
+        double half
+      }) q) {
     const eps = 1e-6;
     // Local coordinates: along t, across n.
     double along(double x, double y) => (x - q.x0) * q.ux + (y - q.y0) * q.uy;
-    double across(double x, double y) =>
-        -(x - q.x0) * q.uy + (y - q.y0) * q.ux;
+    double across(double x, double y) => -(x - q.x0) * q.uy + (y - q.y0) * q.ux;
     final a1 = along(s.x1, s.y1), a2 = along(s.x2, s.y2);
     final c1 = across(s.x1, s.y1), c2 = across(s.x2, s.y2);
     var lo = 0.0, hi = 1.0;
@@ -1031,6 +1241,16 @@ class PlanLabelLayout {
 
   /// Register an occupied axis-aligned box.
   void addBox(LabelBox b) => boxes.add(b);
+
+  final List<LabelBox> _textBoxes = [];
+
+  /// Fix round 4 (R1) — register an occupied box that holds TEXT (a detail
+  /// caption, a bubble letter, an UP/DN mark, a tie figure): an obstacle like
+  /// [addBox], and one a key leader may never cross.
+  void addTextBox(LabelBox b) {
+    boxes.add(b);
+    _textBoxes.add(b);
+  }
 
   /// Register a run's linework (an obstacle for every OTHER edge's label and
   /// for leaders). [id] is the owning edge id (null ⇒ obstacle for all).
@@ -1150,6 +1370,10 @@ class LeaderedLabelPlacement {
   final ({double x, double y})? leaderAnchor;
   final ({double x, double y})? leaderEnd;
   final List<PlacedLabelLine> lines;
+
+  /// Drawing-review D5 — non-null when the tag was KEYED: the numbered
+  /// circle (centre + radius) the renderers draw around [lines]' number.
+  final ({double x, double y, double r})? keyCircle;
   const LeaderedLabelPlacement({
     required this.x,
     required this.y,
@@ -1157,6 +1381,7 @@ class LeaderedLabelPlacement {
     this.leaderAnchor,
     this.leaderEnd,
     this.lines = const [],
+    this.keyCircle,
   });
 }
 
@@ -1250,7 +1475,10 @@ List<String>? composePlanEdgeLabelLines({
 /// section note above): [text] is the one-line form, [splitLines] the optional
 /// two-line form ([composePlanEdgeLabelLines]); [ownRunId] names the run the
 /// label belongs to (its own linework is not an obstacle). Text width is
-/// estimated as chars × size × 0.55 (the Helvetica average). The first
+/// MEASURED in Helvetica, the font every vector sheet prints (fix round 3,
+/// S6 — the old chars × size × 0.55 average under-measured capitals: a 'WC'
+/// tag is 1.67 em, not 1.1, and a key circle placed against the short box
+/// hid its C). The first
 /// beside-the-run slot that clears wins with no leader — the midpoint upper
 /// slot is byte-identical to the original greedy placer. Never returns null:
 /// a size tag is content, never dropped. The placed rectangle is recorded in
@@ -1291,7 +1519,20 @@ LeaderedLabelPlacement placePlanLabel({
   List<({double x, double y})> extraStations = const [],
   bool beyondEnds = true,
   double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
+  bool keyOnly = false,
 }) {
+  // Drawing backlog I-3 (a) — a tag inside a keyed cluster goes straight to
+  // its key circle.
+  if (keyOnly && keys != null) {
+    return _placeKeyTag(
+        layout: layout,
+        keys: keys,
+        text: text,
+        ts: textSize,
+        anchor: anchorPoint ?? (x: (ax + bx) / 2, y: (ay + by) / 2),
+        ownRunId: ownRunId);
+  }
   final dx = bx - ax, dy = by - ay;
   var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
   if (angle > math.pi / 2 || angle <= -math.pi / 2) {
@@ -1303,7 +1544,7 @@ LeaderedLabelPlacement placePlanLabel({
   final eps = 1e-9 * ts; // scale-free tolerance (R6)
   final lh = kPlanLabelLineFactor * ts;
   final runLen = math.sqrt(dx * dx + dy * dy);
-  double widthOf(String s) => s.length * ts * 0.55;
+  double widthOf(String s) => helveticaTextWidth(s, ts);
 
   // Line forms, in preference order. A label much longer than its run reads
   // as detached from it, so the split form goes first there.
@@ -1658,6 +1899,21 @@ LeaderedLabelPlacement placePlanLabel({
       }
     }
   }
+  // Drawing-review D5 — on an issued sheet ([keys]) only a CLEAR slot whose
+  // leader crosses nothing and stays within [kPlanKeyedLeaderMaxFactor] text
+  // heights is used; anything else keys the element.
+  if (keys != null &&
+      (best == null ||
+          bestScore.$1 != 0 ||
+          bestScore.$5 > kPlanKeyedLeaderMaxFactor * ts + eps)) {
+    return _placeKeyTag(
+        layout: layout,
+        keys: keys,
+        text: text,
+        ts: ts,
+        anchor: anchorPoint ?? (x: (ax + bx) / 2, y: (ay + by) / 2),
+        ownRunId: ownRunId);
+  }
   if (best == null) {
     // Degenerate (no station within the cap): first escape row at the midpoint.
     final (cx, cy) = along.first;
@@ -1686,6 +1942,145 @@ class _Block {
   final double cx, cy, v0, v1, halfW;
   const _Block(this.quad, this.padded, this.lines, this.cx, this.cy, this.v0,
       this.v1, this.halfW);
+}
+
+/// Fix round 3 (S5/S6) — the clear gap (in text heights) a key circle keeps
+/// from every placed label, glyph box and run besides its own: a label's
+/// footprint stops at its baseline, so a descender or a tangent circle
+/// read as an overprint on paper.
+const double kPlanKeyCircleClearFactor = 0.2;
+
+/// Drawing-review D5 — the KEY TAG of a plan element: a numbered circle
+/// hugging [anchor] (the first clear slot of 32 directions × growing rings,
+/// a leader beyond the hugging ring of at most [kPlanKeyTagLeaderMaxFactor]
+/// text heights crossing nothing), its [text] registered in [keys]. No clear
+/// slot ⇒ the least-bad one, counted unresolved (the honest stamp).
+LeaderedLabelPlacement _placeKeyTag({
+  required PlanLabelLayout layout,
+  required PlanKeyRegistry keys,
+  required String text,
+  required double ts,
+  required ({double x, double y}) anchor,
+  String? ownRunId,
+}) {
+  final n = '${keys.keyFor(text)}';
+  final tw = helveticaTextWidth(n, ts);
+  final r = math.max(0.75 * ts, tw / 2 + 0.25 * ts);
+  // Fix round 3 (S5/S6, 2026-11-13) — against TEXT (placed labels, glyph /
+  // mark boxes) the collision box is the DRAWN circle plus a clear gap
+  // ([kPlanKeyCircleClearFactor] text heights), not a box 15 % inside it: a
+  // circle tested at 0.85 r sat tangent to (or on) the glyphs of a
+  // neighbouring duct tag / fixture code.
+  final rc = r + kPlanKeyCircleClearFactor * ts;
+  ({double x, double y, double cost, bool lead})? best;
+  const rings = [0.3, 0.8, 1.5, 2.3, 3.2, 4.0, 5.0, kPlanKeyTagLeaderMaxFactor];
+  // Fix round 4 — only when NO slot of the 32-direction rings is clear (a
+  // key between two close parallel pipes), a second pass tries the same
+  // rings at 64 directions and then [kPlanKeyTagLeaderReachFactor] before
+  // the honest stamp; a key that cleared on the first pass is unchanged.
+  for (final (dirs, gaps) in [
+    (32, rings),
+    (64, [...rings, 7.0, 8.0, 10.0, kPlanKeyTagLeaderReachFactor]),
+  ]) {
+    if (best != null && best.cost == 0) break;
+    for (final gap in gaps) {
+      final d = r + gap * ts;
+      final lead = gap > 0.5;
+      for (var k = 0; k < dirs; k++) {
+        final ux = math.sin(k * 2 * math.pi / dirs),
+            uy = math.cos(k * 2 * math.pi / dirs);
+        final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
+        final box =
+            (minX: cx - rc, minY: cy - rc, maxX: cx + rc, maxY: cy + rc);
+        // Linework keeps the long-standing 0.85 r test (a pipe is thin ink).
+        final inkBox = (
+          minX: cx - 0.85 * r,
+          minY: cy - 0.85 * r,
+          maxX: cx + 0.85 * r,
+          maxY: cy + 0.85 * r
+        );
+        var cost = 0.0;
+        if (layout.hitsBox(box)) cost += 1;
+        // Fix round 4 (R3) — the element's OWN run may pass under the circle
+        // but never through its NUMBER (a key on its own pipe printed the pipe
+        // through its digits); any other run keeps the 0.85 r test.
+        final numBox = (
+          minX: cx - tw / 2 - 0.1 * ts,
+          minY: cy - 0.5 * ts,
+          maxX: cx + tw / 2 + 0.1 * ts,
+          maxY: cy + 0.5 * ts
+        );
+        for (final rr in layout._runs) {
+          final own = rr.id != null && rr.id == ownRunId;
+          if (_segHitsBox(rr.seg, own ? numBox : inkBox, 0)) cost += 1;
+        }
+        if (lead) {
+          final ex = cx - ux * r, ey = cy - uy * r;
+          for (final rr in layout._runs) {
+            if (rr.id != null && rr.id == ownRunId) continue;
+            if (_segmentsCross(anchor.x, anchor.y, ex, ey, rr.seg.x1, rr.seg.y1,
+                rr.seg.x2, rr.seg.y2)) {
+              cost += 1;
+            }
+          }
+          final seg = [(anchor.x, anchor.y), (ex, ey)];
+          for (final l in layout._labels) {
+            if (_quadsOverlap(l, seg)) cost += 1;
+          }
+          // Fix round 4 (R1, 2026-11-13) — the leader must also miss every
+          // TEXT registered as a box (a detail bubble + its caption, an UP/DN
+          // mark, a tie figure, a mark text), not only the placed tags: a key
+          // leader used to run straight through 'DETAIL A - LIHAT M-509'.
+          // A text box stops at its baseline: the leader keeps 0.2 text
+          // heights from it (descenders, the glyph's own side bearing).
+          final lb = _quadBounds(seg);
+          final m = 0.2 * ts;
+          for (final t in layout._textBoxes) {
+            final o = (
+              minX: t.minX - m,
+              minY: t.minY - m,
+              maxX: t.maxX + m,
+              maxY: t.maxY + m
+            );
+            if (_boxesOverlap(o, lb) && _quadsOverlap(_boxQuad(o), seg)) {
+              cost += 1;
+            }
+          }
+        }
+        // Fix round 5 — the 64-direction / longer-reach pass only takes a
+        // CLEAR slot; an unresolved key keeps the least-bad slot of the
+        // first pass (counted: the sheet stamps or the cluster becomes a
+        // detail), never a stretched leader.
+        if (best == null || (cost < best.cost && (dirs == 32 || cost == 0))) {
+          best = (x: cx, y: cy, cost: cost, lead: lead);
+        }
+        if (cost == 0) break;
+      }
+      if (best != null && best.cost == 0) break;
+    }
+  }
+  final b = best!;
+  if (b.cost > 0) layout._unresolved++;
+  layout._labels.add(
+      _boxQuad((minX: b.x - r, minY: b.y - r, maxX: b.x + r, maxY: b.y + r)));
+  ({double x, double y})? la, le;
+  if (b.lead) {
+    final dx = b.x - anchor.x, dy = b.y - anchor.y;
+    final dl = math.sqrt(dx * dx + dy * dy);
+    la = anchor;
+    le = (x: b.x - dx / dl * r, y: b.y - dy / dl * r);
+    layout.addRun(null, la.x, la.y, le.x, le.y);
+  }
+  final line = (text: n, x: b.x - tw / 2, y: b.y - 0.36 * ts);
+  return LeaderedLabelPlacement(
+    x: line.x,
+    y: line.y,
+    angleDeg: 0,
+    leaderAnchor: la,
+    leaderEnd: le,
+    lines: [line],
+    keyCircle: (x: b.x, y: b.y, r: r),
+  );
 }
 
 /// Legacy entry point (N3): place [text] for the edge (ax,ay)→(bx,by) against

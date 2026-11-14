@@ -14,11 +14,11 @@
 /// app's `FeedStrategy` enum.
 library;
 
-import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
+import 'package:mechx_engine/geometry/building.dart' show BuildingLevels, Floor;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
     show signedElevationText;
-import 'package:mechx_engine/units.dart' show Power;
+import 'package:mechx_engine/units.dart' show FlowRate, Head, Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
 /// the single-line pipe tag (e.g. `100-CW-PPR-BOOSTER`).
@@ -422,14 +422,86 @@ String elementTagForEdge(
 /// the stack) — basements `B<n>` (B1 directly below ground), the ground floor
 /// `GF`, upper floors `L<n>` (L1 directly above ground). Null [building] ⇒
 /// the legacy 1-based `F<floorIndex + 1>`.
+///
+/// Backlog C-1 (2026-11-13) — the token is derived from the floor's OWN
+/// displayed name first ([floorNameLevelCode]: 'Lantai 30' ⇒ `L30`,
+/// 'Basement 2' ⇒ `B2`, 'Dasar' ⇒ `GF`, 'Atap' ⇒ `RF`), so a run on the
+/// sheet titled 'Lantai 30' reads `SP-L30`, never the index-based `SP-L29`.
+/// A name no rule recognises — or a building whose name-derived codes would
+/// not be unique — keeps the index rule above for EVERY floor (one
+/// convention per building, never a mix that could print one code twice).
 String floorLocatorToken(int floorIndex, BuildingLevels? building) {
   if (building == null) return 'F${floorIndex + 1}';
+  final named = _namedLevelCodes(building);
+  if (named != null && floorIndex >= 0 && floorIndex < named.length) {
+    final c = named[floorIndex];
+    if (c != null) return c;
+  }
+  return _indexLevelCode(floorIndex, building);
+}
+
+String _indexLevelCode(int floorIndex, BuildingLevels building) {
   final n = building.levelCount;
   final g = n == 0 ? 0 : building.groundIndex.clamp(0, n - 1);
   final rel = floorIndex - g;
   if (rel < 0) return 'B${-rel}';
   if (rel == 0) return 'GF';
   return 'L$rel';
+}
+
+final Expando<(List<Floor>, int, int, List<String?>)> _namedCodeCache =
+    Expando('namedLevelCodes');
+
+/// Per-floor name-derived codes for [building], or null when they would be
+/// ambiguous (two floors deriving the same code, or a derived code equal to
+/// another floor's index fallback). Unrecognised names hold null (index rule).
+List<String?>? _namedLevelCodes(BuildingLevels building) {
+  final floors = building.floors;
+  final cached = _namedCodeCache[building];
+  if (cached != null &&
+      identical(cached.$1, floors) &&
+      cached.$2 == floors.length &&
+      cached.$3 == building.groundIndex) {
+    return cached.$4.isEmpty ? null : cached.$4;
+  }
+  final codes = <String?>[for (final f in floors) floorNameLevelCode(f.name)];
+  final resolved = <String>[
+    for (var i = 0; i < codes.length; i++)
+      codes[i] ?? _indexLevelCode(i, building),
+  ];
+  final unique = resolved.toSet().length == resolved.length;
+  final hit = unique && codes.any((c) => c != null);
+  _namedCodeCache[building] =
+      (floors, floors.length, building.groundIndex, hit ? codes : const []);
+  return hit ? codes : null;
+}
+
+final RegExp _lantaiRe = RegExp(r'^lantai\s*(\d+)$', caseSensitive: false);
+final RegExp _basementRe =
+    RegExp(r'^(?:basement|b)\s*(\d+)$', caseSensitive: false);
+const Set<String> _groundNames = {
+  'ground',
+  'ground floor',
+  'gf',
+  'dasar',
+  'lantai dasar',
+};
+const Set<String> _roofNames = {'atap', 'roof', 'lantai atap'};
+
+/// Backlog C-1 — the level code a floor's displayed [name] states, or null
+/// when the name is not one the drawing convention recognises: 'Lantai N'
+/// (any case, optional space) ⇒ `LN`; 'Basement N' / 'B N' ⇒ `BN`;
+/// 'Ground' / 'GF' / 'Dasar' ⇒ `GF`; 'Atap' / 'Roof' ⇒ `RF`. Pure.
+String? floorNameLevelCode(String name) {
+  final s = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+  final l = _lantaiRe.firstMatch(s);
+  if (l != null) return 'L${int.parse(l.group(1)!)}';
+  final b = _basementRe.firstMatch(s);
+  if (b != null) return 'B${int.parse(b.group(1)!)}';
+  final lower = s.toLowerCase();
+  if (_groundNames.contains(lower)) return 'GF';
+  if (_roofNames.contains(lower)) return 'RF';
+  return null;
 }
 
 /// Per-edge stable element tags for the WHOLE [net] (N13), keyed by edge id: the
@@ -785,7 +857,8 @@ String motorKwText(Power motor) {
 /// Pure + Flutter-free (engine types only) so it is unit-testable in isolation
 /// and shared by the schematic painter AND the riser single-line EXPORT builder
 /// (`mechanical_sld_drawing.dart` `equipmentDetailByNodeId` — B1 parity).
-String? equipmentDetail(NetNode node, {Power? motor}) {
+String? equipmentDetail(NetNode node,
+    {Power? motor, FlowRate? flow, Head? head}) {
   final c = node.component;
   if (c == null) return null;
   switch (c) {
@@ -808,6 +881,15 @@ String? equipmentDetail(NetNode node, {Power? motor}) {
     case NodeComponent.supplyFan:
     case NodeComponent.exhaustFan:
       if (motor == null || motor.watts <= 0) return null;
+      // Fix round 3 (O2, 2026-11-13) — a PUMP prints its duty point beside
+      // the motor (`Q 10.8 L/s · H 122.1 m · 18.5 kW`), the SAME solved duty
+      // (and the same 1 dp / 2 dp below 1 rounding) the equipment schedule
+      // prints under its tag. Absent flow / head ⇒ the motor alone.
+      if (flow != null && head != null && flow.cubicMetersPerSecond > 0) {
+        String f(double v) => v.toStringAsFixed(v.abs() < 1 ? 2 : 1);
+        return 'Q ${f(flow.inLitersPerSecond)} L/s · '
+            'H ${f(head.meters)} m · ${motorKwText(motor)}';
+      }
       return motorKwText(motor);
     default:
       return null;

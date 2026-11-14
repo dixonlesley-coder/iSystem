@@ -51,8 +51,10 @@ import 'model.dart'
         ElectricalSystemInfo;
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
-        ElectricalWarning, WarningSeverity;
+        ElectricalWarning, SelectivityRefusal, WarningSeverity,
+        kSelectivityGrowthMaxRungs;
 import 'results.dart' show kStarDeltaInternalWiringM;
+import 'sources.dart' show kAlternatorSubtransientXdPu;
 import 'supply_design.dart'
     show
         SupplyDesign,
@@ -314,10 +316,12 @@ const String faultStudyMotorVerifyItem =
 /// [faultStudyVerifyItems] this pass (that would change every existing study's
 /// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
 /// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
-/// Round 39 — representative alternator sub-transient reactance Xd'' (p.u.)
-/// for the generator-plant fault estimate. // VERIFY — secondarySource
-/// (typical LV alternator 0.10–0.15 p.u.; the alternator datasheet governs).
-const double kAlternatorXdPu = 0.12;
+/// Round 39 — representative alternator sub-transient reactance X''d (p.u.)
+/// for the generator-plant fault estimate. Backlog B-5: an alias of the ONE
+/// pair in `sources.dart` ([kAlternatorSubtransientXdPu], the fault-level
+/// reactance; the motor-start dip reads the transient X'd). // VERIFY —
+/// secondarySource (the alternator datasheet governs).
+const double kAlternatorXdPu = kAlternatorSubtransientXdPu;
 
 /// Round 39 — an inverter's fault contribution as a multiple of its rated
 /// current (current-limited, ~1.2–1.5 × In). // VERIFY — secondarySource
@@ -1519,6 +1523,29 @@ FaultStudyResult faultStudy(
     // the ladder does not have, so that corner is told the truth instead of
     // being sent shopping for cable that changes nothing.
     final capped = cappedFeeders.contains(feederCircuitId);
+    // Bounded B-1 — an AUTO-sized feeder whose selectivity growth was
+    // refused: copper is not the lever any more, a selective device is.
+    final refused = sys.feederSelectivityRefused[feederCircuitId];
+    final upstreamIncomerA =
+        sys.panels[parentId]?.incomer.breaker.ratingA.amperes;
+    final String refusedWhere;
+    switch (refused) {
+      case SelectivityRefusal.upstreamIncomer:
+        refusedWhere = 'under the upstream '
+            '${upstreamIncomerA == null ? '' : '${_fmt(upstreamIncomerA)} A '}'
+            'incomer';
+      case SelectivityRefusal.disconnection:
+        refusedWhere = 'with automatic disconnection held within '
+            '$kSelectivityGrowthMaxRungs cable sizes';
+      case SelectivityRefusal.cableSteps:
+      case null:
+        refusedWhere = 'within $kSelectivityGrowthMaxRungs cable sizes of '
+            "the feeder's own ${_fmt(feeder.cable.csaMm2)} mm2 cable";
+    }
+    final refusedNote = 'the ${_fmt(selectivityRatio)}x ratio cannot be '
+        'reached $refusedWhere - use a selective (time-delayed / category B, '
+        "electronic-trip) device or check the manufacturer's discrimination "
+        'tables.';
     final targetA = selectivityRatio * downstreamIn;
     final ladderTopA = profile.standardBreakerRatingsA.isEmpty
         ? double.infinity
@@ -1550,7 +1577,10 @@ FaultStudyResult faultStudy(
       warnings.add(ElectricalWarning(
         code: 'non-selective',
         severity: WarningSeverity.warning,
-        message: capped
+        message: refused != null && !(capped && targetA > ladderTopA)
+            ? '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
+                '${child.name} incomer (${_fmt(downstreamIn)} A): $refusedNote'
+            : capped
             ? '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
                 '${child.name} incomer (${_fmt(downstreamIn)} A): $capNote'
             : '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
@@ -1568,7 +1598,8 @@ FaultStudyResult faultStudy(
         code: 'selectivity-partial',
         severity: WarningSeverity.info,
         message: '${feeder.name} (${_fmt(upstreamIn)} A) over ${child.name} '
-            'incomer (${_fmt(downstreamIn)} A): partial selectivity - $capNote',
+            'incomer (${_fmt(downstreamIn)} A): partial selectivity - '
+            '${refused != null && !(capped && targetA > ladderTopA) ? refusedNote : capNote}',
         panelId: parentId,
         circuitId: feederCircuitId,
       ));

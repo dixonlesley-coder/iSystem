@@ -478,6 +478,7 @@ enum StringKey {
   electricalToggleEssential,
   electricalToggleCritical,
   electricalToggleSubmeter,
+  electricalToggleServiceEntrance,
 
   // Electrical workspace — Service & Earthing field.
   electricalFieldEarthingSystem,
@@ -727,6 +728,7 @@ enum StringKey {
   issueUnconnectedOrphanMessage,
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
+  issueUnfedPanelLegacyMessage, // {panel} = the unfed panel's name
 
   // F5 — a plumbing fixture placed with no fixture type: it silently sizes on
   // the representative placeholder load (2.0 UBAP supply / 2.0 DFU drainage).
@@ -764,6 +766,11 @@ enum StringKey {
   // Round 32 (binding-1) — SNI minimum met, below the comfort target (info).
   issueDownfeedBelowComfortTitle,
   issueDownfeedBelowComfortMessage, // {floor} {residual} {sni} {target} {head}
+  // Backlog D-7 — the same two findings when drawn booster(s) serve only
+  // some floors: the recommendation names the gravity floors it concerns.
+  issueDownfeedBelowTargetGravityMessage, // + {floors} {boosters}
+  issueDownfeedBelowComfortGravityMessage, // + {floors} {boosters}
+  issueFloorRange, // {from} {to}
   issueUpfeedBelowComfortTitle,
   issueUpfeedBelowComfortMessage, // {floor} {residual} {sni} {target}
   complianceDetailPressureSniMet,
@@ -810,6 +817,21 @@ enum StringKey {
   issueCoolingInternalOnlyMessage,
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
+  issueStandpipePrvHoseValvesTitle,
+  issueStandpipePrvHoseValvesMessage,
+  issueRoomCoolingUndersizedTitle,
+  issueRoomCoolingUndersizedMessage,
+  issueFireTankUndersizedTitle,
+  issueFireTankUndersizedMessage,
+  issueFireTankUnsetTitle,
+  issueFireTankUnsetMessage,
+  issueFireBreakTankUndersizedTitle,
+  issueFireBreakTankUndersizedMessage, // {tank} {cap} {need} {flow} {min} {zone}
+  issueFireBreakTankUnsetTitle,
+  issueFireBreakTankUnsetMessage, // {tank} {need} {flow} {min} {zone}
+  issueFireZonePrefix, // {zone} {floors}
+  issueRoofTankFillUndrawnTitle,
+  issueRoofTankFillUndrawnMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
   issueFireGravityHeadMessage, // {avail} {need}
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
@@ -1143,6 +1165,24 @@ enum StringKey {
   buildingInputCaptionOccupancy,
   buildingInputCaptionRainfall,
   buildingInputCaptionRunoff,
+  buildingInputMainsHead,
+  buildingInputCaptionMainsHead,
+  buildingInputPopulation,
+  buildingInputDemandPerPerson,
+  buildingInputCaptionDailyDemand, // {m3} {lps}
+  buildingInputCaptionDailyDemandUnset,
+  issueDailyDemandUnsetTitle,
+  issueDailyDemandUnsetMessage,
+  reserveHeadlineLabel,
+  reserveHeadlineValue, // {days} {stored} {daily}
+  reserveExcluded, // {n}
+  buildingInputGroundStorageDays,
+  buildingInputRoofStorageFraction,
+  buildingInputCaptionStorageTargets,
+  issueTankCapacityUnsetTitle,
+  issueTankCapacityUnsetMessage, // {tank}
+  issueMainsPressureTitle,
+  issueMainsPressureMessage,
   buildingInputCaptionSlope,
   buildingSlopeDirectionHint,
   buildingInputCaptionHotWaterFlow,
@@ -1866,6 +1906,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalToggleEssential: 'Essential (genset-backed)',
   StringKey.electricalToggleCritical: 'Critical (UPS-backed)',
   StringKey.electricalToggleSubmeter: 'Tenant submeter',
+  StringKey.electricalToggleServiceEntrance:
+      'Service entrance (own utility meter)',
 
   // Electrical workspace — Service & Earthing field.
   StringKey.electricalFieldEarthingSystem: 'Earthing system',
@@ -2034,7 +2076,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueOrphanTitle: 'Element references a missing floor or sheet',
   StringKey.issueDuctVelocityTitle: 'Duct velocity out of band',
   StringKey.issueTerminalVelocityTitle: 'Terminal face velocity out of band',
-  StringKey.issueAirDuctUnsizedTitle: 'Air duct not manually sized',
+  StringKey.issueAirDuctUnsizedTitle: 'Air duct has no size',
   StringKey.issueAirTerminalUnsizedTitle: 'Air terminal not manually sized',
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
   StringKey.issueStormOverCapacityTitle: 'Downpipe over capacity',
@@ -2238,10 +2280,11 @@ const Map<StringKey, String> _en = {
   StringKey.issueSprinklerHeadTitle:
       'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
-      'Combined fire pump rated on the sprinkler point',
+      'Combined fire pump: sprinkler sets the head, standpipe the flow',
   StringKey.issueFireGravityHeadTitle:
       'Gravity fire supply head insufficient',
-  StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
+  StringKey.issueFireOverPressureTitle:
+      'Fire system above 350 psi: split into pressure zones',
   StringKey.issueStandpipeOverPressureTitle:
       'Standpipe exceeds the 350 psi system maximum',
   StringKey.issueStandpipeOutletOverPressureTitle:
@@ -2263,8 +2306,14 @@ const Map<StringKey, String> _en = {
       'the network, or remove it.',
   StringKey.issueUnfedPanelTitle: 'Panel not connected to a supply',
   StringKey.issueUnfedPanelMessage:
-      '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
-      'to nothing. Feed it from an upstream panel.',
+      '"{panel}" is neither a service entrance nor fed by a feeder — it is '
+      'wired to nothing, and it is marked NOT a service entrance, so its load '
+      'is on no service (not in the supply study). Feed it from an upstream '
+      'panel, or mark it "Service entrance (own utility meter)".',
+  StringKey.issueUnfedPanelLegacyMessage:
+      '"{panel}" is neither the origin board nor fed by a feeder. The supply '
+      'study still counts it as its own service entrance. Feed it from an '
+      'upstream panel, or mark it "Service entrance (own utility meter)".',
   StringKey.issueFixtureUntypedTitle: 'Fixture type not set',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Fixture type not set — sizing on the representative 2.0 UBAP default; '
@@ -2324,6 +2373,11 @@ const Map<StringKey, String> _en = {
       'Roof tank meets the SNI minimum, below the comfort target',
   StringKey.issueDownfeedBelowComfortMessage:
       'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. A booster of about +{head} m is recommended.',
+  StringKey.issueDownfeedBelowTargetGravityMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the SNI 8153 minimum of {sni} kPa (target {target} kPa). {floors} are fed by gravity and are NOT served by the drawn booster ({boosters}): raise the tank or give these floors their own booster of about +{head} m.',
+  StringKey.issueDownfeedBelowComfortGravityMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. {floors} are fed by gravity and are NOT served by the drawn booster ({boosters}): a separate booster of about +{head} m for these floors is recommended.',
+  StringKey.issueFloorRange: '{from} to {to}',
   StringKey.issueUpfeedBelowComfortTitle:
       'Pump supply meets the SNI minimum, below the comfort target',
   StringKey.issueUpfeedBelowComfortMessage:
@@ -2364,8 +2418,8 @@ const Map<StringKey, String> _en = {
       'A drawn element belongs to a sheet that is no longer loaded — '
           're-import that sheet or delete the orphaned element.',
   StringKey.issueAirDuctUnsizedMessage:
-      'This duct carries air but has no chosen size — still '
-          'relying on auto-sizing.',
+      'This duct carries air but has no size — the sizer could not size it '
+          'and none is chosen. Pick a duct size.',
   StringKey.issueAirTerminalUnsizedMessage:
       'This terminal carries air but has no chosen face size.',
   StringKey.issueDuctOverCapacityMessage:
@@ -2431,14 +2485,45 @@ const Map<StringKey, String> _en = {
       'scheduled fire pump delivers ({pump} L/s) - rate the fire pump on the '
       'sprinkler demand (plus hose allowance) or add a sprinkler pump.',
   StringKey.issueSprinklerHeadMessage:
-      'The sprinkler system needs at least {need} m at the pump (static lift '
-      'to the top-floor ceiling + branch-base pressure, before riser and main '
-      'friction) but the fire pump head is {pump} m.',
+      'The sprinkler system needs {need} m at the pump (its sprinkler point: '
+      'static lift to the top head + remote-head pressure + the sized index '
+      'friction, at least the 15 m allowance basis) but the fire pump head is '
+      '{pump} m.',
+  StringKey.issueStandpipePrvHoseValvesTitle:
+      'Pressure-regulating hose valves designated',
+  StringKey.issueStandpipePrvHoseValvesMessage:
+      '{floors} hose valves: {max}..{min} kPa static at pump churn, above the {limit} kPa (175 psi) hose-connection limit (NFPA 14 7.2.3.2). Each is designated a pressure-regulating hose valve set to {set} kPa residual (fire results, BOM, riser tag). (// VERIFY vs SNI 03-1745.)',
+  StringKey.issueRoomCoolingUndersizedTitle:
+      'Room AC capacity below its cooling load',
+  StringKey.issueRoomCoolingUndersizedMessage:
+      '{room} needs {load} BTU/h but its {count} AC unit(s) give {installed} BTU/h (largest standard unit {top} BTU/h). Install at least {needed} x {topPk} PK units or larger units.',
+  StringKey.issueFireTankUndersizedTitle:
+      'Fire tank below the fire-water reserve',
+  StringKey.issueFireTankUndersizedMessage:
+      'Fire tank {tank} holds {cap} L, below the {need} L fire-water reserve ({flow} L/s for {min} min). Enlarge the tank or add storage.',
+  StringKey.issueFireTankUnsetTitle:
+      'Fire tank capacity not set',
+  StringKey.issueFireTankUnsetMessage:
+      'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
+  StringKey.issueFireBreakTankUndersizedTitle:
+      'Fire break tank below its requirement',
+  StringKey.issueFireBreakTankUndersizedMessage:
+      'Break tank {tank} (fire zone {zone}) holds {cap} L, below the {need} L the relay pump needs ({flow} L/s for {min} min, refilled automatically at least at {flow} L/s). Enlarge the tank. (// VERIFY vs SNI 03-1745.)',
+  StringKey.issueFireBreakTankUnsetTitle:
+      'Fire break tank capacity not set',
+  StringKey.issueFireBreakTankUnsetMessage:
+      'Break tank {tank} (fire zone {zone}) has no capacity entered. It must hold {need} L ({flow} L/s for {min} min), refilled automatically at least at {flow} L/s. (// VERIFY vs SNI 03-1745.)',
+  StringKey.issueFireZonePrefix: 'Fire zone {zone} ({floors}): ',
+  StringKey.issueRoofTankFillUndrawnTitle: 'Roof tank fill not drawn',
+  StringKey.issueRoofTankFillUndrawnMessage:
+      'Roof tank {tank} has no drawn pipe filling it (no transfer / fill line flows into it), so no fill pipework or transfer duty is sized for it. Draw its fill from the transfer main or the mains.',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
-      'reaches {churn} kPa, above the {limit} kPa (175 psi) rating of standard '
-      'fire components. Upsize the index pipe to cut friction or zone the '
-      'system. (// VERIFY vs SNI 03-3989 / 03-1745.)',
+      'reaches {churn} kPa, above the {limit} kPa (350 psi) maximum of a '
+      'single zone (NFPA 14 7.2.1.1): no pipe class (PN25 is the highest) '
+      'permits one zone. Split the standpipe into vertical pressure zones - a '
+      'separate zone pump or an express riser. (// VERIFY vs SNI 03-3989 / '
+      '03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % of it pipe friction',
   StringKey.issueStandpipeOutletOverPressureMessage:
       '{floors} hose valves: {max}..{min} kPa static at pump churn, above '
@@ -2456,10 +2541,10 @@ const Map<StringKey, String> _en = {
       'the standpipe into pressure zones. (// VERIFY vs SNI 03-1745.)',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'On this combined sprinkler + hydrant system the sprinkler head '
-      '({sprHead} m) exceeds the standpipe head, so the pump is rated at the '
-      'sprinkler flow ({sprFlow} L/s). The hose flow {hoseFlow} L/s at '
-      '{hoseHead} m is not a rated point - select a pump whose curve covers '
-      'both conditions.',
+      '({sprHead} m) exceeds the standpipe head ({hoseHead} m): the pump is '
+      'rated at the standpipe flow ({hoseFlow} L/s) and the sprinkler head '
+      '({sprHead} m). The sprinkler system ({sprFlow} L/s) sets the pump HEAD, '
+      'the standpipe sets the FLOW; both points are covered.',
   StringKey.issueFireGravityHeadMessage:
       'This fire system is fed by gravity from a roof tank (no fire pump '
       'drawn). The tank leaves only {avail} m of head at the topmost terminal '
@@ -2763,6 +2848,31 @@ const Map<StringKey, String> _en = {
       'Drives rainwater outlet, gutter and storm-stack sizing',
   StringKey.buildingInputCaptionRunoff:
       'Share of rainfall that reaches the outlet (rational method)',
+  StringKey.buildingInputMainsHead: 'Mains pressure at meter (m)',
+  StringKey.buildingInputCaptionMainsHead:
+      'Available PDAM head at the water meter. Judged at each meter feeding a ground tank (lift + friction + float valve 5 m); no size depends on it. Default 10 m - // VERIFY with the utility.',
+  StringKey.buildingInputPopulation: 'Population (persons)',
+  StringKey.buildingInputDemandPerPerson: 'Daily demand per person (L)',
+  StringKey.buildingInputCaptionDailyDemand:
+      'Daily water demand {m3} m3/day (average draw {lps} L/s). Per-person default by occupancy - // VERIFY vs SNI 03-7065.',
+  StringKey.buildingInputCaptionDailyDemandUnset:
+      'Enter the population to compute the daily water demand (not derived from the drawing). Per-person default by occupancy - // VERIFY vs SNI 03-7065.',
+  StringKey.issueDailyDemandUnsetTitle: 'Population not set: no water-reserve figure',
+  StringKey.issueDailyDemandUnsetMessage:
+      'No population is entered on the Building page, so there is no daily water demand and no water-reserve (days) figure. Enter the population (persons).',
+  StringKey.buildingInputGroundStorageDays: 'Ground storage (days of demand)',
+  StringKey.buildingInputRoofStorageFraction: 'Roof tank (fraction of demand)',
+  StringKey.buildingInputCaptionStorageTargets:
+      'A tank with no capacity entered is auto-sized: its share of the daily demand x the target, rounded up to a standard size. An entered capacity always wins. // VERIFY.',
+  StringKey.issueTankCapacityUnsetTitle: 'Tank capacity unknown',
+  StringKey.issueTankCapacityUnsetMessage:
+      'Tank {tank} has no capacity entered and none can be auto-sized: the population is not set, so there is no daily demand. Its fill pipe stays on the peak-demand basis. Enter the population (Building page) or the tank capacity.',
+  StringKey.reserveHeadlineLabel: 'Water reserve',
+  StringKey.reserveHeadlineValue: '{days} ({stored} m3 stored / {daily} m3 per day)',
+  StringKey.reserveExcluded: 'Reserve excludes {n} tank(s) with no capacity set',
+  StringKey.issueMainsPressureTitle: 'Mains pressure too low to fill the tank',
+  StringKey.issueMainsPressureMessage:
+      'Water meter {meter} has {avail} m of mains head but filling {tank} at {flow} L/s needs {req} m (lift {lift} m + feed friction {fric} m + inlet residual {res} m). Ask the utility for the pressure, enlarge the feed, or add a booster / break tank.',
   StringKey.buildingInputCaptionSlope:
       'Drives gravity sizing and the self-cleansing check',
   StringKey.buildingSlopeDirectionHint:
@@ -3528,6 +3638,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalToggleEssential: 'Esensial (didukung genset)',
   StringKey.electricalToggleCritical: 'Kritis (didukung UPS)',
   StringKey.electricalToggleSubmeter: 'Submeter penyewa',
+  StringKey.electricalToggleServiceEntrance:
+      'Sambungan layanan (meter PLN sendiri)',
 
   // Electrical workspace — Service & Earthing field.
   StringKey.electricalFieldEarthingSystem: 'Sistem pembumian',
@@ -3694,7 +3806,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueOrphanTitle: 'Elemen merujuk lantai atau lembar yang hilang',
   StringKey.issueDuctVelocityTitle: 'Kecepatan saluran di luar batas',
   StringKey.issueTerminalVelocityTitle: 'Kecepatan muka terminal di luar batas',
-  StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum diukur manual',
+  StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum berukuran',
   StringKey.issueAirTerminalUnsizedTitle: 'Terminal udara belum diukur manual',
   StringKey.issueDuctOverCapacityTitle: 'Saluran melebihi kapasitas',
   StringKey.issueStormOverCapacityTitle: 'Pipa tegak air hujan melebihi kapasitas',
@@ -3915,11 +4027,11 @@ const Map<StringKey, String> _id = {
   StringKey.issueSprinklerHeadTitle:
       'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
-      'Pompa kebakaran gabungan diberi rating pada titik sprinkler',
+      'Pompa kebakaran gabungan: sprinkler menentukan head, standpipe debit',
   StringKey.issueFireGravityHeadTitle:
       'Head suplai kebakaran gravitasi tidak cukup',
   StringKey.issueFireOverPressureTitle:
-      'Tekanan churn pompa kebakaran melampaui rating komponen',
+      'Sistem kebakaran di atas 350 psi: bagi menjadi zona tekanan',
   StringKey.issueStandpipeOverPressureTitle:
       'Pipa tegak melampaui tekanan maksimum sistem 350 psi',
   StringKey.issueStandpipeOutletOverPressureTitle:
@@ -3942,8 +4054,15 @@ const Map<StringKey, String> _id = {
       'jaringan, atau hapus.',
   StringKey.issueUnfedPanelTitle: 'Panel tidak terhubung ke suplai',
   StringKey.issueUnfedPanelMessage:
-      '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
-      'tersambung ke apa pun. Suplai dari panel di hulunya.',
+      '"{panel}" bukan sambungan layanan maupun disuplai oleh feeder — tidak '
+      'tersambung ke apa pun dan ditandai BUKAN sambungan layanan, sehingga '
+      'bebannya tidak masuk studi suplai. Suplai dari panel di hulunya, atau '
+      'tandai "Sambungan layanan (meter PLN sendiri)".',
+  StringKey.issueUnfedPanelLegacyMessage:
+      '"{panel}" bukan panel asal maupun disuplai oleh feeder. Studi suplai '
+      'tetap menghitungnya sebagai sambungan layanan tersendiri. Suplai dari '
+      'panel di hulunya, atau tandai "Sambungan layanan (meter PLN '
+      'sendiri)".',
   StringKey.issueFixtureUntypedTitle: 'Jenis fikstur belum ditetapkan',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '
@@ -4005,6 +4124,11 @@ const Map<StringKey, String> _id = {
       'Tangki atap memenuhi minimum SNI, di bawah target kenyamanan',
   StringKey.issueDownfeedBelowComfortMessage:
       'Fikstur terburuk di "{floor}" menerima {residual} kPa dari tangki atap: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. Disarankan booster sekitar +{head} m.',
+  StringKey.issueDownfeedBelowTargetGravityMessage:
+      'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah minimum SNI 8153 sebesar {sni} kPa (target {target} kPa). {floors} dilayani secara gravitasi dan TIDAK dilayani oleh booster yang digambar ({boosters}): tinggikan tangki atau beri lantai-lantai ini booster tersendiri sekitar +{head} m.',
+  StringKey.issueDownfeedBelowComfortGravityMessage:
+      'Fikstur terburuk di "{floor}" menerima {residual} kPa dari tangki atap: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. {floors} dilayani secara gravitasi dan TIDAK dilayani oleh booster yang digambar ({boosters}): disarankan booster terpisah sekitar +{head} m untuk lantai-lantai ini.',
+  StringKey.issueFloorRange: '{from} s.d. {to}',
   StringKey.issueUpfeedBelowComfortTitle:
       'Suplai pompa memenuhi minimum SNI, di bawah target kenyamanan',
   StringKey.issueUpfeedBelowComfortMessage:
@@ -4045,8 +4169,9 @@ const Map<StringKey, String> _id = {
       'Sebuah elemen tergambar termasuk dalam lembar yang tidak lagi dimuat — '
           'impor ulang lembar itu atau hapus elemen yatim tersebut.',
   StringKey.issueAirDuctUnsizedMessage:
-      'Saluran ini mengalirkan udara tetapi belum memiliki ukuran terpilih — '
-          'masih mengandalkan pengukuran otomatis.',
+      'Saluran ini mengalirkan udara tetapi belum memiliki ukuran — '
+          'pengukuran otomatis tidak menghasilkan ukuran dan belum ada yang '
+          'dipilih. Pilih ukuran saluran.',
   StringKey.issueAirTerminalUnsizedMessage:
       'Terminal ini mengalirkan udara tetapi belum memiliki ukuran muka '
           'terpilih.',
@@ -4115,15 +4240,45 @@ const Map<StringKey, String> _id = {
       'kebakaran pada kebutuhan sprinkler (plus tambahan selang) atau tambah '
       'pompa sprinkler.',
   StringKey.issueSprinklerHeadMessage:
-      'Sistem sprinkler membutuhkan sedikitnya {need} m di pompa (angkat statis '
-      'ke plafon lantai teratas + tekanan pangkal cabang, sebelum gesekan riser '
-      'dan pipa utama) tetapi head pompa kebakaran {pump} m.',
+      'Sistem sprinkler membutuhkan {need} m di pompa (titik sprinkler-nya: '
+      'angkat statis ke kepala teratas + tekanan kepala terjauh + gesekan '
+      'indeks terukur, minimal basis tambahan 15 m) tetapi head pompa '
+      'kebakaran {pump} m.',
+  StringKey.issueStandpipePrvHoseValvesTitle:
+      'Katup selang pengatur tekanan ditetapkan',
+  StringKey.issueStandpipePrvHoseValvesMessage:
+      'Katup selang {floors}: {max}..{min} kPa statis pada churn pompa, di atas batas sambungan selang {limit} kPa (175 psi) (NFPA 14 7.2.3.2). Masing-masing ditetapkan sebagai katup selang pengatur tekanan disetel ke residual {set} kPa (hasil kebakaran, BOM, tag riser). (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueRoomCoolingUndersizedTitle:
+      'Kapasitas AC ruang di bawah beban pendinginannya',
+  StringKey.issueRoomCoolingUndersizedMessage:
+      '{room} membutuhkan {load} BTU/h tetapi {count} unit AC-nya memberi {installed} BTU/h (unit standar terbesar {top} BTU/h). Pasang minimal {needed} x unit {topPk} PK atau unit yang lebih besar.',
+  StringKey.issueFireTankUndersizedTitle:
+      'Tangki kebakaran di bawah cadangan air kebakaran',
+  StringKey.issueFireTankUndersizedMessage:
+      'Tangki kebakaran {tank} berisi {cap} L, di bawah cadangan air kebakaran {need} L ({flow} L/s selama {min} menit). Perbesar tangki atau tambah penyimpanan.',
+  StringKey.issueFireTankUnsetTitle:
+      'Kapasitas tangki kebakaran belum diisi',
+  StringKey.issueFireTankUnsetMessage:
+      'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
+  StringKey.issueFireBreakTankUndersizedTitle:
+      'Tangki antara kebakaran di bawah kebutuhannya',
+  StringKey.issueFireBreakTankUndersizedMessage:
+      'Tangki antara {tank} (zona kebakaran {zone}) berisi {cap} L, di bawah {need} L yang dibutuhkan pompa relai ({flow} L/s selama {min} menit, diisi ulang otomatis minimal {flow} L/s). Perbesar tangki. (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueFireBreakTankUnsetTitle:
+      'Kapasitas tangki antara kebakaran belum diisi',
+  StringKey.issueFireBreakTankUnsetMessage:
+      'Tangki antara {tank} (zona kebakaran {zone}) belum diisi kapasitasnya. Tangki harus menampung {need} L ({flow} L/s selama {min} menit), diisi ulang otomatis minimal {flow} L/s. (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueFireZonePrefix: 'Zona kebakaran {zone} ({floors}): ',
+  StringKey.issueRoofTankFillUndrawnTitle: 'Pengisian tangki atap belum digambar',
+  StringKey.issueRoofTankFillUndrawnMessage:
+      'Tangki atap {tank} tidak memiliki pipa pengisi yang digambar (tidak ada pipa transfer / pengisi yang mengalir ke dalamnya), sehingga tidak ada pipa pengisi atau tugas pompa transfer yang diukur untuknya. Gambar pengisiannya dari pipa transfer atau PDAM.',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
-      'rating) mencapai {churn} kPa, di atas rating {limit} kPa (175 psi) '
-      'komponen kebakaran standar. Perbesar pipa indeks untuk mengurangi '
-      'gesekan atau bagi sistem menjadi zona. (// VERIFY terhadap SNI 03-3989 '
-      '/ 03-1745.)',
+      'rating) mencapai {churn} kPa, di atas maksimum satu zona {limit} kPa '
+      '(350 psi) (NFPA 14 7.2.1.1): tidak ada kelas pipa (PN25 tertinggi) '
+      'yang mengizinkan satu zona. Bagi pipa tegak menjadi zona tekanan '
+      'vertikal - pompa zona terpisah atau riser ekspres. (// VERIFY terhadap '
+      'SNI 03-3989 / 03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % di antaranya gesekan pipa',
   StringKey.issueStandpipeOutletOverPressureMessage:
       'Katup selang {floors}: {max}..{min} kPa statis saat churn pompa, di '
@@ -4142,9 +4297,10 @@ const Map<StringKey, String> _id = {
       'pipa tegak menjadi zona tekanan. (// VERIFY terhadap SNI 03-1745.)',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'Pada sistem gabungan sprinkler + hidran ini head sprinkler ({sprHead} m) '
-      'melebihi head standpipe, sehingga pompa diberi rating pada debit '
-      'sprinkler ({sprFlow} L/s). Debit selang {hoseFlow} L/s pada {hoseHead} m '
-      'bukan titik rating - pilih pompa yang kurvanya mencakup kedua kondisi.',
+      'melebihi head standpipe ({hoseHead} m): pompa diberi rating pada debit '
+      'standpipe ({hoseFlow} L/s) dan head sprinkler ({sprHead} m). Sistem '
+      'sprinkler ({sprFlow} L/s) menentukan HEAD pompa, standpipe menentukan '
+      'DEBIT; kedua titik tercakup.',
   StringKey.issueFireGravityHeadMessage:
       'Sistem kebakaran ini disuplai gravitasi dari tangki atap (tanpa pompa '
       'kebakaran tergambar). Tangki hanya menyisakan head {avail} m pada '
@@ -4453,6 +4609,31 @@ const Map<StringKey, String> _id = {
       'Menentukan ukuran talang, roof drain dan pipa tegak air hujan',
   StringKey.buildingInputCaptionRunoff:
       'Bagian curah hujan yang sampai ke outlet (metode rasional)',
+  StringKey.buildingInputMainsHead: 'Tekanan PDAM di meter (m)',
+  StringKey.buildingInputCaptionMainsHead:
+      'Tinggi tekan PDAM yang tersedia di meter air. Diperiksa di setiap meter yang mengisi tangki bawah (angkat + gesekan + katup pelampung 5 m); tidak ada ukuran yang bergantung padanya. Bawaan 10 m - // VERIFY ke PDAM.',
+  StringKey.buildingInputPopulation: 'Jumlah penghuni (orang)',
+  StringKey.buildingInputDemandPerPerson: 'Kebutuhan harian per orang (L)',
+  StringKey.buildingInputCaptionDailyDemand:
+      'Kebutuhan air harian {m3} m3/hari (pemakaian rata-rata {lps} L/s). Angka per orang bawaan menurut okupansi - // VERIFY ke SNI 03-7065.',
+  StringKey.buildingInputCaptionDailyDemandUnset:
+      'Isi jumlah penghuni untuk menghitung kebutuhan air harian (tidak diturunkan dari gambar). Angka per orang bawaan menurut okupansi - // VERIFY ke SNI 03-7065.',
+  StringKey.issueDailyDemandUnsetTitle: 'Jumlah penghuni belum diisi: tanpa angka cadangan air',
+  StringKey.issueDailyDemandUnsetMessage:
+      'Jumlah penghuni belum diisi di halaman Bangunan, sehingga tidak ada kebutuhan air harian dan tidak ada angka cadangan air (hari). Isi jumlah penghuni (orang).',
+  StringKey.buildingInputGroundStorageDays: 'Tampungan bawah (hari kebutuhan)',
+  StringKey.buildingInputRoofStorageFraction: 'Tangki atap (fraksi kebutuhan)',
+  StringKey.buildingInputCaptionStorageTargets:
+      'Tangki tanpa kapasitas diukur otomatis: bagian kebutuhan hariannya x target, dibulatkan ke atas ke ukuran standar. Kapasitas yang diisi selalu berlaku. // VERIFY.',
+  StringKey.issueTankCapacityUnsetTitle: 'Kapasitas tangki tidak diketahui',
+  StringKey.issueTankCapacityUnsetMessage:
+      'Tangki {tank} belum diisi kapasitasnya dan tidak dapat diukur otomatis: jumlah penghuni belum diisi, sehingga tidak ada kebutuhan harian. Pipa pengisinya tetap pada dasar kebutuhan puncak. Isi jumlah penghuni (halaman Bangunan) atau kapasitas tangki.',
+  StringKey.reserveHeadlineLabel: 'Cadangan air',
+  StringKey.reserveHeadlineValue: '{days} ({stored} m3 tersimpan / {daily} m3 per hari)',
+  StringKey.reserveExcluded: 'Cadangan tidak menghitung {n} tangki tanpa kapasitas',
+  StringKey.issueMainsPressureTitle: 'Tekanan PDAM terlalu rendah untuk mengisi tangki',
+  StringKey.issueMainsPressureMessage:
+      'Meter air {meter} memiliki tinggi tekan PDAM {avail} m, tetapi mengisi {tank} pada {flow} L/s membutuhkan {req} m (angkat {lift} m + gesekan pipa {fric} m + sisa tekanan inlet {res} m). Tanyakan tekanan ke PDAM, perbesar pipa, atau tambah pompa / tangki antara.',
   StringKey.buildingInputCaptionSlope:
       'Menentukan ukuran gravitasi dan pemeriksaan pembersihan sendiri',
   StringKey.buildingSlopeDirectionHint:

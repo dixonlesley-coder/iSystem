@@ -583,7 +583,7 @@ void main() {
       expect(cells.where((t) => t.contains('\u00b7')), isNotEmpty);
       final dxf = electricalSldToDxf(sheet: sheet);
       expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
-      expect(dxf, contains(' mm2 - PVC '));
+      expect(dxf, contains(' mm2 %%183 PVC '));
       expect(
           dxf, startsWith('0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'));
     });

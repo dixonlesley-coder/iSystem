@@ -193,6 +193,12 @@ Set<String> raiseFirePumpSuctionAndDischarge(
 
   final suction = <String>{};
   final discharge = <String>{};
+  // Backlog A-5 (2026-11-13) — discharge pipes on a BRANCH leaving a
+  // several-outlet pump (the O1 rule): sized on the rated flow, but they
+  // carry (and are solved on) their OWN flow. A pipe also reached as a
+  // main discharge pipe of some pump is not a branch.
+  final branchDischarge = <String>{};
+  final mainDischarge = <String>{};
   // The largest rated flow of the pumps whose suction / discharge walk
   // reached each edge.
   final rated = <String, FlowRate>{};
@@ -216,6 +222,21 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         x.id != e.id &&
         outflowAt(x, node) &&
         (sizing[x.id]?.flow.cubicMetersPerSecond ?? 0) >= q * (1 - 1e-9));
+  }
+
+  // Reference tower T1 (2026-11-13) — past a discharge HEADER (the first
+  // junction) an outflow is still the pump's discharge pipe only when its
+  // OWN sized flow is the pump's full rated flow (a single onward main). A
+  // header splitting the rated flow over two standpipe mains (each its own
+  // riser's 500 gpm of a 750 gpm pump) or teeing a sprinkler feed off is
+  // the end of the discharge piping: every outflow keeps its own class size.
+  // Supersedes the Round-65 flow-ratio test (`isBranchOffMain`) past a
+  // header; the O1 rule at the pump node itself is unchanged.
+  bool carriesRated(NetEdge e, String pump) {
+    final q = ratedFlowByPump[pump]?.cubicMetersPerSecond;
+    final own = sizing[e.id]?.flow.cubicMetersPerSecond;
+    if (q == null || own == null || q <= 0) return true;
+    return own >= q * (1 - 1e-9);
   }
 
   for (final p in [...pumps]..sort()) {
@@ -251,13 +272,23 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     // to the first junction or terminal — and on through a DISCHARGE
     // HEADER (a junction where two or more pump legs merge, every pipe
     // into it coming from a mover) to the main it feeds.
-    // (node, past a discharge header?, is this node the header itself?)
-    final dstack = [(p, false, false)];
+    // (node, past a discharge header?, is this node the header itself?,
+    // on a BRANCH leaving the pump itself?)
+    final dstack = [(p, false, false, false)];
     final dseen = <String>{p};
     while (dstack.isNotEmpty) {
-      final (cur, pastHeader, atHeader) = dstack.removeLast();
+      final (cur, pastHeader, atHeader, onBranch) = dstack.removeLast();
       for (final e in adj[cur] ?? const <NetEdge>[]) {
         if (!outflowAt(e, cur)) continue;
+        // Reference office O1 — a pump with SEVERAL outlets is itself a
+        // junction: an outlet under half its rated flow beside one carrying
+        // the rated flow is a separate system's branch (the sprinkler feed
+        // beside the hydrant main). Its run from the pump stays discharge
+        // piping, but a riser met further along it is that system's own
+        // riser and keeps its class size (the Round-65 header rule, applied
+        // at the pump node). A riser leaving the pump directly is unchanged.
+        final branch = cur == p ? isBranchOffMain(e, p, p) : onBranch;
+        if (e.kind == EdgeKind.riser && branch && cur != p) continue;
         // Past a header the discharge piping ends where the standpipe /
         // sprinkler riser begins (the riser keeps its own class sizing);
         // a riser leaving the pump itself is its discharge pipe (and the
@@ -267,8 +298,9 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         // riser off a bare degree-2 node is): only a riser reached past the
         // header through a further junction keeps the standpipe's class size.
         if (e.kind == EdgeKind.riser) {
-          if (!pastHeader || (atHeader && !isBranchOffMain(e, cur, p))) {
+          if (!pastHeader || (atHeader && carriesRated(e, p))) {
             discharge.add(e.id);
+            (branch ? branchDischarge : mainDischarge).add(e.id);
             rate(e.id, p);
           }
           continue;
@@ -280,8 +312,9 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         // same node carries the whole rated flow is a separate system's
         // feed (a sprinkler riser teed off the hydrant pump's header): it
         // keeps its own class size, never the pump's DN125 at 31.5 L/s.
-        if (pastHeader && isBranchOffMain(e, cur, p)) continue;
+        if (pastHeader && !carriesRated(e, p)) continue;
         discharge.add(e.id);
+        (branch ? branchDischarge : mainDischarge).add(e.id);
         rate(e.id, p);
         final next = other(e, cur);
         final n = net.nodeById(next);
@@ -311,7 +344,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
           header = true;
           isHeader = true;
         }
-        if (dseen.add(next)) dstack.add((next, header, isHeader));
+        if (dseen.add(next)) dstack.add((next, header, isHeader, branch));
       }
     }
   }
@@ -325,6 +358,13 @@ Set<String> raiseFirePumpSuctionAndDischarge(
             r0.cubicMetersPerSecond > s.flow.cubicMetersPerSecond + 1e-12
         ? r0
         : s.flow;
+    // Backlog A-5 — a branch discharge pipe keeps the Table 4.28(a) size of
+    // the rated flow but stores its OWN flow (friction, velocity and the
+    // printed flow are its own: the physical truth).
+    final ownFlow = !isSuction &&
+        branchDischarge.contains(id) &&
+        !mainDischarge.contains(id);
+    final stored = ownFlow ? s.flow : flow;
     final row = firePumpPipeRow(flow);
     final tableMm = _seriesAtLeast(
         math.min(maxMm, isSuction ? row.suctionMm : row.dischargeMm));
@@ -340,10 +380,12 @@ Set<String> raiseFirePumpSuctionAndDischarge(
       floorMm = math.max(floorMm, r.diameter.inMillimeters);
       over = over || r.overVelocity;
     }
-    if (floorMm <= s.diameter.inMillimeters + 1e-9 && flow == s.flow) return;
+    if (floorMm <= s.diameter.inMillimeters + 1e-9 && stored == s.flow) {
+      return;
+    }
     final d = Diameter.mm(math.max(floorMm, s.diameter.inMillimeters));
-    sizing[id] = s.withBore(d, velocityFromFlow(flow, d),
-        flow: flow, overCapacity: over);
+    sizing[id] = s.withBore(d, velocityFromFlow(stored, d),
+        flow: stored, overCapacity: over);
     raised.add(id);
   }
 

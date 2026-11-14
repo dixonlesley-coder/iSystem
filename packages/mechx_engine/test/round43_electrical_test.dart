@@ -674,21 +674,24 @@ void main() {
                 feedsPanelId: 'DB$i',
                 length: const Length(20)),
         ]),
+        // Drawing backlog C-3 — DISTINCT boards (identical ones now ride one
+        // typical node) and enough of them that the packed grid still needs
+        // chunk pages.
         for (var i = 1; i <= 30; i++)
           ElectricalPanel(
             id: 'DB$i',
             name: 'DB-$i',
             sourceType: PanelSource.feeder,
             fedByCircuitId: 'f$i',
-            circuits: const [
+            circuits: [
               ElectricalCircuit(
                   id: 'x',
                   name: 'Load',
                   loadKind: LoadKind.socket,
-                  loadW: 2000,
+                  loadW: 2000.0 + 100 * i,
                   cosPhi: 0.9,
                   phases: 1,
-                  length: Length(10)),
+                  length: const Length(10)),
             ],
           ),
       ]);

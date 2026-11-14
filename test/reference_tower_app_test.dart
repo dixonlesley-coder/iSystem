@@ -1,0 +1,2197 @@
+// Reference building 5 (tower) — APP-level smoke test.
+//
+// Loads the fixed 30-storey office tower
+// (`packages/mechx_engine/test/reference/tower.dart`) into a ProviderContainer
+// through the real store intents (sheets, floors, calibrations, roof-tank
+// DOWNFEED, public occupancy, light fire hazard, RECTANGULAR / EQUAL-FRICTION
+// duct settings, the network, the two floor-15 rooms drawn with
+// `roomAreasProvider` (the office set to AHU equipment) and the electrical
+// project with its MV transformer, standby genset and capacitor bank), turns
+// on the "Feed solved MEP duties" opt-in (the undrawn HW recirculation pump is
+// a solved duty), lets the real MEP sync mint the "MEP Equipment" board, then
+// RE-FEEDS that board
+// from the essential board PP-E with the real `connectFeeder` intent and
+// specifies the new feeder FRC (10 m) with `setCircuit`. It evaluates the
+// providers every printed surface reads: sizing, the gravity downfeed field and
+// the delivered field with the booster running, the hot-water field and its
+// recirculation, the transfer / booster duties, the zone table and the PRV
+// stations, the fire system basis (duty / standby / jockey, two hydrant
+// risers, every hose outlet's pressure), both air systems and their fans, BOM
+// + fittings, the Review fan-in, the compliance roll-up, the electrical result
+// / advanced study / transformer / power factor / genset sizing / warnings.
+// The cold-water field and the zone table are dumped BEFORE (no PRV) and
+// AFTER the PRV stations the zone table prescribes are drawn. It asserts only
+// that the project loads and the providers evaluate; hand-derived expected
+// values are a later task. Set REF_DUMP=1 to print every solved figure.
+import 'dart:io';
+import 'dart:ui' show Size;
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show FirePressureClass;
+import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
+import 'package:mechx/store/air_warnings_store.dart';
+import 'package:mechx/store/annotation_store.dart';
+import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/compliance_store.dart';
+import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_feed.dart';
+import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/fire_store.dart';
+import 'package:mechx/store/models/sheet.dart';
+import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/store/sizing_store.dart';
+import 'package:mechx/store/room_air_store.dart';
+import 'package:mechx/store/solve_store.dart';
+import 'package:mechx/store/tank_fill_store.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show
+        gensetPlantVa,
+        gensetStartMotors,
+        gensetStartFloorFor,
+        originPanelIdsOf,
+        rootServiceBasisVa,
+        servicePerPhaseBasisVa;
+import 'package:mechx_engine/electrical/genset_backup.dart';
+import 'package:mechx_engine/electrical/load_kind.dart' show LoadKind;
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalCircuitResult, PhaseAssignmentInfo;
+import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/network/hot_water_pressure.dart'
+    show hotWaterHeaters;
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
+import 'package:mechx_engine/network/zoning.dart' show defaultPrvSetpoint;
+import 'package:mechx_engine/sizing/fire_index_friction.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart'
+    show sprinklerPumpRatedPoint;
+import 'package:mechx_engine/sizing/duct_sizing.dart'
+    show ductFrictionPaPerMetre;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show serviceComponentRoots;
+import 'package:mechx_engine/sizing/hot_water.dart' show heatLossFromLength;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
+import 'package:mechx_engine/standards/duct_products.dart'
+    show ductRoughnessFor;
+import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
+import 'package:mechx_engine/standards/sni.dart' show SniProfile;
+import 'package:mechx_engine/units.dart';
+
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show electricalRiserFloorOf;
+import 'reference_board_floors.dart';
+import 'reference_copper.dart';
+import 'reference_riser_component_util.dart';
+import '../packages/mechx_engine/test/reference/tower.dart';
+
+final bool _dump = Platform.environment['REF_DUMP'] == '1';
+final StringBuffer _out = StringBuffer();
+void _p(String s) => _out.writeln(s);
+
+String _f(double? v, [int dp = 3]) => v == null ? '-' : v.toStringAsFixed(dp);
+
+const String _mepBoard = 'mep-equipment';
+
+/// Loads [b] through the store intents, lets the MEP sync run and re-feeds
+/// the MEP board from PP-E (FRC, 10 m).
+Future<ProviderContainer> _loadTower(ReferenceBuilding b) async {
+  final c = ProviderContainer();
+  c
+      .read(sheetsControllerProvider.notifier)
+      .loadSheets(
+        [
+          for (final s in b.sheets)
+            Sheet(id: s.id, name: s.name, sizePx: const Size(4200, 1800)),
+        ],
+        sheetFloors: {for (final s in b.sheets) s.id: s.floorIndex},
+      );
+  final project = c.read(projectControllerProvider.notifier)
+    ..setFloors(b.building.floors);
+  for (final MapEntry(:key, :value) in b.calibrations.entries) {
+    project.setCalibration(key, value);
+  }
+  c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
+  c.read(occupancyProvider.notifier).set(b.occupancy);
+  c.read(populationProvider.notifier).set(b.population);
+  c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
+  c.read(ductSettingsProvider.notifier)
+    ..setShape(kTowerDuctShape)
+    ..setMethod(kTowerDuctMethod);
+  // The electrical workspace's "Feed solved MEP duties" opt-in: the HW
+  // recirculation pump is a SOLVED duty (no pump node is drawn), so the
+  // placed-only default sync never mints its way.
+  c.read(mepDutyFeedEnabledProvider.notifier).enable();
+  c.read(networkControllerProvider.notifier).loadNetwork(b.network);
+  final rooms = c.read(roomAreasProvider.notifier);
+  for (final r in kTowerRooms) {
+    final id = rooms.add(
+      sheetId: r.sheetId,
+      floorIndex: r.floorIndex,
+      ax: r.ax,
+      ay: r.ay,
+      bx: r.bx,
+      by: r.by,
+    )!;
+    rooms
+      ..setRoomType(id, r.roomType)
+      ..setEquipment(id, r.equipment)
+      ..setName(id, r.name);
+  }
+  c.read(electricalProjectProvider.notifier).setProject(b.electrical);
+  // Let the electrical store's deferred MEP-equipment sync run.
+  await Future<void>.delayed(Duration.zero);
+  _refeedMep(c);
+  await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
+  return c;
+}
+
+/// Where the sync wired the MEP board before the re-feed (for the report).
+String? _mepFedByBefore;
+
+/// The MEP board onto PP-E: the real re-parenting `connectFeeder` intent,
+/// then the new feeder way specified FRC through `setCircuit`.
+void _refeedMep(ProviderContainer c) {
+  final store = c.read(electricalProjectProvider.notifier);
+  final before = c.read(electricalProjectProvider);
+  final mep = before.panels.where((p) => p.id == _mepBoard).firstOrNull;
+  if (mep == null) return;
+  final parent = before.panels
+      .where((p) => p.circuits.any((w) => w.feedsPanelId == _mepBoard))
+      .firstOrNull;
+  _mepFedByBefore = '${parent?.id} via ${mep.fedByCircuitId}';
+  if (parent?.id == kTowerEssentialPanelId) return;
+  final r = store.connectFeeder(kTowerEssentialPanelId, _mepBoard);
+  expect(r.connected, isTrue, reason: r.reason);
+  final after = c.read(electricalProjectProvider);
+  final way = after.panels
+      .firstWhere((p) => p.id == kTowerEssentialPanelId)
+      .circuits
+      .firstWhere((w) => w.feedsPanelId == _mepBoard);
+  store.setCircuit(
+    kTowerEssentialPanelId,
+    way.id,
+    cableType: 'FRC',
+    length: const Length(10),
+  );
+}
+
+double _len(ProviderContainer c, NetEdge e) {
+  final project = c.read(projectControllerProvider);
+  return edgeLength(
+    e,
+    c.read(sizingNetworkProvider),
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    mounting: project.mounting,
+  ).meters;
+}
+
+void _dumpMechanical(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final project = c.read(projectControllerProvider);
+  final sizing = c.read(sizingProvider);
+  final fu = c.read(edgeFixtureUnitsProvider);
+  final lengths = projectEdgeLengths(net, project);
+  _p(
+    '## APP sizing (edge | service | kind | L m | FU | Q L/s | DN | '
+    'v m/s | from | flags)',
+  );
+  for (final e in net.edges) {
+    final s = sizing[e.id];
+    final flags = [
+      if (s?.overCapacity ?? false) 'overCapacity',
+      if (s?.stackRaisedForBranch ?? false) 'stackRaisedForBranch',
+      if (!(s?.selfCleansingOk ?? true)) 'selfCleansingFail',
+      if (s?.loopUnbalanced ?? false) 'loopUnbalanced',
+      if (s?.demandCurveExtrapolated ?? false) 'demandCurveExtrapolated',
+      if (s?.belowCodeMinimum ?? false) 'belowCodeMinimum',
+      if (e.sizeOverride != null) 'sizeOverride',
+      if (c.read(sprinklerFeedEnlargedProvider).contains(e.id))
+        'sprinklerFeedEnlarged',
+    ];
+    _p(
+      '| ${e.id} | ${e.service.name} | ${e.kind.name} | '
+      '${_f(lengths[e.id]?.meters)} | ${fu[e.id] ?? '-'} | '
+      '${_f(s?.flow.inLitersPerSecond, 4)} | ${s?.diameter.inMillimeters} | '
+      '${_f(s?.velocity.metersPerSecond)} | ${s?.flowFromId} | '
+      '${flags.isEmpty ? '-' : flags.join(',')} |',
+    );
+  }
+  final d = c.read(sizingDetailProvider);
+  _p(
+    'flushSystem=${d.flushSystem.name} parallelLegs='
+    '${(d.parallelLegs.toList()..sort())} assumedJockeys=${d.assumedJockeys}',
+  );
+  _p('## APP water velocity checks');
+  for (final e in c.read(waterVelocityChecksProvider).entries) {
+    final v = e.value;
+    _p(
+      '${e.key}: ${_f(v.actual.metersPerSecond)} in '
+      '[${_f(v.min.metersPerSecond)}, ${_f(v.max.metersPerSecond)}] '
+      '${v.verdict.name}',
+    );
+  }
+  _p('## APP drainage advisories');
+  for (final a in c.read(drainageAdvisoryProvider)) {
+    _p('${a.edgeId}: ${a.kind} ${a.message}');
+  }
+  _p('## APP node elevations (nodeElevation / displayed)');
+  for (final n in net.nodes) {
+    _p(
+      '${n.id} floor=${n.floorIndex} role=${n.role.name} '
+      'comp=${n.component?.name} fixture=${n.fixture?.name} '
+      'z=${_f(nodeElevation(n, project.building, project.mounting).meters)} '
+      'shown=${_f(displayedNodeElevation(net, n, project.building, project.mounting).meters)}',
+    );
+  }
+}
+
+/// The downfeed field (gravity + delivered), the movers and the zone table.
+void _dumpDownfeed(ProviderContainer c, String label) {
+  final net = c.read(sizingNetworkProvider);
+  final sizing = c.read(sizingProvider);
+  final project = c.read(projectControllerProvider);
+  _p('## APP $label downfeed');
+  _p(
+    'gravityDownfeedDrawn=${c.read(gravityDownfeedDrawnProvider)} '
+    'tankElevation=${_f(c.read(downfeedTankElevationProvider)?.meters)} '
+    'effectiveDatum=${_f(c.read(effectiveDownfeedDatumProvider)?.meters)} '
+    'datumByFloor=${c.read(downfeedDatumByFloorProvider)?.map((k, v) => MapEntry(k, _f(v.meters)))} '
+    'target=${_f(c.read(targetResidualProvider).inKiloPascals)} kPa',
+  );
+  final roots = serviceComponentRoots(
+    net,
+    ServiceType.coldWater,
+    demandNodeIds: {
+      for (final n in net.nodes)
+        if (n.role == NodeRole.fixture) n.id,
+    },
+  );
+  _p('sizer roots (cold water): ${{for (final r in roots.values) r}}');
+  _p(
+    'extraDownfeedTanks=${[for (final x in c.read(extraDownfeedTanksProvider)) x.tank]} extraSupplySources=${[for (final x in c.read(extraSupplySourcesProvider)) x.source]}',
+  );
+  final down = c.read(downfeedProvider);
+  final del = c.read(downfeedDeliveredProvider);
+  final floors = c.read(downfeedSniFloorsProvider);
+  _p(
+    'gravity: critical=${down?.criticalNodeId} '
+    'min=${_f(down?.minResidual.inKiloPascals)} '
+    'boosterHeadRequired=${_f(down?.boosterHeadRequired.meters)} '
+    'gravitySufficient=${down?.gravitySufficient}',
+  );
+  _p(
+    'delivered: critical=${del?.criticalNodeId} '
+    'min=${_f(del?.minResidual.inKiloPascals)} '
+    'gravitySufficient=${del?.gravitySufficient}',
+  );
+  _p(
+    'sniMinimumAtCritical='
+    '${_f(c.read(downfeedSniMinimumResidualProvider)?.inKiloPascals)} kPa',
+  );
+  _p(
+    '| node | delivery | gravity static | gravity residual | delivered static '
+    '| delivered residual | SNI floor |',
+  );
+  final ids = {
+    ...?down?.residualPressure.keys,
+    ...?del?.residualPressure.keys,
+  }.toList()..sort();
+  for (final id in ids) {
+    _p(
+      '| $id | ${del?.deliveryNodeIds.contains(id)} | '
+      '${_f(down?.noFlowStaticPressure[id]?.inKiloPascals)} | '
+      '${_f(down?.residualPressure[id]?.inKiloPascals)} | '
+      '${_f(del?.noFlowStaticPressure[id]?.inKiloPascals)} | '
+      '${_f(del?.residualPressure[id]?.inKiloPascals)} | '
+      '${_f(floors[id]?.inKiloPascals)} |',
+    );
+  }
+  _p('downfeedOverPressure=${c.read(downfeedOverPressureProvider)}');
+  // Movers.
+  final duties = c.read(supplyMoverDutiesProvider);
+  final transfers = c.read(transferPumpNodeIdsProvider);
+  final heads = c.read(downfeedMoverHeadsProvider);
+  final bind = c.read(mepDutyBindingProvider);
+  _p(
+    '## APP $label supply movers (node | inEdge | Q | served (count, '
+    'delivery fixtures) | transfer)',
+  );
+  for (final m in supplyMovers(
+    net,
+    sizing,
+    excludeEdgeIds: c.read(parallelLegEdgeIdsProvider),
+    rootFlowOf: (_) => const FlowRate(0),
+  )) {
+    final served = m.served.toList()..sort();
+    final fx = served
+        .where((id) => net.nodeById(id)?.role == NodeRole.fixture)
+        .toList();
+    _p(
+      '${m.nodeId} | in=${m.inEdgeId} | Q=${_f(m.flow.inLitersPerSecond, 4)} '
+      '| served=${served.length} nodes, ${fx.length} fixtures '
+      '(floors ${{for (final id in fx) net.nodeById(id)!.floorIndex}.toList()..sort()}) '
+      'tanks=${[for (final n in served)
+        if (net.nodeById(n)?.component == NodeComponent.roofTank || net.nodeById(n)?.component == NodeComponent.groundTank) n]} | transfer=${m.transfer}',
+    );
+  }
+  for (final id in (duties.keys.toList()..sort())) {
+    final d = duties[id]!;
+    String extra = '';
+    if (transfers.contains(id)) {
+      final l =
+          nodeElevation(
+            net.nodeById('RT')!,
+            project.building,
+            project.mounting,
+          ).meters -
+          nodeElevation(
+            net.nodeById('GT')!,
+            project.building,
+            project.mounting,
+          ).meters;
+      extra = ' lift(GT->RT)=${_f(l)} friction=${_f(d.head.meters - l)}';
+    }
+    _p(
+      'duty $id ${transfers.contains(id) ? 'transfer' : 'booster'}: '
+      'Q=${_f(d.flow.inLitersPerSecond, 4)} H=${_f(d.head.meters)} m$extra '
+      'hyd=${_f(d.hydraulicPower.watts, 1)} shaft=${_f(d.shaftPower.watts, 1)} '
+      'input=${_f(d.motorInputPower.watts, 1)} motor=${_f(d.selectedMotor.inKiloWatts, 2)} kW '
+      'oversized=${d.motorOversized} deliveredHead=${_f(heads[id]?.meters)}',
+    );
+  }
+  final pump = c.read(pumpDutyProvider);
+  _p(
+    'pumpDuty(primary)=${pump == null ? 'null' : 'Q=${_f(pump.flow.inLitersPerSecond, 4)} '
+              'H=${_f(pump.head.meters)} motor=${_f(pump.selectedMotor.inKiloWatts, 2)} kW'} '
+    'primaryNode=${c.read(primarySupplyPumpNodeProvider)} '
+    'supplyBooster=${c.read(supplyBoosterProvider)} '
+    'binding.supplyPump=${bind.supplyPumpNodeId} '
+    'peakFlow=${_f(c.read(supplyPeakFlowProvider)?.inLitersPerSecond, 4)} L/s',
+  );
+  // Zone table.
+  _p('## APP $label zone table (prvSetpoint basis)');
+  for (final g in c.read(downfeedZoneGroupsProvider)) {
+    _p(
+      'group tank=${g.tankId} datum=${_f(g.tankElevation?.meters)} '
+      'byFloor=${g.tankElevationByFloor?.map((k, v) => MapEntry(k, _f(v.meters)))} '
+      'zones=${[for (final z in g.zones) '${z.bottomFloorIndex}-${z.topFloorIndex}']}',
+    );
+  }
+  for (final z in c.read(zoneStaticsProvider)) {
+    _p(
+      'zoneStatic ${z.zone.bottomFloorIndex}-${z.zone.topFloorIndex} '
+      'topResidual=${_f(z.topResidual.inKiloPascals)} '
+      'bottomStatic=${_f(z.bottomStatic.inKiloPascals)} '
+      'within=${z.withinLimit} viaPrv=${z.viaPrv}',
+    );
+  }
+}
+
+void _dumpFire(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final sizing = c.read(sizingProvider);
+  final project = c.read(projectControllerProvider);
+  _p('## APP fire inputs');
+  final sd = c.read(sprinklerDesignProvider);
+  _p(
+    'hazard=${c.read(fireHazardProvider).name} '
+    'K=${c.read(firePerHeadKFactorProvider)} designArea='
+    '${_f(sd.designAreaValue.squareMeters)} m2 requiredFlow='
+    '${_f(sd.requiredFlow.inLitersPerSecond, 4)} L/s count=${sd.sprinklerCount} '
+    'perHead=${_f(sd.flowPerSprinkler.inLitersPerSecond, 4)} L/s',
+  );
+  final ra = c.read(sprinklerRemoteAreaProvider);
+  _p(
+    'remoteArea: headFlow=${_f(ra.remoteHeadFlow.inLitersPerSecond, 4)} L/s '
+    'headP=${_f(ra.remoteHeadPressure.inKiloPascals)} kPa '
+    'branchFriction=${_f(ra.branchLineFrictionHead.meters)} m '
+    'branchBaseP=${_f(ra.branchBasePressure.inKiloPascals)} kPa '
+    'demand=${_f(ra.remoteAreaDemand.inLitersPerSecond, 4)} L/s '
+    'governedByMinP=${ra.governedByMinimumPressure}',
+  );
+  final st = c.read(standpipeDesignProvider);
+  _p(
+    'standpipe (advisory, sizer flow): class=${st.standpipeClass.name} '
+    'flow=${_f(st.requiredFlow.inLitersPerSecond, 4)} L/s '
+    'topResidual=${_f(st.topResidualPressure.inKiloPascals)} kPa '
+    'minRiser=${st.minRiserDiameter.inMillimeters} head=${_f(st.pumpHead.meters)} m',
+  );
+  final rst = c.read(reportStandpipeDesignProvider);
+  _p(
+    'standpipe (report): ${rst == null ? 'null' : 'class=${rst.standpipeClass.name} '
+              'flow=${_f(rst.requiredFlow.inLitersPerSecond, 4)} L/s '
+              'head=${_f(rst.pumpHead.meters)} m '
+              'hyd=${_f(rst.pumpHydraulicPower.watts, 1)} W shaft=${_f(rst.pumpShaftPower.watts, 1)} W'}',
+  );
+  _p('## APP fire pipes (edge | service | kind | L m | Q L/s | DN | v m/s)');
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant &&
+        e.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    final s = sizing[e.id];
+    _p(
+      '| ${e.id} | ${e.service.name} | ${e.kind.name} | ${_f(_len(c, e))} | '
+      '${_f(s?.flow.inLitersPerSecond, 4)} | ${s?.diameter.inMillimeters} | '
+      '${_f(s?.velocity.metersPerSecond)} |',
+    );
+  }
+  _p('## APP fire system bases');
+  for (final b in c.read(fireSystemBasesProvider)) {
+    _p(
+      'pumps=${b.pumpIds} duty=${b.dutyPumpId} sprinklerOnly=${b.sprinklerOnly} '
+      'risers=${b.standpipeRisers} class=${b.standpipeClass.name} '
+      'staticLift=${_f(b.staticLiftM)} m indexFriction=${_f(b.indexFrictionM)} m '
+      'flow=${_f(b.flow.inLitersPerSecond, 4)} L/s head=${_f(b.head.meters)} m '
+      'sprinklerGovernsCombined=${b.sprinklerGovernsCombined} '
+      'gravityFed=${b.gravityFed} transfer=${b.transfer} dry=${b.dry} '
+      'stages=${b.stages.length} stageHeads=${b.stageHeads}',
+    );
+    final liftH = b.system.staticLiftM(
+      net,
+      project.building,
+      FireTerminalKind.hydrant,
+    );
+    final liftS = b.system.staticLiftM(
+      net,
+      project.building,
+      FireTerminalKind.sprinkler,
+    );
+    _p('  lifts: hydrant=${_f(liftH)} m sprinkler=${_f(liftS)} m');
+    if (b.dutyPumpId case final pump?) {
+      final fs = fireIndexPathFrictionM(
+        net: net,
+        system: b.system,
+        pumpId: pump,
+        sizing: sizing,
+        lengthOf: (e) => _len(c, e),
+        terminals: FireTerminalKind.sprinkler,
+      );
+      final sp = sprinklerPumpRatedPoint(
+        remote: c.read(sprinklerRemoteAreaProvider),
+        staticLiftM: liftS,
+        indexPathFriction: fs == null ? null : Head(fs),
+      );
+      _p(
+        '  sprinkler point: ${_f(sp.flow.inLitersPerSecond, 4)} L/s @ '
+        '${_f(sp.head.meters)} m',
+      );
+    }
+    final r = b.rating;
+    _p(
+      '  rating: rated ${_f(r.ratedFlow.inLitersPerSecond, 4)} L/s @ '
+      '${_f(r.ratedHead.meters)} m; churn @ ${_f(r.churn.head.meters)}; '
+      'overload ${_f(r.overload.flow.inLitersPerSecond, 4)} @ '
+      '${_f(r.overload.head.meters)} shaft ${_f(r.overload.shaftPower.watts, 1)} W; '
+      'motor=${_f(r.selectedMotor.inKiloWatts, 2)} kW oversized=${r.oversized} '
+      'jockey ${_f(r.jockeyFlow.inLitersPerSecond, 4)} L/s @ '
+      '${_f(r.jockeyHead.meters)} m designation=${r.designation.name} '
+      'standbyRecommended=${r.standbyRecommended}',
+    );
+    final d = b.duty;
+    _p(
+      '  duty: ${d == null ? null : 'Q=${_f(d.flow.inLitersPerSecond, 4)} H=${_f(d.head.meters)} '
+                'hyd=${_f(d.hydraulicPower.watts, 1)} shaft=${_f(d.shaftPower.watts, 1)} '
+                'input=${_f(d.motorInputPower.watts, 1)} motor=${_f(d.selectedMotor.inKiloWatts, 2)} kW'}',
+    );
+    final j = b.jockey;
+    _p(
+      '  jockey: ${j == null ? null : 'Q=${_f(j.flow.inLitersPerSecond, 4)} H=${_f(j.head.meters)} '
+                'shaft=${_f(j.shaftPower.watts, 1)} motor=${_f(j.selectedMotor.inKiloWatts, 2)} kW'}',
+    );
+    if (b.dutyPumpId case final pump?) {
+      for (final kind in [
+        FireTerminalKind.hydrant,
+        FireTerminalKind.sprinkler,
+      ]) {
+        final per = <String, double>{};
+        final fr = fireIndexPathFrictionM(
+          net: net,
+          system: b.system,
+          pumpId: pump,
+          sizing: sizing,
+          lengthOf: (e) => _len(c, e),
+          terminals: kind,
+          frictionByTerminalOut: per,
+        );
+        _p(
+          '  friction ${kind.name}: index=${_f(fr)} m per terminal '
+          '${{for (final k in (per.keys.toList()..sort())) k: _f(per[k])}}',
+        );
+      }
+      final hyd = <String, double>{};
+      fireIndexPathFrictionM(
+        net: net,
+        system: b.system,
+        pumpId: pump,
+        sizing: sizing,
+        lengthOf: (e) => _len(c, e),
+        terminals: FireTerminalKind.hydrant,
+        frictionByTerminalOut: hyd,
+      );
+      for (final o in standpipeOutletPressures(
+        net: net,
+        system: b.system,
+        sizing: sizing,
+        building: project.building,
+        churnHeadByPump: {
+          for (final id in b.pumpIds) id: b.rating.churn.head.meters,
+        },
+        ratedHeadByPump: {
+          for (final id in b.pumpIds) id: b.rating.ratedHead.meters,
+        },
+        frictionToOutletM: hyd,
+      )) {
+        _p(
+          '  outlet ${o.outletId} floor=${o.floorIndex} '
+          'static(churn)=${_f(o.staticKpa)} kPa residual(rated)=${_f(o.residualKpa)} kPa '
+          'overStatic=${o.overStatic} overResidual=${o.overResidual}',
+        );
+      }
+    }
+  }
+  final fpd = c.read(firePumpDutyProvider);
+  final jd = c.read(fireJockeyDutyProvider);
+  _p(
+    'firePumpDuty=${fpd == null ? null : 'Q=${_f(fpd.flow.inLitersPerSecond, 4)} '
+              'H=${_f(fpd.head.meters)} motor=${_f(fpd.selectedMotor.inKiloWatts, 2)} kW'} '
+    'jockeyDuty=${jd == null ? null : 'Q=${_f(jd.flow.inLitersPerSecond, 4)} '
+              'H=${_f(jd.head.meters)} motor=${_f(jd.selectedMotor.inKiloWatts, 2)} kW'}',
+  );
+  final rp = c.read(fireRatedPointProvider);
+  _p(
+    'ratedPoint=${_f(rp.flow.inLitersPerSecond, 4)} L/s @ ${_f(rp.head.meters)} m '
+    'sprinklerOnly=${rp.sprinklerOnly} allGravityFed=${c.read(fireAllGravityFedProvider)}',
+  );
+  _p('assumedFireJockeys=${c.read(assumedFireJockeysProvider)}');
+  _p('sprinklerPumpCheck=${c.read(sprinklerPumpCheckProvider)}');
+  _p('fireOverPressure=${c.read(fireOverPressureProvider)}');
+  _p(
+    'standpipeOutletOverPressure=${[for (final o in c.read(standpipeOutletOverPressureProvider)) '${o.residual ? 'residual' : 'static'} floors ${o.lowFloor}-${o.highFloor} '
+          'max ${_f(o.maxKpa)} min ${_f(o.minKpa)} limit ${_f(o.limitKpa)}']}',
+  );
+  _p(
+    'fire tank: FT tankCapacityLitres=${net.nodeById('FT')?.tankCapacityLitres} '
+    '(no provider sizes a fire-water reserve)',
+  );
+}
+
+void _dumpRooms(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final project = c.read(projectControllerProvider);
+  final rooms = c.read(roomAreasProvider);
+  _p(
+    '## APP rooms + cooling (method=${c.read(coolingLoadMethodProvider).name})',
+  );
+  for (final r in rooms) {
+    final mpp = project.calibrationFor(r.sheetId)!.metersPerPixel;
+    final load = c.read(roomCoolingLoadProvider(r.id));
+    _p(
+      '${r.id} "${r.name}" type=${r.roomType.name} floor=${r.floorIndex} '
+      '${_f(r.widthPx * mpp)} x ${_f(r.heightPx * mpp)} m '
+      'area=${_f(r.netAreaM2(mpp, rooms))} m2 ceiling=${r.ceilingHeightM} m '
+      'ACH=${r.effectiveAch()} equipment=${r.equipmentKind.name}',
+    );
+    if (load != null) {
+      _p(
+        '  load=${_f(load.btuPerHr, 1)} BTU/h (${_f(load.watts, 1)} W) '
+        'pk=${_f(load.pk)} recommended=${load.recommended.pk} PK '
+        '(${load.recommended.nominalBtuPerHr} BTU/h) '
+        'exceedsRange=${load.recommended.exceedsRange}',
+      );
+    }
+    final s = c.read(roomSizingProvider)[r.id];
+    if (s != null) {
+      _p(
+        '  air: ${_f(s.airflow.inLitersPerSecond, 3)} L/s '
+        'supply x${s.supply.count} face ${s.supply.faceMm} '
+        'equipment motor=${_f(s.equipment.selectedMotor.inKiloWatts, 2)} kW',
+      );
+    }
+  }
+  final fed = c.read(nodeFedLoadsProvider);
+  for (final n in net.nodes) {
+    if (!RoomArea.isAcComponent(n.component)) continue;
+    final share = acUnitShare(
+      net,
+      rooms,
+      (s) => project.calibrationFor(s)?.metersPerPixel,
+      n,
+      method: c.read(coolingLoadMethodProvider),
+    );
+    _p(
+      'AC ${n.id} ${n.component!.name}: room=${share?.room.id} '
+      'perUnit=${_f(share?.btuPerHr, 1)} BTU/h unit=${share?.unit.pk} PK '
+      '(${share?.unit.nominalBtuPerHr} BTU/h, exceedsRange=${share?.unit.exceedsRange}) '
+      'inputW=${_f(share?.inputW, 1)} | fed=${_f(fed[n.id]?.watts, 1)} W '
+      'input=${_f(fed[n.id]?.input, 1)} (${fed[n.id]?.source.name})',
+    );
+  }
+}
+
+void _dumpBom(ProviderContainer c) {
+  _p(
+    '## APP BOM (service | kind | DN | m | segs | material | tag | floor | flags)',
+  );
+  for (final b in c.read(bomProvider)) {
+    _p(
+      '| ${b.service.name} | ${b.kind.name} | ${b.diameterMm} | '
+      '${_f(b.totalLength.meters)} | ${b.segmentCount} | ${b.material} | '
+      '${b.tag} | ${b.floorIndex} | manual=${b.manual} assumed=${b.assumed} '
+      'unmeasured=${b.unmeasuredSegments} |',
+    );
+  }
+  _p('## APP fittings (service | type | DN | count | material)');
+  for (final f in c.read(fittingsProvider)) {
+    _p(
+      '| ${f.service.name} | ${f.type.name} | ${f.diameterMm} | ${f.count} | '
+      '${f.material} |',
+    );
+  }
+  _p('## APP component takeoff');
+  for (final l in c.read(componentTakeoffProvider)) {
+    _p(
+      '${l.service.name} ${l.component.name} ${l.sizeLabel} x${l.count} '
+      'assumed=${l.assumed} equipment=${l.equipment}',
+    );
+  }
+}
+
+void _dumpIssues(ProviderContainer c, String label) {
+  final issues = c.read(designIssuesProvider);
+  _p(
+    '## APP $label design issues (${issues.length}; '
+    '${issues.where((i) => i.isVerify).length} are // VERIFY)',
+  );
+  final verifyBySeverity = <String, int>{};
+  for (final i in issues) {
+    if (i.isVerify) {
+      verifyBySeverity.update(i.severity.name, (n) => n + 1, ifAbsent: () => 1);
+      continue;
+    }
+    _p(
+      '- [${i.severity.name}] ${i.kind} | ${i.title} | ${i.message} | '
+      'locate=${i.locate?.sheetId}/${i.locate?.nodeId}/${i.locate?.edgeId}'
+      '/${i.locate?.panelId}/${i.locate?.circuitId}',
+    );
+  }
+  _p('verify advisories by severity: $verifyBySeverity');
+  _p('## APP $label verify advisories (kind | title)');
+  for (final i in issues.where((i) => i.isVerify)) {
+    _p('- ${i.kind} | ${i.title}');
+  }
+  _p('## APP $label compliance summary');
+  for (final it in c.read(complianceSummaryProvider).items) {
+    _p('- ${it.category}: pass=${it.pass} | ${it.detail}');
+  }
+}
+
+void _dumpMachines(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final bind = c.read(mepDutyBindingProvider);
+  final nodeDuties = c.read(equipmentNodeDutiesProvider);
+  final fed = c.read(nodeFedLoadsProvider);
+  _p(
+    '## APP machines -> MEP loads (binding: supplyPump=${bind.supplyPumpNodeId} '
+    'standby=${bind.standbyPumpNodeIds} fire=${bind.firePumpNodeIds} '
+    'fireStandby=${bind.fireStandbyPumpNodeIds} '
+    'fireJockey=${bind.fireJockeyPumpNodeIds} '
+    'assumedJockey=${bind.fireAssumedJockeyPumpNodeIds})',
+  );
+  for (final l in c.read(placedEquipmentLoadsProvider)) {
+    final id = l.id.startsWith('node-') ? l.id.substring(5) : l.id;
+    _p(
+      '${l.id} "${l.name}" comp=${net.nodeById(id)?.component?.name} '
+      'source=${l.source.name} mech=${_f(l.mechanicalPower.watts, 1)} W '
+      'input=${_f(l.electricalInputPower?.watts, 1)} W phases=${l.phases} '
+      'cos=${l.cosPhi} eff=${l.motorEfficiency} '
+      'nodeDuty=${_f(nodeDuties[id]?.motor.watts, 1)}/${_f(nodeDuties[id]?.input.watts, 1)} '
+      'fed=${_f(fed[id]?.watts, 1)} input ${_f(fed[id]?.input, 1)} (${fed[id]?.source.name})',
+    );
+  }
+}
+
+void _dumpMepSync(ProviderContainer c) {
+  final project = c.read(electricalProjectProvider);
+  _p(
+    '## APP electrical project after the MEP sync + re-feed '
+    '(MEP board was fed by $_mepFedByBefore before the re-feed)',
+  );
+  for (final p in project.panels) {
+    _p(
+      'panel ${p.id} "${p.name}" tag=${p.tag} system=${p.system.name} '
+      'V=${p.voltage.volts} source=${p.sourceType.name} '
+      'fedBy=${p.fedByCircuitId} essential=${p.essential} ways=${p.circuits.length}',
+    );
+    for (final w in p.circuits) {
+      if (w.sourceEquipmentId == null &&
+          w.feedsPanelId == null &&
+          p.id != kTowerEssentialPanelId) {
+        continue;
+      }
+      _p(
+        '  ${w.id} "${w.name}" kind=${w.loadKind.name} loadW=${w.loadW} '
+        'motorKw=${w.motorKw} phases=${w.phases} cos=${w.cosPhi} '
+        'DF=${w.demandFactor} lifeSafety=${w.lifeSafety} cableType=${w.cableType} '
+        'starter=${w.starterType?.name} fla=${w.flaOverrideA?.amperes} '
+        'source=${w.sourceEquipmentId} feeds=${w.feedsPanelId} '
+        'L=${w.length.meters}',
+      );
+    }
+  }
+  _p('mepDutyFeedEnabled=${c.read(mepDutyFeedEnabledProvider)}');
+}
+
+void _dumpElectrical(ProviderContainer c) {
+  final project = c.read(electricalSizingProjectProvider);
+  final sys = c.read(electricalResultProvider);
+  final adv = c.read(electricalAdvancedProvider);
+  final fault = effectiveOriginFaultLevel(project, result: sys);
+  _p('## APP electrical');
+  _p(
+    'panels=${project.panels.map((p) => '${p.id}:${p.name}').toList()} '
+    'earthing=${project.earthingSystem.name} supplyKind=${project.supplyKind.name} '
+    'declared=${project.supplyCapacityVa?.voltAmperes} VA '
+    'genset kva=${project.sources?.generator?.kva?.inKilovoltAmperes} '
+    'units=${project.sources?.generator?.units} '
+    'mode=${project.sources?.generator?.mode.name} '
+    'transfer=${project.sources?.generator?.transfer.name} '
+    'backupFractionTyped=${project.sources?.generator?.backupFractionTyped}',
+  );
+  _p(
+    'originFault=${_f(fault.amperes, 1)} A basis=${fault.basis.name} '
+    'study.originFaultkA=${adv.fault.originFaultkA} '
+    'busbarClearing=${effectiveBusbarClearingTimeS(project)} s',
+  );
+  final model = {
+    for (final p in project.panels)
+      for (final ci in p.circuits) ci.id: ci,
+  };
+  for (final pid in sys.order) {
+    final p = sys.panels[pid]!;
+    final panelModel = project.panels.firstWhere((x) => x.id == pid);
+    _p(
+      '### panel $pid "${p.name}" system=${p.system.name} '
+      'V=${panelModel.voltage.volts} install=${panelModel.installMethod.name} '
+      'diversity=${panelModel.diversityFactor} essential=${panelModel.essential} '
+      'fedBy=${panelModel.fedByCircuitId}',
+    );
+    _p(
+      '| way | name | kind | 3ph | phase | cos | DF | loadW | connW | Ib | run | '
+      'breaker | poles | kA | cable | Iz (base, k, Izreq, rule) | '
+      'VD% own/lim | VD% cum | RCD | L m | lifeSafety | starter |',
+    );
+    for (final r in p.circuits) {
+      final m = model[r.circuitId];
+      final cf = adv.fault.circuits[r.circuitId];
+      final poles = r.phase.isThreePhase ? 3 : 1;
+      _p(
+        '| ${r.circuitId} | ${r.name} | ${r.loadKind.name} | ${r.threePhase} | '
+        '${r.phase.name} | ${m?.cosPhi} | ${m?.demandFactor} | ${r.loadW} | '
+        '${r.connectedW} | ${r.designCurrent.amperes} '
+        '(exact ${r.designCurrentExactA}) | ${r.runCurrentA.amperes} | '
+        '${r.breaker.deviceClass.code} ${r.breaker.ratingA.amperes}A '
+        '${r.breaker.curve.name.toUpperCase()} | ${poles}P | '
+        '${cf?.breakerKa} (fault ${cf?.faultkA}, Zs ${_f(cf?.zsOhm, 4)}/${_f(cf?.zsMaxOhm, 4)}, '
+        'ADS ${cf?.adsOk}${cf?.adsByRcd == true ? ' by RCD' : ''}) | '
+        '${r.grounding.cableType} ${r.grounding.cableSpec} '
+        '(${r.cable.csaMm2} mm2, PE ${r.grounding.peCsaMm2}, cores ${r.grounding.cores}) | '
+        '${r.cable.deratedIz.amperes} (${r.cable.baseKha.amperes}, '
+        '${r.cable.deratingFactor}, ${r.cable.izRequired?.amperes}, '
+        '${r.cable.appliedRule}, vdDriven ${r.cable.vdDriven}'
+        '${r.cableRaisedForAds ? ', raised-for-ads' : ''}'
+        '${r.cableRaisedForDownstreamVd ? ', raised-for-downstream-vd' : ''}'
+        '${r.cableRaisedForSelectivity ? ', raised-for-selectivity' : ''}'
+        '${r.cableRaisedForCumulativeVd ? ', raised-for-cumulative-vd' : ''}) | '
+        '${_f(r.voltageDrop.dropPercent)} (${_f(r.voltageDrop.dropV)} V) / '
+        '${r.voltageDrop.limitPercent} | ${_f(r.cumulativeDropPercent)} | '
+        '${r.rcd.required ? '${r.rcd.ratingMa} mA ${r.rcd.type?.name}' : 'none (${r.rcd.reason})'} | '
+        '${r.lengthM} | ${m?.lifeSafety} | ${m?.starterType?.name} |',
+      );
+    }
+    final inc = p.incomer;
+    _p(
+      'connectedW=${p.connectedW} demandW=${p.demandW} demandVa=${p.demandVa} '
+      'demandCurrent=${p.demandCurrent.amperes} '
+      'largestDownstreamRunA=${p.largestDownstreamRunA}',
+    );
+    _p(
+      'incomer=${inc.breaker.deviceClass.code} ${inc.breaker.ratingA.amperes}A '
+      '${inc.breaker.curve.name.toUpperCase()} ${inc.poles}P '
+      'sizingCurrent=${inc.sizingCurrent?.amperes} overRange=${inc.overRange}',
+    );
+    final b = p.busbar;
+    _p(
+      'busbar=${b.widthMm}x${b.thicknessMm} (${b.csaMm2} mm2, x${b.parallelBars}) '
+      'ampacity=${b.ampacityA.amperes} A total=${b.totalCurrentA.amperes} A '
+      'reason=${b.sizingReason.name}',
+    );
+    final pf = adv.fault.panels[pid];
+    _p(
+      'busFault=${pf?.prospectiveFaultkA} kA incomerKa=${pf?.incomerKa} '
+      'adequate=${pf?.incomerAdequate}',
+    );
+    _p(
+      'phaseBalance l1=${p.phaseBalance.l1} l2=${p.phaseBalance.l2} '
+      'l3=${p.phaseBalance.l3}',
+    );
+  }
+  _p(
+    'supply: connectedW=${sys.supply.connectedW} demandW=${sys.supply.demandW} '
+    'demandVa=${sys.supply.demandVa.voltAmperes} system=${sys.supply.system.name} '
+    'V=${sys.supply.voltage.volts}',
+  );
+  final s = adv.supply;
+  _p(
+    'supplyDesign: level=${s.lvOrMv.name} demandKva=${s.demandKva} '
+    'declared=${s.declared} declaredBelowDemand=${s.declaredBelowDemand} '
+    'tx=${s.transformerKva} | ${s.note}',
+  );
+  _p(
+    'recommendedDaya=${adv.recommendedDayaVa} VA '
+    'threePhase=${adv.recommendedDayaThreePhase}',
+  );
+  final roots = originPanelIdsOf(sys, project).toList()..sort();
+  for (final id in roots) {
+    final va = rootServiceBasisVa(project, sys, id);
+    _p(
+      'root $id basisVa=${_f(va, 1)} lineA=${_f(va / (1.7320508075688772 * 400), 2)}',
+    );
+  }
+  _p(
+    'servicePerPhaseBasisVa=${_f(servicePerPhaseBasisVa(project, sys, roots), 1)}',
+  );
+  // Genset.
+  final gen = project.sources?.generator;
+  _p('## APP genset');
+  _p(
+    'backedPanels=${(gensetBackedPanelIds(project).toList()..sort())} '
+    'effectiveBackupFraction=${effectiveGeneratorBackupFraction(project)} '
+    'essentialDemandVa=${_f(essentialDemandVa(project, sys), 1)} '
+    'essentialDemandW=${_f(essentialDemandW(project, sys), 1)} '
+    'backupVa=${_f(gensetBackupDemandVa(project, sys).voltAmperes, 1)} '
+    'backupW=${_f(gensetBackupDemandW(project, sys).watts, 1)} '
+    'phaseDemandVa=${_f(gensetPhaseDemandVa(project, sys), 1)}',
+  );
+  final motors = gensetStartMotors(project, sys: sys);
+  for (final m in motors) {
+    _p(
+      'startMotor ${m.name} circuit=${m.circuitId} shaft=${_f(m.shaftPower.inKiloWatts, 3)} kW '
+      'starter=${m.starterType} startKva=${_f(m.startKva?.inKilovoltAmperes, 2)} '
+      'lifeSafety=${m.lifeSafety}',
+    );
+  }
+  _p(
+    'startFloor=${_f(gensetStartFloorFor(project, sys).inKilovoltAmperes, 2)} kVA',
+  );
+  if (gen != null) {
+    final r = sizeGenerator(
+      gensetBackupDemandVa(project, sys),
+      mode: gen.mode,
+      transfer: gen.transfer,
+      backupPower: gensetBackupDemandW(project, sys),
+      minKvaForStart: gensetStartFloorFor(project, sys),
+    );
+    _p(
+      'sized (unforced): rating=${_f(r.ratingKva.inKilovoltAmperes, 1)} kVA '
+      'units=${r.units} backup=${_f(r.backupKva.inKilovoltAmperes, 2)} kVA '
+      'fuel=${r.fuelLph} L/h dayTank=${r.dayTankL} L runtime=${r.runtimeHours} h | '
+      '${r.note}',
+    );
+    _p(
+      'required (load) kVA=${_f(requiredGeneratorKva(gensetBackupDemandVa(project, sys), mode: gen.mode, backupPower: gensetBackupDemandW(project, sys)), 2)}',
+    );
+  }
+  _p('gensetPlantVa=${gensetPlantVa(project, sys)}');
+  final gs = adv.powerOneLine?.gensetStart;
+  _p(
+    'oneLine gensetStart: ${gs == null ? null : 'genset=${_f(gs.gensetKva.inKilovoltAmperes, 1)} kVA '
+              'limiting=${gs.limitingMotorName} startKva=${_f(gs.startingKva.inKilovoltAmperes, 2)} '
+              'dip=${gs.estimatedDipPct}% acceptable=${gs.acceptable} '
+              'recommendedMin=${_f(gs.recommendedMinGensetKva.inKilovoltAmperes, 2)} kVA | ${gs.note}'}',
+  );
+  for (final n in adv.powerOneLine?.nodes ?? const []) {
+    _p('oneLine node ${n.id} ${n.kind} "${n.label}" ${n.sub ?? ''}');
+  }
+  for (final e in adv.powerOneLine?.edges ?? const []) {
+    _p('oneLine edge ${e.from} -> ${e.to} ${e.label ?? ''}');
+  }
+  for (final i in adv.powerOneLine?.interlocks ?? const []) {
+    _p('oneLine interlock $i');
+  }
+  _p('gensetAdsFailedCircuitIds=${adv.gensetAdsFailedCircuitIds}');
+  _p('## APP electrical warnings (electricalAllWarningsProvider)');
+  for (final w in c.read(electricalAllWarningsProvider)) {
+    _p(
+      '- [${w.severity.name}] ${w.code} (${w.panelId}/${w.circuitId}): '
+      '${w.message}',
+    );
+  }
+}
+
+void _dumpHvac(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final sizing = c.read(sizingProvider);
+  final rooms = c.read(roomAreasProvider);
+  final project = c.read(projectControllerProvider);
+  final ducts = c.read(ductSettingsProvider);
+  _p(
+    '## APP HVAC (duct settings shape=${ducts.shape.name} '
+    'method=${ducts.method.name})',
+  );
+  for (final r in rooms) {
+    final mpp = project.calibrationFor(r.sheetId)!.metersPerPixel;
+    final s = c.read(roomSizingProvider)[r.id];
+    _p(
+      '${r.id} "${r.name}" type=${r.roomType.name} floor=${r.floorIndex} '
+      '${_f(r.widthPx * mpp)} x ${_f(r.heightPx * mpp)} m '
+      'area=${_f(r.netAreaM2(mpp, rooms))} m2 ceiling=${r.ceilingHeightM} m '
+      'ACH=${r.effectiveAch()} equipment=${r.equipmentKind.name}',
+    );
+    if (s != null) {
+      _p(
+        '  airflow=${_f(s.airflow.inLitersPerSecond, 3)} L/s '
+        '(${_f(s.airflowCfm, 1)} CFM) volume=${_f(s.roomVolumeM3)} m3',
+      );
+      _p(
+        '  supply bank x${s.supply.count} each ${_f(s.supply.airflowEach.inLitersPerSecond, 3)} '
+        'L/s face ${s.supply.faceMm} faceV ${_f(s.supply.each.faceVelocity.metersPerSecond)}; '
+        'return bank x${s.return_.count} each ${_f(s.return_.airflowEach.inLitersPerSecond, 3)} '
+        'L/s face ${s.return_.faceMm} faceV ${_f(s.return_.each.faceVelocity.metersPerSecond)}',
+      );
+      _p(
+        '  trunk D=${s.supplyDuctDiameter.inMillimeters} v=${_f(s.supplyDuctVelocity.metersPerSecond)} '
+        'equipment static=${_f(s.equipment.totalStaticPressure.pascals, 2)} Pa '
+        'motor=${_f(s.equipment.selectedMotor.inKiloWatts, 2)} kW '
+        'input=${_f(s.equipment.motorInputPower.watts, 2)} W',
+      );
+      final load = c.read(roomCoolingLoadProvider(r.id));
+      if (load != null) {
+        _p(
+          '  cooling load=${_f(load.btuPerHr, 1)} BTU/h pk=${_f(load.pk)} '
+          'recommended=${load.recommended.pk} PK exceedsRange=${load.recommended.exceedsRange}',
+        );
+      }
+    }
+  }
+  _p(
+    'fixture stamped airflow: SD each ${_f(kTowerDiffuserFlow.inLitersPerSecond, 4)} L/s face $kTowerDiffuserFaceMm, '
+    'RG x${kTowerReturnGrilles.length} each ${_f(kTowerReturnFlow.inLitersPerSecond, 4)} L/s face $kTowerReturnFaceMm, '
+    'EG x2 each ${_f(kTowerExhaustFlow.inLitersPerSecond, 4)} L/s face $kTowerExhaustFaceMm',
+  );
+  _p('## APP air terminals (node | comp | airflow L/s | face mm)');
+  for (final n in net.nodes) {
+    if (n.airflow == null && n.component?.role != NodeRole.plant) continue;
+    _p(
+      '${n.id} | ${n.component?.name} | ${_f(n.airflow?.inLitersPerSecond, 4)} | '
+      '${n.faceWidthMm}x${n.faceHeightMm}',
+    );
+  }
+  _p(
+    '## APP ducts (edge | service | L m | Q L/s | D mm | W x H | v m/s | '
+    'friction Pa/m galvanised default | product | friction Pa/m at product)',
+  );
+  for (final e in net.edges) {
+    if (e.service.regime != FlowRegime.air) continue;
+    final s = sizing[e.id];
+    _p(
+      '| ${e.id} | ${e.service.name} | ${_f(_len(c, e))} | '
+      '${_f(s?.flow.inLitersPerSecond, 3)} | ${s?.diameter.inMillimeters} | '
+      '${s?.width == null ? '-' : '${s!.width!.inMillimeters}x${s.height!.inMillimeters}'} | '
+      '${_f(s?.velocity.metersPerSecond)} | '
+      '${s == null ? '-' : _f(ductFrictionPaPerMetre(s.flow, s.diameter), 4)} | '
+      '${effectiveDuctProductFor(e).name} | '
+      '${s == null ? '-' : _f(ductFrictionPaPerMetre(s.flow, s.diameter, roughness: ductRoughnessFor(effectiveDuctProductFor(e))), 4)} |',
+    );
+  }
+  _p('## APP air velocity checks');
+  for (final e in c.read(airVelocityChecksProvider).entries) {
+    final v = e.value;
+    _p(
+      '${e.key}: ${_f(v.actual.metersPerSecond)} in '
+      '[${_f(v.min.metersPerSecond)}, ${_f(v.max.metersPerSecond)}] ${v.verdict.name}',
+    );
+  }
+  _p(
+    'airUnsized=${(c.read(airUnsizedProvider).toList()..sort())} '
+    'airOverCapacity=${c.read(airOverCapacityProvider)}',
+  );
+  for (final svc in [
+    ServiceType.duct,
+    ServiceType.returnAir,
+    ServiceType.exhaust,
+  ]) {
+    for (final s in c.read(airSystemsProvider(svc))) {
+      _p(
+        'airSystem ${svc.name} root=${s.fanNodeId} '
+        'trunk=${_f(s.trunk.inLitersPerSecond, 3)} L/s '
+        'stat=${_f(s.stat.pascals, 2)} Pa intake=${_f(s.intake.pascals, 2)} Pa '
+        'inlineFans=${s.inlineFanIds}',
+      );
+    }
+  }
+  for (final id in [kTowerAhuId, kTowerExhaustFanId]) {
+    _p(
+      'internal static ($id) = '
+      '${_f(airUnitInternalStatic(net.nodeById(id)).pascals, 1)} Pa',
+    );
+  }
+  for (final e in c.read(supplyFanDutiesByRootProvider).entries) {
+    final d = e.value;
+    _p(
+      'fanDuty ${e.key}: Q=${_f(d.airflow.inLitersPerSecond, 3)} L/s '
+      'static=${_f(d.totalStaticPressure.pascals, 2)} Pa air=${_f(d.airPower.watts, 2)} W '
+      'shaft=${_f(d.shaftPower.watts, 2)} W input=${_f(d.motorInputPower.watts, 2)} W '
+      'motor=${_f(d.selectedMotor.inKiloWatts, 2)} kW',
+    );
+  }
+  final df = c.read(ductFanProvider);
+  _p(
+    'ductFan=${df == null ? null : '${_f(df.totalStaticPressure.pascals, 2)} Pa '
+              '${_f(df.selectedMotor.inKiloWatts, 2)} kW'} '
+    'airBalance=${c.read(airBalanceProvider)}',
+  );
+  for (final e in c.read(roomAirUnitDutiesProvider).entries) {
+    _p(
+      'roomAirUnitDuty ${e.key}: room=${e.value.room.id} '
+      'static=${_f(e.value.duty.totalStaticPressure.pascals, 2)} Pa '
+      'motor=${_f(e.value.duty.selectedMotor.inKiloWatts, 2)} kW',
+    );
+  }
+}
+
+/// Per-floor WCb (the farthest WC) and every PRV station.
+void _dumpWcbAndPrv(ProviderContainer c, String label) {
+  final net = c.read(sizingNetworkProvider);
+  final down = c.read(downfeedProvider);
+  final del = c.read(downfeedDeliveredProvider);
+  _p(
+    '## APP $label per-floor WCb (floor | riser | gravity static | gravity '
+    'residual | delivered static | delivered residual)',
+  );
+  for (var f = kTowerFloors - 1; f >= 0; f--) {
+    final id = 'WCb$f';
+    _p(
+      '| $f | ${towerRiserNode(f)} | '
+      '${_f(down?.noFlowStaticPressure[id]?.inKiloPascals)} | '
+      '${_f(down?.residualPressure[id]?.inKiloPascals)} | '
+      '${_f(del?.noFlowStaticPressure[id]?.inKiloPascals)} | '
+      '${_f(del?.residualPressure[id]?.inKiloPascals)} |',
+    );
+  }
+  final setpoint = defaultPrvSetpoint(
+    targetResidual: c.read(targetResidualProvider),
+    maxFixtureStatic: const SniProfile().maxFixtureStaticPressure.value,
+  );
+  _p('## APP $label PRV stations (setpoint ${_f(setpoint.inKiloPascals)} kPa)');
+  for (final n in net.nodes) {
+    if (n.component != NodeComponent.prv) continue;
+    final k = n.floorIndex;
+    final above = 'GR${k + 1}';
+    final below = 'GR$k';
+    _p(
+      '${n.id} floor=$k inlet $above static=${_f(del?.noFlowStaticPressure[above]?.inKiloPascals)} '
+      'residual=${_f(del?.residualPressure[above]?.inKiloPascals)} | '
+      'PRV static=${_f(del?.noFlowStaticPressure[n.id]?.inKiloPascals)} '
+      'residual=${_f(del?.residualPressure[n.id]?.inKiloPascals)} | '
+      'outlet $below static=${_f(del?.noFlowStaticPressure[below]?.inKiloPascals)} '
+      'residual=${_f(del?.residualPressure[below]?.inKiloPascals)} | '
+      'WCb$k static=${_f(del?.noFlowStaticPressure['WCb$k']?.inKiloPascals)}',
+    );
+  }
+  _p(
+    'downfeedOverPressure count=${c.read(downfeedOverPressureProvider).length} '
+    'floors=${{for (final o in c.read(downfeedOverPressureProvider)) net.nodeById(o.nodeId)?.floorIndex}.toList()..sort()}',
+  );
+}
+
+/// The hot-water field, the heater and the recirculation.
+void _dumpHotWater(ProviderContainer c) {
+  final net = c.read(sizingNetworkProvider);
+  final sizing = c.read(sizingProvider);
+  final project = c.read(projectControllerProvider);
+  final del = c.read(downfeedDeliveredProvider);
+  final down = c.read(downfeedProvider);
+  _p('## APP hot water');
+  _p(
+    'heaters=${hotWaterHeaters(net).map((k, v) => MapEntry(k, v.length))} '
+    'flowTemp=${c.read(hotWaterFlowTempProvider)} C dT=${c.read(hotWaterDeltaTProvider)} K '
+    'heater capacity: no provider (WH is an untyped plant, not an electrical load)',
+  );
+  for (final id in [
+    'BR29',
+    'WH',
+    for (final f in kTowerBoostedFloors) ...['HW$f', 'LAVa$f', 'LAVb$f'],
+  ]) {
+    _p(
+      '$id gravity static/residual=${_f(down?.noFlowStaticPressure[id]?.inKiloPascals)}/'
+      '${_f(down?.residualPressure[id]?.inKiloPascals)} delivered='
+      '${_f(del?.noFlowStaticPressure[id]?.inKiloPascals)}/'
+      '${_f(del?.residualPressure[id]?.inKiloPascals)} kPa',
+    );
+  }
+  double len(NetEdge e) => edgeLength(
+    e,
+    net,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    mounting: project.mounting,
+  ).meters;
+  for (final l in hotWaterRecircLoops(net, sizing, lengthOf: len)) {
+    _p(
+      'loop root=${l.rootId} circulated=${_f(l.circulatedLengthM)} m '
+      'return=${_f(l.returnLengthM)} m drawnLoop=${_f(l.drawnLoopLengthM)} '
+      'heatLoss=${_f(heatLossFromLength(loopLength: Length(l.circulatedLengthM + l.returnLengthM)).watts, 1)} W '
+      'indexPath=${[for (final s in l.indexPath) '${_f(s.length.meters)}m DN${s.diameter.inMillimeters}']} '
+      'shares=${l.indexFlowShares}',
+    );
+  }
+  for (final s in c.read(hotWaterRecircSystemsProvider)) {
+    final d = s.design;
+    _p(
+      'recirc root=${s.rootId} drawnReturn=${s.drawnReturn} '
+      'assumedReturn=${_f(s.assumedReturnLengthM)} m '
+      'flow=${_f(d.recircFlow.inLitersPerSecond, 5)} L/s '
+      'loopHead=${_f(d.loopHead.meters, 4)} m loopLength=${_f(d.loopLength.meters)} m '
+      'returnTemp=${_f(d.returnTempC, 1)} C legionella=${d.legionellaRisk} | '
+      'pump Q=${_f(d.pump.flow.inLitersPerSecond, 5)} H=${_f(d.pump.head.meters, 4)} '
+      'hyd=${_f(d.pump.hydraulicPower.watts, 2)} shaft=${_f(d.pump.shaftPower.watts, 2)} '
+      'input=${_f(d.pump.motorInputPower.watts, 2)} motor=${_f(d.pump.selectedMotor.inKiloWatts, 2)} kW',
+    );
+  }
+  _p(
+    'assumedReturn=${c.read(hotWaterAssumedReturnProvider)} '
+    'legionella=${c.read(hotWaterLegionellaProvider)}',
+  );
+}
+
+/// Transformer, LV fault level, MV-side device, power factor + capacitor
+/// bank, and the recommendations an undeclared run reads.
+void _dumpSupply(ProviderContainer c, String label) {
+  final project = c.read(electricalSizingProjectProvider);
+  final sys = c.read(electricalResultProvider);
+  final adv = c.read(electricalAdvancedProvider);
+  final s = adv.supply;
+  final fault = effectiveOriginFaultLevel(project, result: sys);
+  final kva = (s.transformerKva ?? 0) * s.units;
+  _p('## APP $label supply / transformer / power factor');
+  _p(
+    'declared PLN=${project.supplyCapacityVa?.voltAmperes} VA '
+    'transformerKva=${project.transformerKva?.inKilovoltAmperes} '
+    'genset=${project.sources?.generator?.kva?.inKilovoltAmperes} kVA '
+    'capacitorBankKvar=${project.capacitorBankKvar}',
+  );
+  _p(
+    'level=${s.lvOrMv.name} mv=${s.mvVoltage?.volts} V demandKva=${s.demandKva} '
+    'tx=${s.transformerKva} x${s.units} declared=${s.declared} '
+    'declaredBelowDemand=${s.declaredBelowDemand} ladderExceeded=${s.ladderExceeded} '
+    'Z=${s.impedancePct}% primaryFlc=${s.primaryFlc?.amperes} A '
+    'secondaryFlc=${s.secondaryFlc?.amperes} A '
+    'loading=${kva > 0 ? _f(100 * s.demandKva / kva, 2) : '-'} %',
+  );
+  _p('note: ${s.note}');
+  _p(
+    'recommendedDaya=${adv.recommendedDayaVa} threePhase=${adv.recommendedDayaThreePhase}',
+  );
+  _p(
+    'LV origin fault=${_f(fault.amperes, 1)} A basis=${fault.basis.name} '
+    'study.originFaultkA=${adv.fault.originFaultkA}',
+  );
+  final pf = adv.powerFactor;
+  _p(
+    'powerFactor: kW=${pf.totalKw} kvar=${pf.totalKvar} existing=${pf.existingPf} '
+    'uncorrected=${pf.uncorrectedPf} installed=${pf.installedKvar} '
+    'leading=${pf.leading} target=${pf.targetPf} needed=${pf.needed} '
+    'required=${pf.requiredKvar} bank=${pf.bankKvar} x${pf.banks}',
+  );
+  for (final n in adv.powerOneLine?.nodes ?? const []) {
+    _p('oneLine node ${n.id} ${n.kind} "${n.label}" ${n.sub ?? ''}');
+  }
+  final gen = project.sources?.generator;
+  if (gen != null) {
+    final r = sizeGenerator(
+      gensetBackupDemandVa(project, sys),
+      mode: gen.mode,
+      transfer: gen.transfer,
+      backupPower: gensetBackupDemandW(project, sys),
+      minKvaForStart: gensetStartFloorFor(project, sys),
+    );
+    _p(
+      'genset sized (unforced): ${_f(r.ratingKva.inKilovoltAmperes, 1)} kVA '
+      'x${r.units} backup=${_f(r.backupKva.inKilovoltAmperes, 2)} kVA '
+      'startFloor=${_f(gensetStartFloorFor(project, sys).inKilovoltAmperes, 2)} kVA | ${r.note}',
+    );
+  }
+}
+
+/// The exhaust fan duty (the supply / return AHU duty is in [_dumpHvac]).
+void _dumpExhaust(ProviderContainer c) {
+  for (final e in c.read(exhaustFanDutiesByRootProvider).entries) {
+    final d = e.value;
+    _p(
+      'exhaustFanDuty ${e.key}: Q=${_f(d.airflow.inLitersPerSecond, 3)} L/s '
+      'static=${_f(d.totalStaticPressure.pascals, 2)} Pa air=${_f(d.airPower.watts, 2)} W '
+      'shaft=${_f(d.shaftPower.watts, 2)} W input=${_f(d.motorInputPower.watts, 2)} W '
+      'motor=${_f(d.selectedMotor.inKiloWatts, 2)} kW',
+    );
+  }
+  final x = c.read(exhaustFanProvider);
+  _p(
+    'exhaustFan=${x == null ? null : '${_f(x.totalStaticPressure.pascals, 2)} Pa '
+              '${_f(x.selectedMotor.inKiloWatts, 2)} kW'}',
+  );
+}
+
+/// The SOLVED-duty MEP loads (fed once the duty feed is on).
+void _dumpDutyLoads(ProviderContainer c) {
+  _p(
+    '## APP solved-duty MEP loads (mepEquipmentLoadsProvider; feed '
+    'enabled=${c.read(mepDutyFeedEnabledProvider)})',
+  );
+  for (final l in c.read(mepEquipmentLoadsProvider)) {
+    _p(
+      '${l.id} "${l.name}" source=${l.source.name} '
+      'mech=${_f(l.mechanicalPower.watts, 1)} W '
+      'input=${_f(l.electricalInputPower?.watts, 1)} W',
+    );
+  }
+}
+
+/// Every Review issue and electrical warning, counted by code.
+void _dumpCounts(ProviderContainer c, String label) {
+  final issues = <String, int>{};
+  for (final i in c.read(designIssuesProvider)) {
+    final parts = i.kind.split(':');
+    final kind = i.isVerify
+        ? 'VERIFY'
+        : (parts.first == 'electrical' && parts.length > 1
+              ? '${parts[0]}:${parts[1]}'
+              : parts.first);
+    issues.update(
+      '[${i.severity.name}] $kind',
+      (n) => n + 1,
+      ifAbsent: () => 1,
+    );
+  }
+  _p('## APP $label Review issues by code');
+  for (final e
+      in (issues.entries.toList()..sort((a, b) => a.key.compareTo(b.key)))) {
+    _p('- ${e.key} x${e.value}');
+  }
+  final elec = <String, int>{};
+  for (final w in c.read(electricalAllWarningsProvider)) {
+    elec.update(
+      '[${w.severity.name}] ${w.code}',
+      (n) => n + 1,
+      ifAbsent: () => 1,
+    );
+  }
+  _p('## APP $label electrical warnings by code');
+  for (final e
+      in (elec.entries.toList()..sort((a, b) => a.key.compareTo(b.key)))) {
+    _p('- ${e.key} x${e.value}');
+  }
+}
+
+/// The tower with nothing declared on the supply (the recommendation run).
+ReferenceBuilding _undeclared({List<int> prvFloors = const []}) {
+  final b = buildTower(prvFloors: prvFloors);
+  return ReferenceBuilding(
+    name: b.name,
+    building: b.building,
+    mounting: b.mounting,
+    sheets: b.sheets,
+    calibrations: b.calibrations,
+    network: b.network,
+    electrical: buildTowerElectrical(
+      declaredPlnVa: null,
+      transformerKva: null,
+      gensetKva: null,
+      capacitorKvar: null,
+    ),
+    occupancy: b.occupancy,
+  );
+}
+
+void main() {
+  test('reference tower loads through the store intents and every provider '
+      'evaluates (BEFORE and AFTER the PRV stations)', () async {
+    // BEFORE: no PRV drawn, nothing declared on the supply.
+    final before = await _loadTower(_undeclared());
+    addTearDown(before.dispose);
+    final project = before.read(projectControllerProvider);
+    expect(project.floors.length, kTowerFloors);
+    expect(project.calibrations.length, kTowerFloors);
+    expect(before.read(feedStrategyProvider), FeedStrategy.downfeed);
+    expect(before.read(roomAreasProvider).length, 2);
+    final sz0 = before.read(sizingProvider);
+    for (final e in before.read(sizingNetworkProvider).edges) {
+      expect(sz0[e.id], isNotNull, reason: e.id);
+    }
+    expect(before.read(downfeedProvider), isNotNull);
+    expect(before.read(downfeedDeliveredProvider), isNotNull);
+    before.read(zonesProvider);
+    before.read(zoneStaticsProvider);
+    before.read(designIssuesProvider);
+    if (_dump) {
+      _p('# BEFORE (no PRV drawn, supply undeclared)');
+      _dumpDownfeed(before, 'BEFORE');
+      _dumpWcbAndPrv(before, 'BEFORE');
+      _dumpSupply(before, 'BEFORE (undeclared)');
+      _dumpIssues(before, 'BEFORE');
+      _dumpCounts(before, 'BEFORE');
+    }
+
+    // AFTER: the fixture as specified.
+    final c = await _loadTower(buildTower());
+    addTearDown(c.dispose);
+    final sizing = c.read(sizingProvider);
+    for (final e in c.read(sizingNetworkProvider).edges) {
+      expect(sizing[e.id], isNotNull, reason: e.id);
+    }
+    expect(c.read(downfeedProvider), isNotNull);
+    expect(c.read(downfeedDeliveredProvider), isNotNull);
+    c.read(supplyMoverDutiesProvider);
+    c.read(pumpDutyProvider);
+    expect(c.read(fireSystemBasesProvider), isNotEmpty);
+    c.read(firePumpDutyProvider);
+    c.read(fireJockeyDutyProvider);
+    expect(c.read(bomProvider), isNotEmpty);
+    c.read(fittingsProvider);
+    c.read(hotWaterRecircSystemsProvider);
+    c.read(supplyFanDutiesByRootProvider);
+    for (final r in c.read(roomAreasProvider)) {
+      c.read(roomCoolingLoadProvider(r.id));
+    }
+    c.read(designIssuesProvider);
+    c.read(complianceSummaryProvider);
+    final ep = c.read(electricalProjectProvider);
+    final mep = ep.panels.where((p) => p.id == _mepBoard).single;
+    final feeder = ep.panels
+        .expand((p) => [for (final w in p.circuits) (p, w)])
+        .where((x) => x.$2.feedsPanelId == _mepBoard)
+        .single;
+    expect(feeder.$1.id, kTowerEssentialPanelId);
+    expect(feeder.$2.cableType, 'FRC');
+    expect(mep.fedByCircuitId, feeder.$2.id);
+    final sys = c.read(electricalResultProvider);
+    for (var f = 0; f < kTowerFloors; f++) {
+      expect(sys.panels[towerFloorPanelId(f)], isNotNull);
+    }
+    c.read(electricalAdvancedProvider);
+    c.read(electricalAllWarningsProvider);
+
+    if (_dump) {
+      _p('# AFTER (the fixture: PRV stations drawn, supply declared)');
+      _dumpMechanical(c);
+      _dumpDownfeed(c, 'AFTER');
+      _dumpWcbAndPrv(c, 'AFTER');
+      _dumpHotWater(c);
+      _dumpFire(c);
+      _dumpHvac(c);
+      _dumpExhaust(c);
+      _dumpRooms(c);
+      _dumpBom(c);
+      _dumpIssues(c, 'AFTER');
+      _dumpMachines(c);
+      _dumpDutyLoads(c);
+      _dumpMepSync(c);
+      _dumpSupply(c, 'AFTER');
+      _dumpElectrical(c);
+      _dumpCounts(c, 'AFTER');
+      // ignore: avoid_print
+      print(_out.toString());
+    }
+    // Drawing backlog C-2 — two full tower loads (each now also setting the
+    // 32 board floors through the store intent) overrun the default 30 s
+    // under a parallel suite.
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
+  // Backlog D-4 — the seven PRV stations placed ON the riser with the store
+  // intent solve and zone exactly as the fixture's spliced stations; the
+  // only difference is the BOM: the splice's 0 m RUNs PRVk → GRk print a
+  // 0.000 m cold-water run line (DN40, PPR; DN65 / DN80 too before backlog
+  // W-1 gave the fill line those bores) that the drawn stations (two riser
+  // segments, the lower one 0 m inside its riser line) do not. So the tower keeps its spliced fixture; this pins the difference.
+  test('D-4: the PRVs placed with insertComponentOnRiser = the spliced '
+      'fixture except one 0 m run BOM line', () async {
+    final fixture = await _loadTower(buildTower());
+    final drawn = await _loadTower(buildTower(prvFloors: const []));
+    final ids = placePrvsByIntent(drawn, kTowerPrvFloors);
+    final a = prvFingerprint(fixture);
+    final b =
+        prvFingerprint(drawn, {for (final e in ids.entries) e.value: e.key});
+    if (_dump) {
+      // ignore: avoid_print
+      print([
+        for (final l in {...a}.difference({...b})) '- $l',
+        for (final l in {...b}.difference({...a})) '+ $l',
+      ].join('\n'));
+    }
+    // Backlog W-1 (2026-11-14): the meter feed is now DN65 and the fill
+    // line DN80, so the splice's 0 m DN65 / DN80 runs add 0 m to BOM lines
+    // that exist in both drawings; only the DN40 0 m line is still the
+    // splice's own.
+    expect({...a}.difference({...b}), {
+      'bom coldWater run 40 PPR 0.000000000 CW',
+    });
+    expect({...b}.difference({...a}), isEmpty);
+    fixture.dispose();
+    drawn.dispose();
+  });
+
+  group('hand values (app providers, pass 3)', () {
+    late ProviderContainer before;
+    late ProviderContainer c;
+    setUpAll(() async {
+      before = await _loadTower(_undeclared());
+      c = await _loadTower(buildTower());
+    });
+    tearDownAll(() {
+      before.dispose();
+      c.dispose();
+    });
+    List<double> sorted3(dynamic pb) =>
+        ([pb.l1 as double, pb.l2 as double, pb.l3 as double]..sort());
+    ElectricalCircuitResult way(ProviderContainer x, String panel, String id) =>
+        x
+            .read(electricalResultProvider)
+            .panels[panel]!
+            .circuits
+            .firstWhere((w) => w.circuitId == id);
+    int count(ProviderContainer x, String prefix) => [
+      for (final i in x.read(designIssuesProvider))
+        if (i.kind.startsWith(prefix)) i,
+    ].length;
+
+    test('PRV zoning: 100 over-pressure findings BEFORE, seven stations '
+        'AFTER, none left', () {
+      for (final x in [before, c]) {
+        expect(
+          [
+            for (final z in x.read(zonesProvider))
+              (z.bottomFloorIndex, z.topFloorIndex),
+          ],
+          [
+            (20, 29), (17, 19), (14, 16), (11, 13), (8, 10), (5, 7), //
+            (2, 4), (0, 1),
+          ],
+        );
+      }
+      // BEFORE: floors 0..19 above 392.266 (WCb19 (120.0 − 77.1) x 9.81 =
+      // 420.849, WCb0 1166.409).
+      expect(before.read(downfeedOverPressureProvider).length, 100);
+      expect(count(before, 'downfeed-over-pressure'), 100);
+      expect(
+        before
+            .read(downfeedDeliveredProvider)!
+            .noFlowStaticPressure['WCb19']!
+            .inKiloPascals,
+        closeTo(420.849, 2e-3),
+      );
+      // AFTER: none; the zone tops read 255 + 2.6 x 9.81 = 280.506.
+      expect(c.read(downfeedOverPressureProvider), isEmpty);
+      expect(count(c, 'downfeed-over-pressure'), 0);
+      expect(count(c, 'pressure-zone'), 0);
+      final del = c.read(downfeedDeliveredProvider)!;
+      expect(
+        del.noFlowStaticPressure['WCb19']!.inKiloPascals,
+        closeTo(280.506, 2e-3),
+      );
+      expect(
+        del.noFlowStaticPressure['WCb0']!.inKiloPascals,
+        closeTo(319.746, 2e-3),
+      );
+      final prv = [
+        for (final l in c.read(componentTakeoffProvider))
+          if (l.component == NodeComponent.prv) l.count,
+      ];
+      expect(prv.fold<int>(0, (a, b) => a + b), 7);
+    });
+
+    test('movers: TP 128.830 m (TPS standby DF 0), BS 21.526 m '
+        '/ 1.1 kW; WCb26 the delivered critical', () {
+      final duties = c.read(supplyMoverDutiesProvider);
+      // Backlog W-1 / W-3 (2026-11-14) — TP: Q = RT's fill flow 30 000 L /
+      // 3600 s = 8.33333 L/s (was the 720-UBAP peak 10.79267); lift 120.000
+      // + 0.030888 m/m (DN80 at 8.33333, C150) x 124.0 m (GT → TP 1.0 + TP →
+      // U0 4.7 + 29 x 4.0 + U29 → RT 2.3) = 3.830 + the float-valve inlet
+      // residual 5.0 ⇒ 128.830 m (was 122.086 on DN100, 0 m inlet); 9810 x
+      // 8.33333e-3 x 128.830 = 10 531.9 W; / 0.70 = 15 045.5 W.
+      final tp = duties['TP']!;
+      expect(tp.flow.inLitersPerSecond, closeTo(8.33333, 5e-5));
+      expect(tp.head.meters, closeTo(128.830, 5e-4));
+      expect(tp.hydraulicPower.watts, closeTo(10531.9, 0.05));
+      expect(tp.shaftPower.watts, closeTo(15045.5, 0.05));
+      // 15 045.5 W > 15 kW ⇒ 18.5 kW (unchanged).
+      expect(tp.selectedMotor.inKiloWatts, closeTo(18.5, 1e-9));
+      final mep = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == _mepBoard)
+          .circuits;
+      expect(mep.firstWhere((w) => w.id == 'mep-node-TPS').demandFactor, 0);
+      // BS: 3.22133 L/s; (225 − 13.831) / 9.81 = 21.526 m; 9810 x
+      // 0.00322133 x 21.526 = 680.2 W ⇒ 1.1 kW.
+      final bs = duties['BS']!;
+      expect(bs.flow.inLitersPerSecond, closeTo(3.22133, 5e-5));
+      expect(bs.head.meters, closeTo(21.526, 5e-4));
+      expect(bs.hydraulicPower.watts, closeTo(680.2, 0.05));
+      expect(bs.selectedMotor.inKiloWatts, closeTo(1.1, 1e-9));
+      final del = c.read(downfeedDeliveredProvider)!;
+      expect(del.criticalNodeId, 'WCb26');
+      expect(
+        del.residualPressure['WCb26']!.inKiloPascals,
+        closeTo(134.370, 2e-3),
+      );
+      expect(count(c, 'downfeed-below-target'), 1);
+    });
+
+    test('hot water recirculation: assumed 10.0 m return, 0.02389 L/s, '
+        '0.37 kW', () {
+      final s = c.read(hotWaterRecircSystemsProvider).single;
+      expect(s.drawnReturn, isFalse);
+      // Backlog G-2 — WH is a typed water heater at Lantai 30's ceiling
+      // (119.7 m, level with HW29): WH → HW29 is its 2.0 m plan run (was
+      // 2.0 + the 0.3 m drop from the 120.0 m roof datum = 2.3). The index
+      // run 2.0 + 4.0 + 4.0 = 10.0 m (was 10.3).
+      expect(s.assumedReturnLengthM, closeTo(10.0, 1e-9));
+      // 25 W/m x 20.0 m = 500 W (was 515); 500 / (1000 x 4186 x 5) =
+      // 2.3889e-5 m3/s (was 2.4606e-5).
+      expect(s.design.recircFlow.inLitersPerSecond, closeTo(0.02389, 5e-6));
+      expect(s.design.pump.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+    });
+
+    test('backlog G-2: water heater WH-01 — 6 public lavatories, 40.88 L/h, '
+        '100 L, 2 kW; its 1-phase way on the MEP board', () {
+      // Office column (public occupancy): basin, public lavatory 6 gal/h.
+      // 6 x 6 = 36 gal/h x 3.785411784 = 136.275 L/h; x demand factor 0.30
+      // = recovery 40.882 L/h; x storage factor 2.00 = 81.765 L → 100 L
+      // tank; 40.882 x 4.186 x (60 − 25) / 3600 / 0.98 = 1.6978 kW → 2 kW
+      // element (recovers 2 x 0.98 x 3600 / (4.186 x 35) = 48.16 L/h).
+      final h = c.read(waterHeaterDesignsProvider)['WH']!;
+      expect(h.column, 'office');
+      expect(h.fixtures.values.single, 6);
+      expect(h.unratedFixtures, 0);
+      expect(h.hourlyDemandLph, closeTo(136.2748, 5e-4));
+      expect(h.recoveryLph, closeTo(40.8825, 5e-4));
+      expect(h.storageRequiredL, closeTo(81.7649, 5e-4));
+      expect(h.tankL, 100);
+      expect(h.heatingKwRequired, closeTo(1.69776, 5e-5));
+      expect(h.elementKw, 2);
+      expect(h.elementRecoveryLph, closeTo(48.159, 5e-3));
+      // The way: 2000 W resistive, cos φ 1, single-phase (2000 <= 5500 W)
+      // at 400 / √3 = 231 V ⇒ 2000 / 231 = 8.658 A; MCCB 16 C 1P, NYM 3 x
+      // 2.5 mm², heating, DF 1, minted by the DEFAULT placed sync.
+      final w = way(c, _mepBoard, 'mep-node-WH');
+      expect(w.loadW, closeTo(2000, 1e-9));
+      expect(w.designCurrentExactA, closeTo(8.658, 5e-4));
+      expect(w.breaker.ratingA.amperes, 16);
+      expect(w.cable.csaMm2, 2.5);
+      final cc = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == _mepBoard)
+          .circuits
+          .firstWhere((x) => x.id == 'mep-node-WH');
+      expect(cc.loadKind, LoadKind.heating);
+      expect(cc.phases, 1);
+      expect(cc.cosPhi, 1.0);
+      expect(cc.motorKw, isNull);
+      expect(
+          c
+              .read(placedEquipmentCircuitsProvider)
+              .any((x) => x.id == 'mep-node-WH'),
+          isTrue);
+    });
+
+    // Backlog Z-3 (2026-11-14) — the fire zone break (BT + the relay room
+    // on Lantai 15, index 14). Each zone is its own rating system (a storage
+    // tank is a hydraulic break, Round 51). Hand figures, NFPA 14 / 20
+    // (`// VERIFY`): two stacks per zone = 500 + 250 gpm = 47.3176 L/s;
+    // residual 690 kPa / 9.81 = 70.336 m; friction = max(15 m allowance, the
+    // sized index path); HW C 120, hf = 10.67 L Q^1.852 / (C^1.852 D^4.8704).
+    test('fire zones: zone 1 FP 47.3176 L/s @ 142.536 m / 110 kW (own zone '
+        'governs the relay), zone 2 FP2 @ 146.536 m / 132 kW; BT 90 000 L >= '
+        '85 172 L', () {
+      final sz = c.read(sizingProvider);
+      // Zone 1 trunks: riser a also carries the BT fill (backlog Z-1), so its
+      // trunk is NFPA 20 discharge pipe at the full 47.3176 L/s (DN150) and
+      // the riser DN125 (v 3.856); riser b keeps its 500 gpm on DN100.
+      expect(sz['e_fh_FH_Ha0']!.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(sz['e_fh_FH_Ha0']!.diameter.inMillimeters, 150);
+      for (var f = 1; f <= kTowerFireBreakFloor; f++) {
+        final id = 'e_fh_Ha${f - 1}_Ha$f';
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(47.3176, 5e-4),
+            reason: id);
+        expect(sz[id]!.diameter.inMillimeters, 125, reason: id);
+      }
+      final fill = sz['e_fh_Ha${kTowerFireBreakFloor}_BT']!;
+      expect(fill.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(fill.diameter.inMillimeters, 125);
+      expect(fill.velocity.metersPerSecond, closeTo(3.856, 5e-4));
+      for (final id in ['e_fh_FH_Hb0', 'e_fh_FH2_H2a', 'e_fh_FH2_H2b']) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4),
+            reason: id);
+        expect(sz[id]!.diameter.inMillimeters, 100, reason: id);
+      }
+      // Zone 2 sprinkler feed main (T2): DN40 from FH2 up S14..S29.
+      final feed = {
+        'e_sp_FH2_S$kTowerFireBreakFloor',
+        for (var f = kTowerFireBreakFloor + 1; f < kTowerFloors; f++)
+          'e_sp_S${f - 1}_S$f',
+      };
+      for (final id in feed) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(4.7140, 5e-4));
+        expect(sz[id]!.diameter.inMillimeters, 40, reason: id);
+      }
+      expect(c.read(sprinklerFeedEnlargedProvider), feed);
+      final zones = c.read(fireZoneLinesProvider);
+      expect([for (final z in zones) z.zone.number], [1, 2]);
+      expect([for (final z in zones) (z.lowFloor, z.highFloor)],
+          [(0, 14), (15, 29)]);
+      expect(zones[0].zone.pumpIds, ['FJ', 'FP', 'FPS']);
+      expect(zones[0].zone.fillTankId, kTowerBreakTank);
+      expect(zones[1].zone.pumpIds, ['FJ2', 'FP2', 'FP2S']);
+      expect(zones[1].zone.suctionTankId, kTowerBreakTank);
+      // Lowest / highest terminal: L1 box 1.2 m .. L15 box 57.2 m; L16 box
+      // 60 + 1.2 = 61.2 m .. L30 sprinkler at its ceiling 116 + 3.7 = 119.7 m.
+      expect(zones[0].lowTerminalZ, closeTo(1.2, 1e-9));
+      expect(zones[0].highTerminalZ, closeTo(57.2, 1e-9));
+      expect(zones[1].lowTerminalZ, closeTo(61.2, 1e-9));
+      expect(zones[1].highTerminalZ, closeTo(119.7, 1e-9));
+      final b1 = c.read(firePumpBasisByNodeProvider)[kTowerDutyFirePump]!;
+      final b2 = c.read(firePumpBasisByNodeProvider)[kTowerRelayPump]!;
+      // Zone 1 own: lift 14 x 4.0 + 1.2 = 57.2 m; friction 12.025 m (HYDb14
+      // on riser b) < 15 ⇒ 15; 57.2 + 15 + 70.336 = 142.536 m.
+      expect(b1.staticLiftM, closeTo(57.2, 1e-9));
+      expect(b1.indexFrictionM, closeTo(12.025, 5e-4));
+      expect(b1.ownFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.ownHead!.meters, closeTo(142.536, 5e-4));
+      // Relay fill: zone 2's 47.3176 L/s (a tie — the own flow stands);
+      // head = BT 56.0 m (L15 surface) − FP 0.0 + the fill friction at
+      // 47.3176 L/s (FP→FH 5.7 m + FH→Ha0 3.0 m DN150 at 0.054504 m/m =
+      // 0.4742; Ha0→Ha14 56.0 m + Ha14→BT 7.1 m DN125 at 0.132456 m/m =
+      // 8.3580; Σ 8.8322 m) + 5.0 inlet = 69.832 m < 142.536 ⇒ the own zone
+      // sets both terms.
+      expect(b1.fillTankId, kTowerBreakTank);
+      expect(b1.fillFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.fillHeadM, closeTo(56.0 + 8.8322 + 5.0, 5e-4));
+      expect(b1.fillGovernsFlow, isFalse);
+      expect(b1.fillGovernsHead, isFalse);
+      expect(b1.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.head.meters, closeTo(142.536, 5e-4));
+      // Hydraulic 9810 x 0.0473176 x 142.536 = 66 163.4 W; / 0.70 =
+      // 94 519.2 W; overload 0.975 x 66 163.4 / 0.595 = 108 419.0 W ⇒ 110 kW.
+      expect(b1.duty!.hydraulicPower.watts, closeTo(66163.4, 0.05));
+      expect(b1.duty!.shaftPower.watts, closeTo(94519.2, 0.05));
+      expect(b1.rating.overload.shaftPower.watts, closeTo(108419.0, 0.05));
+      expect(b1.rating.selectedMotor.inKiloWatts, closeTo(110, 1e-9));
+      // Jockey 1 % = 0.4732 L/s @ 1.4 x 142.536 + 5 = 204.551 m, 1.5 kW.
+      expect(b1.jockey!.head.meters, closeTo(204.551, 5e-4));
+      expect(b1.jockey!.selectedMotor.inKiloWatts, closeTo(1.5, 1e-9));
+      // Zone 2: datum = FP2 on L15 (56.0 m) → HYDb29 117.2 m: lift 61.2 m;
+      // friction 12.767 < 15 ⇒ 15; 61.2 + 15 + 70.336 = 146.536 m.
+      expect(b2.fillTankId, isNull);
+      expect(b2.staticLiftM, closeTo(61.2, 1e-9));
+      expect(b2.indexFrictionM, closeTo(12.767, 5e-4));
+      expect(b2.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b2.head.meters, closeTo(146.536, 5e-4));
+      // 9810 x 0.0473176 x 146.536 = 68 020.2 W; / 0.70 = 97 171.7 W;
+      // overload 0.975 x 68 020.2 / 0.595 = 111 461.6 W > 110 ⇒ 132 kW.
+      expect(b2.duty!.hydraulicPower.watts, closeTo(68020.2, 0.05));
+      expect(b2.duty!.shaftPower.watts, closeTo(97171.7, 0.05));
+      expect(b2.rating.overload.shaftPower.watts, closeTo(111461.6, 0.05));
+      expect(b2.rating.selectedMotor.inKiloWatts, closeTo(132, 1e-9));
+      expect(b2.jockey!.head.meters, closeTo(210.151, 5e-4));
+      expect(b2.jockey!.selectedMotor.inKiloWatts, closeTo(1.5, 1e-9));
+      // Sprinkler point (zone 2, lift 63.7 m to the L30 ceiling) 119.556 m
+      // <= 146.536 on the enlarged DN40 main: the standpipe governs.
+      expect(b2.sprinklerPointHeadM, closeTo(119.556, 5e-4));
+      expect(b2.sprinklerGovernsCombined, isFalse);
+      // The governing project fire pump is the larger: FP2.
+      final d = c.read(firePumpDutyProvider)!;
+      expect(d.head.meters, closeTo(146.536, 5e-4));
+      expect(d.selectedMotor.inKiloWatts, closeTo(132, 1e-9));
+      final fed = c.read(nodeFedLoadsProvider);
+      expect(fed['FP']!.input, closeTo(110000 / 0.9, 0.05)); // 122 222.2
+      expect(fed['FP2']!.input, closeTo(132000 / 0.9, 0.05)); // 146 666.7
+      // Break tank: 47.3176 L/s x 30 min = 85 171.8 L; BT 90 000 L ⇒ OK.
+      final bt = c.read(fireBreakTankChecksProvider).single;
+      expect(bt.tankId, kTowerBreakTank);
+      expect(bt.zoneNumber, 2);
+      expect(bt.requiredLitres, closeTo(85171.77, 0.01));
+      expect(bt.capacityLitres, kTowerBreakTankL);
+      expect(bt.verdict, FireTankVerdict.ok);
+      expect(bt.fillFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(bt.fillEdgeId, 'e_fh_Ha${kTowerFireBreakFloor}_BT');
+    });
+
+    test('air: 3.7 m3/s office, rectangular ducts on the 5 m/s cap, AHU '
+        '327.68 Pa / 2.2 kW, toilet 0.24667 m3/s', () {
+      final sz = c.read(sizingProvider);
+      // 600 x 3.7 x 6 / 3600 = 3.7 m3/s; 462.5 L/s per diffuser.
+      expect(kTowerOfficeAirflow.inLitersPerSecond, closeTo(3700, 1e-6));
+      expect(kTowerDiffuserFlow.inLitersPerSecond, closeTo(462.5, 1e-9));
+      // 24 x 3.7 x 10 / 3600 = 0.24667 m3/s.
+      expect(kTowerToiletAirflow.inLitersPerSecond, closeTo(246.667, 5e-4));
+      for (final (id, w, h, v) in [
+        ('e_sa_AHU1_SD1', 1200, 700, 4.405),
+        ('e_sa_SD1_SD2', 1000, 700, 4.625),
+        ('e_sa_SD2_SD3', 1000, 700, 3.964),
+        ('e_sa_SD3_SD4', 900, 600, 4.282),
+        ('e_sa_SD4_SD5', 800, 500, 4.625),
+        ('e_sa_SD5_SD6', 700, 450, 4.405),
+        ('e_sa_SD6_SD7', 600, 350, 4.405),
+        ('e_sa_SD7_SD8', 400, 250, 4.625),
+        // Backlog F-2 — five return grilles (740 L/s each) on the office
+        // return limit min(3.0, 4.0) = 3.0 m/s: ceil(3.7 / 0.864) = 5.
+        ('e_ra_RG5_RG4', 500, 350, 4.229),
+        ('e_ra_RG4_RG3', 700, 450, 4.698),
+        ('e_ra_RG3_RG2', 900, 600, 4.111),
+        ('e_ra_RG2_RG1', 1000, 700, 4.229),
+        ('e_ra_RG1_AHU1', 1200, 700, 4.405),
+        ('e_ea_EF1_EG1', 300, 200, 4.111),
+        ('e_ea_EG1_EG2', 250, 150, 3.289),
+      ]) {
+        expect(sz[id]!.width!.inMillimeters, w, reason: id);
+        expect(sz[id]!.height!.inMillimeters, h, reason: id);
+        expect(sz[id]!.velocity.metersPerSecond, closeTo(v, 5e-4), reason: id);
+      }
+      // De = 1.3 (1.2 x 0.7)^0.625 / (1.9)^0.25 = 0.993 m.
+      expect(
+        sz['e_sa_AHU1_SD1']!.diameter.inMillimeters,
+        closeTo(992.95, 0.01),
+      );
+      // Backlog F-2 — return (PU): (0.4670 + 0.4014 + 0.2267 + 0.2032) x
+      // 3.0 x 1.3 + 0.2013 x 4.7 x 1.3 + 30 = 5.063 + 1.230 + 30 = 36.29 Pa
+      // (four grilles read 35.06). AHU: 250 internal + 41.39 supply + 36.29
+      // return = 327.68 Pa (was 326.44); motor still 2.2 kW.
+      expect(kTowerReturnGrilles, hasLength(5));
+      expect(kTowerReturnFlow.inLitersPerSecond, closeTo(740, 1e-9));
+      expect(kTowerReturnFaceMm, (600.0, 600.0)); // 0.74 / 0.288 = 2.569
+      // Toilet exhaust (retail) limit min(3.5, 4.0) = 3.5 m/s: 123.33 L/s
+      // on 300 x 150 = 3.426 m/s (200 x 200 read 3.854, inside 4.0 only).
+      expect(kTowerExhaustFaceMm, (300.0, 150.0));
+      final supply = c.read(airSystemsProvider(ServiceType.duct)).single;
+      final ret = c.read(airSystemsProvider(ServiceType.returnAir)).single;
+      expect(supply.stat.pascals, closeTo(41.39, 5e-3));
+      expect(ret.stat.pascals, closeTo(36.29, 5e-3));
+      final fan = c.read(supplyFanDutiesByRootProvider)[kTowerAhuId]!;
+      expect(fan.totalStaticPressure.pascals, closeTo(327.68, 5e-3));
+      expect(fan.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
+      final ef = c.read(exhaustFanDutiesByRootProvider)[kTowerExhaustFanId]!;
+      expect(ef.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
+      expect(ef.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+      // Backlog F-3 — the Rooms inspector's ONE headline is the drawn duty
+      // (the room estimate 250 + 0.20128 x 15 x 1.3 + 50 = 303.93 Pa is not
+      // printed beside it); the schedule carries no room-estimate row.
+      final rooms = c.read(roomAreasProvider);
+      final heads = c.read(roomAirHeadlineProvider);
+      final kantor = heads[rooms.firstWhere((r) => r.name == 'Kantor').id]!;
+      expect(kantor.drawn, isTrue);
+      expect(kantor.unitId, kTowerAhuId);
+      expect(kantor.duty.totalStaticPressure.pascals, closeTo(327.68, 5e-3));
+      final toilet = heads[rooms.firstWhere((r) => r.name == 'Toilet').id]!;
+      expect(toilet.drawn, isTrue);
+      expect(toilet.unitId, kTowerExhaustFanId);
+      expect(toilet.duty.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
+      expect(
+          c.read(roomSizingProvider)[rooms.first.id]!.equipment
+              .totalStaticPressure.pascals,
+          closeTo(303.93, 5e-3));
+    });
+
+    test('drawing backlog C-2: the riser stands every board on its own floor '
+        '(PP-Lt N / PP-L N on Lantai N, the rest on Lantai 1)', () {
+      final e = c.read(electricalProjectProvider);
+      final floorOf = electricalRiserFloorOf(e, c.read(electricalResultProvider),
+          c.read(projectControllerProvider).building);
+      expect(e.panels, isNotEmpty);
+      for (final p in e.panels) {
+        expect(p.floorIndex, referenceBoardFloor(p.name), reason: p.name);
+        expect(floorOf[p.id], referenceBoardFloor(p.name), reason: p.name);
+      }
+    });
+
+    test('(REF_DUMP) feeder chain summary and copper total', () {
+      // Backlog B-1 / B-2: the before / after tables in the §15 log.
+      if (!_dump) return;
+      final sys = c.read(electricalResultProvider);
+      // ignore: avoid_print
+      print('FEEDERS | floor | cable | device | feeder VD % | worst way cum %');
+      for (var f = 0; f < kTowerFloors; f++) {
+        final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
+        final runs = fd.cable.runsPerPhase ?? 1;
+        // The way closest to its own limit (cumulative / limit).
+        var worst = 0.0;
+        var worstLim = 0.0;
+        var worstName = '';
+        var raisedWays = 0;
+        for (final w in sys.panels[towerFloorPanelId(f)]!.circuits) {
+          if (w.cableRaisedForCumulativeVd) raisedWays++;
+          if (worstLim == 0 ||
+              w.cumulativeDropPercent / w.voltageDrop.limitPercent >
+                  worst / worstLim) {
+            worst = w.cumulativeDropPercent;
+            worstLim = w.voltageDrop.limitPercent;
+            worstName = '${w.name} ${w.cable.csaMm2} mm2';
+          }
+        }
+        // ignore: avoid_print
+        print('FEEDERS | ${f + 1} | ${runs > 1 ? '${runs}x' : ''}'
+            '${fd.cable.csaMm2} (${fd.grounding.cableSpec}) | '
+            '${fd.breaker.deviceClass.code} ${fd.breaker.ratingA.amperes} | '
+            '${fd.voltageDrop.dropPercent} | ${_f(worst, 2)} / $worstLim '
+            '($worstName; $raisedWays ways raised)');
+      }
+      // Copper: Σ mm² x m x loaded cores (phase + neutral) x runs.
+      var cu = 0.0;
+      for (final pr in sys.panels.values) {
+        for (final w in pr.circuits) {
+          final loaded = w.grounding.cores - 1;
+          cu += w.cable.csaMm2 *
+              w.lengthM *
+              loaded *
+              (w.cable.runsPerPhase ?? 1);
+          final ml = w.motorLeads;
+          if (ml != null) {
+            cu += 2 * 3 * ml.csaMm2 * w.lengthM * (ml.runsPerPhase ?? 1);
+          }
+        }
+      }
+      // ignore: avoid_print
+      print('COPPER total ${cu.toStringAsFixed(0)} mm2.m');
+    });
+
+    test('every floor board: 18 750 W / 21 422 VA, 30.9 A per line, MCB '
+        '32 A 4P', () {
+      for (var f = 0; f < kTowerFloors; f++) {
+        final pid = towerFloorPanelId(f);
+        final p = c.read(electricalResultProvider).panels[pid]!;
+        String id(String b) => 'c_${b}_lt${f + 1}';
+        // Lighting 1500 / (230 x 0.9 x ...) = 7.215 A, MCB 10 B, 3x1.5.
+        // Backlog B-2: the least-copper cumulative-drop cure raises Lampu A
+        // itself on Lt18..21 (16 mm² feeders) and Lt28..30: 2 x 7.215 x 20 x
+        // (8.87 x 0.9 + 0.08 x 0.4359) / 1000 = 2.314 V / 231 = 1.00 % on
+        // 3 x 2.5.
+        final l = way(c, pid, id('lampu_a'));
+        final aRaised = (f >= 17 && f <= 20) || f >= 27;
+        expect(l.designCurrentExactA, closeTo(7.215, 5e-4));
+        expect(l.breaker.ratingA.amperes, 10);
+        expect(l.cable.csaMm2, aRaised ? 2.5 : 1.5, reason: 'Lt${f + 1}');
+        expect(l.cableRaisedForCumulativeVd, aRaised, reason: 'Lt${f + 1}');
+        expect(l.voltageDrop.dropPercent, closeTo(aRaised ? 1.00 : 1.63, 1e-9));
+        // Lampu B (25 m) is raised to 2.5 on Lt12..30; Lampu C (30 m) to 2.5
+        // on Lt6..30 and on to 4 mm² on Lt20 / Lt21, where the 16 mm²
+        // feeder's 1.52 / 1.59 % leaves 2.5 mm² at 3.02 / 3.09 %: one more
+        // rung on the 30 m way (1.5 x 30 x 2 = 90 mm²·m) saves 1.50 x (1 -
+        // 5.003 / 8.018) = 0.56 %, far more per copper than 25 mm² on the
+        // ~95 m feeder (9 x 95 x 4 = 3420 mm²·m for 0.54 %) (B-2).
+        expect(way(c, pid, id('lampu_b')).cable.csaMm2, f >= 11 ? 2.5 : 1.5,
+            reason: 'Lt${f + 1}');
+        expect(way(c, pid, id('lampu_c')).cable.csaMm2,
+            f == 19 || f == 20 ? 4.0 : (f >= 5 ? 2.5 : 1.5),
+            reason: 'Lt${f + 1}');
+        for (final w in p.circuits) {
+          expect(w.cumulativeDropPercent,
+              lessThanOrEqualTo(w.voltageDrop.limitPercent + 1e-9),
+              reason: w.circuitId);
+        }
+        // Socket 2500 W: run 12.025 A (undiversified), design 8.418 A (DF
+        // 0.7), MCB 16 C, 3x2.5.
+        final s = way(c, pid, id('kk_a'));
+        expect(s.designCurrentExactA, closeTo(8.418, 5e-4));
+        expect(s.runCurrentA.amperes, closeTo(12.0, 1e-9));
+        expect(s.breaker.ratingA.amperes, 16);
+        expect(s.cable.csaMm2, 2.5);
+        // AC 5000 W 3-phase: run 8.490 A, design 7.641 A (DF 0.9), 10 A 3P.
+        final a = way(c, pid, id('ac_a'));
+        expect(a.designCurrentExactA, closeTo(7.641, 5e-4));
+        expect(a.runCurrentA.amperes, closeTo(8.5, 1e-9));
+        expect(a.breaker.ratingA.amperes, 10);
+        expect(a.cable.csaMm2, 2.5);
+        // Demand 3 x 1500 + 3 x 1750 + 2 x 4500 = 18 750 W; lines 7.215 +
+        // 8.418 + 2 x 7.641 = 30.9 each.
+        expect(p.demandW, 18750);
+        expect(p.demandVa, 21422);
+        expect(sorted3(p.phaseBalance), [30.9, 30.9, 30.9]);
+        expect(p.incomer.breaker.ratingA.amperes, 32);
+        expect(p.incomer.poles, 4);
+        // Feeder Ib 18 750 / (√3 x 400 x 0.8753) = 30.92 A.
+        final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
+        expect(fd.designCurrentExactA, closeTo(30.919, 1e-3));
+      }
+      // Backlog B-1 (2026-11-13): Lt1 (15 m) was load-sized 10 mm² / 50 A
+      // (non-selective over the 32 A incomer). The floor 1.6 x 32 = 51.2 ⇒
+      // 63 A needs Iz ≥ 63: 10 mm² 50 ✗, 16 mm² 68 ✓ ⇒ MCCB 63 A on 5 x 16;
+      // pf 0.8753 (sin 0.4836): √3 x 30.919 x 15 x (1.38 x 0.8753 + 0.08 x
+      // 0.4836) / 1000 = 1.001 V = 0.25 % (was 0.39 %).
+      final lt1 = way(c, kTowerMainPanelId, towerFloorFeederId(0));
+      expect(lt1.cable.csaMm2, 16);
+      expect(lt1.breaker.ratingA.amperes, 63);
+      expect(lt1.voltageDrop.dropPercent, closeTo(0.25, 1e-9));
+      expect(lt1.cableRaisedForSelectivity, isTrue);
+      expect(lt1.cableRaisedForAds, isFalse);
+      expect(lt1.cableRaisedForDownstreamVd, isFalse);
+      final lt30 = way(
+        c,
+        kTowerMainPanelId,
+        towerFloorFeederId(kTowerFloors - 1),
+      );
+      // Backlog B-1 (bounded) + B-2: the 63 A device is the selectivity
+      // floor's. Its loop at 63 A: 16 mm² (1.38 + 1.38) x 0.131 x 1.28 =
+      // 0.463 Ω, 25 mm² (0.87 + 1.38) x ... = 0.377 Ω, 35 mm² (PE 16) 0.338 Ω
+      // ≤ 0.347 ⇒ 35 mm² — three sizes above the load-sized 10 mm², past the
+      // two-size selectivity bound, so the T3 ADS growth carries it (flagged
+      // raised-for-ads) and the floor then fits (raised-for-selectivity on
+      // the step it took). The cumulative drop is now cured on the lighting ways (B-2:
+      // far cheaper per % than the 131 m feeder), so no VD floor is set:
+      // √3 x 30.919 x 131 x (0.627 x 0.8753 + 0.08 x 0.4836) / 1000 =
+      // 4.12 V = 1.03 % (was 95 mm², 0.42 %).
+      expect(lt30.cable.csaMm2, 35);
+      expect(lt30.grounding.peCsaMm2, 16);
+      expect(lt30.voltageDrop.dropPercent, closeTo(1.03, 1e-9));
+      expect(lt30.cableRaisedForAds, isTrue);
+      expect(lt30.cableRaisedForSelectivity, isTrue);
+      expect(lt30.cableRaisedForDownstreamVd, isFalse);
+    });
+
+    test('PP-E, MEP, LVMDP, transformer, genset, capacitor bank', () {
+      // Lift: 15 / 0.88 = 17 045.5 W ⇒ 28.945 A, MCCB 32 D, 4x16 for ADS.
+      final lift = way(c, kTowerEssentialPanelId, kTowerLiftWayIds.first);
+      expect(lift.loadW, closeTo(17045.45, 0.01));
+      expect(lift.designCurrentExactA, closeTo(28.945, 5e-4));
+      expect(lift.breaker.ratingA.amperes, 32);
+      expect(lift.cable.csaMm2, 16);
+      expect(lift.cableRaisedForAds, isTrue);
+      final sys = c.read(electricalResultProvider);
+      // Backlog Z-3 — the fire zones replace the 200 kW FP (+ 2.2 kW jockey)
+      // with FP 110 kW + FJ 1.5 kW (zone 1) and FP2 132 kW + FJ2 1.5 kW
+      // (zone 2); FPS / FP2S are standbys (DF 0). Fire inputs 110 / 0.9 +
+      // 1.5 / 0.9 + 132 / 0.9 + 1.5 / 0.9 = 272 222.2 W (was 222 222.2 +
+      // 2444.4 = 224 666.7): + 47 555.6 W on the MEP board.
+      // PP-E: 299 267 + 3 x 17 045.5 + 2000 = 352 403 W, 414 108 VA (was
+      // 304 847 W, 358 160 VA); heaviest line 601.3 A, incomer 630.
+      final ppe = sys.panels[kTowerEssentialPanelId]!;
+      expect(ppe.demandW, 352403);
+      expect(ppe.demandVa, 414108);
+      expect(sorted3(ppe.phaseBalance), [591.6, 600.2, 601.3]);
+      expect(ppe.incomer.breaker.ratingA.amperes, 630);
+      // MEP: TP 20 555.6 W ⇒ 34.905 A; FP 122 222.2 W ⇒ 207.544 A, MCCB 250,
+      // FRC 3x95 + 50; FP2 146 666.7 W ⇒ 249.053 A, MCCB 250, FRC 3x120 +
+      // 70; Σ 251 711 − 224 666.7 + 272 222.2 = 299 267 W, 351 725 VA;
+      // heaviest line 513.4 A; incomer MCCB 630 (was 500).
+      final tp = way(c, _mepBoard, 'mep-node-TP');
+      expect(tp.designCurrentExactA, closeTo(34.905, 5e-4));
+      final fp = way(c, _mepBoard, 'mep-node-FP');
+      expect(fp.designCurrentExactA, closeTo(207.544, 5e-4));
+      expect(fp.breaker.ratingA.amperes, 250);
+      expect(fp.cable.csaMm2, 95);
+      expect(fp.grounding.peCsaMm2, 50);
+      final fp2 = way(c, _mepBoard, 'mep-node-$kTowerRelayPump');
+      expect(fp2.designCurrentExactA, closeTo(249.053, 5e-4));
+      expect(fp2.breaker.ratingA.amperes, 250);
+      expect(fp2.cable.csaMm2, 120);
+      expect(fp2.grounding.peCsaMm2, 70);
+      final mep = sys.panels[_mepBoard]!;
+      expect(mep.demandW, 299267);
+      expect(mep.demandVa, 351725);
+      expect(mep.demandCurrent.amperes, closeTo(513.4, 1e-9)); // 1 dp
+      expect(mep.incomer.breaker.ratingA.amperes, 630);
+      // LVMDP: 30 x 18 750 + 352 403 = 914 903 W, 1 056 755 VA (was
+      // 867 347 W, 1 000 807 VA); lines [1519.2, 1527.8, 1528.9] A.
+      final lv = sys.panels[kTowerMainPanelId]!;
+      expect(lv.demandW, 914903);
+      expect(lv.demandVa, 1056755);
+      expect(sorted3(lv.phaseBalance), [1519.2, 1527.8, 1528.9]);
+      expect(lv.incomer.breaker.ratingA.amperes, 1600);
+      expect(lv.incomer.poles, 4);
+      // Transformer 1600 kVA: 1056.8 / 1600 = 66.05 % (was 62.55 %); LV
+      // fault 1 600 000 / (√3 x 400 x 0.04) = 57 735 A.
+      final adv = c.read(electricalAdvancedProvider);
+      expect(adv.supply.transformerKva, 1600);
+      expect(adv.supply.demandKva, closeTo(1056.8, 1e-9)); // 1 dp
+      expect(adv.supply.demandKva / 1600 * 100, closeTo(66.05, 0.005));
+      final project = c.read(electricalSizingProjectProvider);
+      expect(
+        effectiveOriginFaultLevel(project, result: sys).amperes,
+        closeTo(57735.0, 0.05),
+      );
+      // Genset 800 kVA (declared, kept); start floor now 504.75 kVA (FP2
+      // 1121.68 kVA x 0.45; was FP 1699.49 x 0.45 = 764.77).
+      expect(project.sources!.generator!.kva!.inKilovoltAmperes, 800);
+      expect(
+        gensetStartFloorFor(project, sys).inKilovoltAmperes,
+        closeTo(504.75, 5e-3),
+      );
+      // 250 kvar installed ⇒ PF 0.957 (921.7 kW / 530.2 kvar, uncorrected
+      // 0.867; was 0.961 on 873.0 kW).
+      expect(adv.powerFactor.installedKvar, 250);
+      expect(adv.powerFactor.existingPf, closeTo(0.957, 5e-4));
+      // Genset backup: 352 403 W = 352.4 kW (was 304.8).
+      expect(gensetBackupDemandW(project, sys).watts, closeTo(352403, 0.5));
+    });
+
+    test('backlog E-4: genset step load 352.4 kW <= 0.6 x 640 = 384 kW, OK',
+        () {
+      // On ATS transfer the 800 kVA set picks up PP-E (lifts, emergency
+      // lighting, the MEP board) in one step: 352 403 W = 352.4 kW (backlog
+      // Z-3: the two fire zones' pumps; was 304.8) (the `gensetBackupDemandW`
+      // basis, backup fraction 0). Allowable first step 0.6 x 800 kVA x 0.8
+      // = 0.6 x 640 = 384 kW >= 352.4 => OK, no staged pick-up.
+      final st = c.read(electricalAdvancedProvider).powerOneLine!
+          .gensetStepLoad!;
+      expect(st.stepKw, closeTo(352.403, 1e-9));
+      expect(st.ratedKw, closeTo(640, 1e-9));
+      expect(st.allowableKw, closeTo(384, 1e-9));
+      expect(st.exceeded, isFalse);
+      expect(
+          c
+              .read(electricalAdvancedProvider)
+              .warnings
+              .where((w) => w.code == 'genset-step-load-staged'),
+          isEmpty);
+    });
+
+    test('Review: deliberate findings present, the rest absent', () {
+      final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+      int n(String k) => kinds.where((x) => x == k).length;
+      // Backlog B-1 (bounded): PP-Lt1 / PP-Lt2 now reach 63 A on 16 mm²
+      // (one size up; was 4). The two left are refused and name a selective
+      // device: Feeder PP-E is 2 parallel runs of 185 mm² FRC (its 1.6 x 630
+      // = 1008 ⇒ 1250 A rung is out of reach of the single-run step), Feeder
+      // to MEP's 800 A rung (1.6 x 500) would sit above PP-E's own 630 A
+      // incomer (the upstream bound).
+      expect(n('electrical:non-selective'), 2);
+      expect(n('electrical:outgoing-exceeds-incomer'), 0);
+      expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
+      expect(n('electrical:service-cable-ampacity-inadequate'), 1);
+      expect(n('electrical:service-fault-estimate-high'), 1);
+      // Backlog Z-3 — each zone's own churn is below the 350 psi single-zone
+      // maximum, so the tower no longer warns `fire-system-over-pressure`
+      // (was churn 1.4 x 210.681 = 294.954 m = 2893.5 kPa > 2413). Zone 1:
+      // 1.4 x 142.536 = 199.551 m x 9.81 = 1957.6 kPa (283.9 psi); zone 2:
+      // 1.4 x 146.536 = 205.151 m x 9.81 = 2012.5 kPa (291.9 psi); both
+      // > 1600 ⇒ PN25.
+      expect(kinds.where((k) => k.contains('system-over-pressure')), isEmpty);
+      final cls = c.read(firePressureClassesProvider);
+      expect([for (final l in cls) l.pumpId], ['FP', kTowerRelayPump]);
+      expect(cls[0].churnKpa, closeTo(199.551 * 9.81, 0.05));
+      expect(cls[1].churnKpa, closeTo(205.151 * 9.81, 0.05));
+      for (final l in cls) {
+        expect(l.pressureClass, FirePressureClass.pn25);
+      }
+      // Backlog A-2 — FT 120 000 L >= 47.3176 L/s x 1800 s = 85 172 L; the
+      // roof-typed break tank is judged by backlog Z-2 only (BT 90 000 L >=
+      // 85 172 L ⇒ no `fire-break-tank-*`).
+      expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
+      expect(kinds.where((k) => k.startsWith('fire-break-tank-')), isEmpty);
+      final ft = c.read(fireTankReservesProvider).single;
+      expect(ft.tankId, 'FT');
+      expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
+      expect(ft.capacityLitres, 120000);
+      expect(ft.verdict, FireTankVerdict.ok);
+      // The break tank drawn on Lantai 15 is read at that floor's surface;
+      // backlog Z-4 — as a fire zone break tank it raises no
+      // `roof-tank-below-top` (it is meant to sit mid-height).
+      expect(n('roof-tank-below-top:$kTowerBreakTank'), 0);
+      // Backlog A-3 — hose valves above 1207 kPa static at churn are
+      // designated pressure-regulating, per zone: zone 1 L1 9.81 x (199.551
+      // − 1.2) = 1945.8 kPa (282.2 psi) .. L15 9.81 x (199.551 − 57.2) =
+      // 1396.5 kPa; zone 2 (datum 56.0 m) L16 9.81 x (205.151 − 5.2) =
+      // 1961.5 kPa (284.5 psi) .. L30 9.81 x (205.151 − 61.2) = 1412.2 kPa.
+      expect(n('standpipe-prv-hose-valves:FP:0-14'), 1);
+      expect(n('standpipe-prv-hose-valves:$kTowerRelayPump:15-29'), 1);
+      expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
+          isEmpty);
+      final r = c.read(standpipeOutletOverPressureProvider);
+      expect(r, hasLength(2));
+      expect(r[0].maxKpa, closeTo(9.81 * (199.551 - 1.2), 0.1));
+      expect(r[0].minKpa, closeTo(9.81 * (199.551 - 57.2), 0.1));
+      expect(r[1].maxKpa, closeTo(9.81 * (205.151 - 5.2), 0.1));
+      expect(r[1].minKpa, closeTo(9.81 * (205.151 - 61.2), 0.1));
+      expect(c.read(prvHoseValvesProvider), hasLength(60));
+      // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
+      // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
+      expect(n('electrical:cable-raised-for-ads'), 6);
+      // Backlog Z-3 — six fire pump ways (FP / FPS / FJ, FP2 / FP2S / FJ2).
+      expect(n('electrical:fire-pump-protection'), 6);
+      expect(n('electrical:busbar-beyond-standard-table'), 1);
+      expect(n('downfeed-below-target'), 1);
+      // Backlog F-4 — every duct is auto-sized within its limits: no
+      // `air-duct-unsized` (it listed all 14 ducts while it meant "no
+      // hand-chosen size"); no terminal is unsized or out of band (F-2).
+      expect(n('air-duct-unsized'), 0);
+      expect(n('air-terminal-unsized'), 0);
+      expect(n('terminal-velocity'), 0);
+      expect(c.read(airUnsizedProvider), isEmpty);
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.severity == IssueSeverity.critical),
+        isEmpty,
+      );
+      for (final prefix in [
+        'electrical:cumulative-voltage-drop-exceeded',
+        'electrical:ads-disconnection',
+        'combined-fire-sprinkler-governs',
+        'downfeed-over-pressure',
+        'pressure-zone',
+        'electrical:life-safety',
+        'unfed-panel',
+      ]) {
+        expect(
+          kinds.where((k) => k.startsWith(prefix)),
+          isEmpty,
+          reason: prefix,
+        );
+      }
+      expect(
+        c
+            .read(electricalAllWarningsProvider)
+            .where(
+              (w) =>
+                  w.severity.name == 'error' || w.severity.name == 'critical',
+            ),
+        isEmpty,
+      );
+    });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadTower(buildTower());
+    // ignore: avoid_print
+    print('COPPER tower ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
+  });
+
+  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 100 staff x 30 floors = 3000 x 50 L/person/day (public / office) = 150 000 L = 150.00 m3/day; stored GT 60 000 + RT 30 000 = 90 000 L; reserve 90 000 / 150 000 = 0.6 days = 14.4 h.
+  test('backlog W-4: daily demand 150.00 m3/day, reserve 0.6 days (14 h)', () async {
+    final c = await _loadTower(buildTower());
+    expect(c.read(populationProvider), 3000);
+    expect(c.read(demandPerPersonProvider), 50.0);
+    expect(c.read(dailyDemandLitresProvider), closeTo(150000.0, 1e-9));
+    final r = c.read(waterReserveProvider);
+    // GT + RT counted (the fire tank FT is fire-only, not domestic).
+    expect([for (final t in r.counted) t.tankId], ['GT', 'RT']);
+    expect(r.excludedTankIds, isEmpty);
+    expect(r.storedLitres, closeTo(90000.0, 1e-9));
+    expect(r.days, closeTo(0.6, 5e-5));
+    expect(formatReserveDays(r.days!), '0.6 days (14 h)');
+    final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+    expect(kinds, isNot(contains('daily-demand-unset')));
+    c.dispose();
+  });
+}

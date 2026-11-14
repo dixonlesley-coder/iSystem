@@ -23,6 +23,8 @@ import '../sizing/hot_water.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
+import '../sizing/tank_fill.dart' show MainsPressureCheck, WaterReserve;
+import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'report_blocks.dart';
@@ -148,6 +150,82 @@ class StandpipeOutletReportLine {
   });
 }
 
+/// Backlog A-2 (2026-11-13) — one fire tank's fire-water reserve (the app's
+/// `fireTankReservesProvider`, the list the Review judges): the rated demand
+/// flow x the required duration, beside the tank's own entered capacity
+/// (null = not set; never fabricated). Empty list ⇒ no line.
+class FireTankReportLine {
+  final String tag;
+  final double flowLps;
+  final double durationMin;
+  final double requiredLitres;
+  final double? capacityLitres;
+  const FireTankReportLine({
+    required this.tag,
+    required this.flowLps,
+    required this.durationMin,
+    required this.requiredLitres,
+    this.capacityLitres,
+  });
+}
+
+/// Backlog Z-2 (2026-11-14) — one DESIGNED fire zone (the app's
+/// `fireZoneLinesProvider`): its pump's rated point, motor, churn and pipe
+/// class, which term governs a relay pump (its own zone or the break-tank
+/// fill it delivers) and the break tank it draws from (required vs
+/// entered). Printed only when the drawing holds a designed break (empty
+/// list ⇒ no line, byte-identical).
+class FireZoneReportLine {
+  final int number;
+  final String floors;
+  final String tag;
+  final double ratedLps;
+  final double ratedHeadM;
+  final double motorKw;
+  final double churnKpa;
+  final String pressureClass;
+
+  /// Relay pumps only (the zone fills a break tank): the fill flow, the
+  /// fill head and the zone's own point, and which sets the rating.
+  final String? fillTankTag;
+  final double? fillLps;
+  final double? fillHeadM;
+  final double? ownLps;
+  final double? ownHeadM;
+
+  /// The break tank this zone draws from (zone >= 2).
+  final String? breakTankTag;
+  final double? breakRequiredLitres;
+  final double? breakDurationMin;
+  final double? breakCapacityLitres;
+
+  /// The fill pipe into that break tank (its sized bore and flow).
+  final double? fillPipeMm;
+  final double? fillPipeLps;
+
+  const FireZoneReportLine({
+    required this.number,
+    required this.floors,
+    required this.tag,
+    required this.ratedLps,
+    required this.ratedHeadM,
+    required this.motorKw,
+    required this.churnKpa,
+    required this.pressureClass,
+    this.fillTankTag,
+    this.fillLps,
+    this.fillHeadM,
+    this.ownLps,
+    this.ownHeadM,
+    this.breakTankTag,
+    this.breakRequiredLitres,
+    this.breakDurationMin,
+    this.breakCapacityLitres,
+    this.fillPipeMm,
+    this.fillPipeLps,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -181,6 +259,40 @@ class CalcReportData {
   /// printed on its own line after [hotWaterRecirc]. Empty ⇒ unchanged.
   final List<HotWaterRecircDesign> additionalHotWaterRecirc;
 
+  /// Backlog G-2 — each placed water heater's sized duty, by its tag (the
+  /// SAME design the equipment schedule and its panel way read). Empty ⇒
+  /// unchanged.
+  final List<({String tag, WaterHeaterDesign design, int phases})>
+      waterHeaters;
+
+  /// Backlog W-1 — every cold-water storage tank's fill: its capacity (null
+  /// when not entered), refill time and fill flow (capacity / refill time;
+  /// null without a capacity) — the SAME flow the sizer sized its feed on.
+  /// Empty ⇒ unchanged.
+  final List<
+      ({
+        String tag,
+        bool roof,
+        double? capacityLitres,
+        double refillHours,
+        FlowRate? fillFlow,
+      })> tankFills;
+
+  /// Backlog W-2 — the mains-pressure verdict at each water meter feeding a
+  /// ground tank (the SAME result the Review warning reads). Empty ⇒
+  /// unchanged.
+  final List<({String meterTag, String tankTag, MainsPressureCheck check})>
+      mainsChecks;
+
+  /// Backlog W-4 — the daily water demand (null when the population is
+  /// unknown: nothing printed) and the domestic water reserve (the SAME
+  /// `WaterReserve` the inspector / Building page read), with the plan tag of
+  /// each of its tanks. Null ⇒ unchanged.
+  final ({int population, double litresPerPerson, double litresPerDay})?
+      dailyDemand;
+  final WaterReserve? waterReserve;
+  final Map<String, String> reserveTankTags;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -199,6 +311,16 @@ class CalcReportData {
 
   /// Round 76 — hose outlets above the NFPA 14 hose-connection limits.
   final List<StandpipeOutletReportLine> standpipeOutletOverPressure;
+
+  /// Backlog A-2 — the fire-water reserve of every fire tank.
+  final List<FireTankReportLine> fireTankReserves;
+
+  /// Backlog A-3 — the pressure class of every pumped fire system.
+  final List<({String tag, String label, double churnKpa})>
+      firePressureClasses;
+
+  /// Backlog Z-2 — the designed fire zones (empty ⇒ no line).
+  final List<FireZoneReportLine> fireZones;
 
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
@@ -308,12 +430,21 @@ class CalcReportData {
     this.zones = const [],
     this.hotWaterRecirc,
     this.additionalHotWaterRecirc = const [],
+    this.waterHeaters = const [],
+    this.tankFills = const [],
+    this.mainsChecks = const [],
+    this.dailyDemand,
+    this.waterReserve,
+    this.reserveTankTags = const {},
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
     this.firePumpRating,
     this.fireOverPressure = const [],
     this.standpipeOutletOverPressure = const [],
+    this.fireTankReserves = const [],
+    this.firePressureClasses = const [],
+    this.fireZones = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
     this.fireDry = const [],
@@ -775,6 +906,113 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           {'c': hwr.returnTempC.toStringAsFixed(0)}));
     }
   }
+  // Backlog G-2 — the water heater duty (ASHRAE fixture-demand method).
+  for (final h in d.waterHeaters) {
+    final w = h.design;
+    ws.writeln(strings.format(RptStringKey.wsWaterHeater, {
+      'tag': h.tag,
+      'n': '${w.fixtures.values.fold<int>(0, (a, b) => a + b)}',
+      'col': w.column,
+      'hourly': w.hourlyDemandLph.toStringAsFixed(1),
+      'df': w.demandFactor.toStringAsFixed(2),
+      'rec': w.recoveryLph.toStringAsFixed(1),
+      'sf': w.storageFactor.toStringAsFixed(2),
+      'st': w.storageRequiredL.toStringAsFixed(1),
+      'tank': w.tankL.toStringAsFixed(0),
+      'kwreq': w.heatingKwRequired.toStringAsFixed(2),
+      'kw': w.elementKw.toStringAsFixed(1),
+      'ph': h.phases == 3
+          ? strings(RptStringKey.sysThreePhase)
+          : strings(RptStringKey.sysSinglePhase),
+    }));
+  }
+  // Backlog W-4 — the daily demand (only with a known population).
+  final dd = d.dailyDemand;
+  if (dd != null) {
+    String n1(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    ws.writeln(strings.format(RptStringKey.wsDailyDemand, {
+      'pop': '${dd.population}',
+      'lpd': n1(dd.litresPerPerson),
+      'm3': (dd.litresPerDay / 1000).toStringAsFixed(2),
+      'lps': (dd.litresPerDay / 86400).toStringAsFixed(4),
+    }));
+  }
+  // The domestic water reserve: each counted tank, the excluded ones, the
+  // total and the days (report only — no threshold).
+  final wr = d.waterReserve;
+  if (wr != null && wr.storedLitres != null) {
+    for (final t in wr.counted) {
+      ws.writeln(strings.format(RptStringKey.wsReserveTank, {
+        'tag': d.reserveTankTags[t.tankId] ?? t.tankId,
+        'kind': strings(
+            t.roof ? RptStringKey.wsTankKindRoof : RptStringKey.wsTankKindGround),
+        'cap': t.capacityLitres!.toStringAsFixed(0),
+        'fire': t.fireReserveLitres > 0
+            ? strings.format(RptStringKey.wsReserveFireShare,
+                {'fire': t.fireReserveLitres.toStringAsFixed(0)})
+            : '',
+        'dom': WaterReserve.domesticLitres(t).toStringAsFixed(0),
+      }));
+    }
+    final days = wr.days;
+    ws.writeln(strings.format(RptStringKey.wsReserveTotal, {
+      'm3': (wr.storedLitres! / 1000).toStringAsFixed(2),
+      'days': days == null
+          ? strings(RptStringKey.wsReserveNoDemand)
+          : days < 1
+              ? strings.format(RptStringKey.wsReserveDaysHours, {
+                  'd': days.toStringAsFixed(1),
+                  'h': (days * 24).toStringAsFixed(0),
+                })
+              : strings.format(
+                  RptStringKey.wsReserveDays, {'d': days.toStringAsFixed(1)}),
+    }));
+  }
+  if (wr != null && wr.excludedTankIds.isNotEmpty) {
+    ws.writeln(strings.format(RptStringKey.wsReserveExcluded, {
+      'n': '${wr.excludedTankIds.length}',
+      'tags': [
+        for (final id in wr.excludedTankIds) d.reserveTankTags[id] ?? id,
+      ].join(', '),
+    }));
+  }
+  // Backlog W-1 — one line per tank: capacity, refill time, fill flow.
+  for (final t in d.tankFills) {
+    String num(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    final kind = strings(
+        t.roof ? RptStringKey.wsTankKindRoof : RptStringKey.wsTankKindGround);
+    final q = t.fillFlow;
+    final cap = t.capacityLitres;
+    ws.writeln(q == null || cap == null
+        ? strings.format(RptStringKey.wsTankFillUnset,
+            {'tag': t.tag, 'kind': kind, 'h': num(t.refillHours)})
+        : strings.format(RptStringKey.wsTankFill, {
+            'tag': t.tag,
+            'kind': kind,
+            'cap': cap.toStringAsFixed(0),
+            'h': num(t.refillHours),
+            'lps': q.inLitersPerSecond.toStringAsFixed(3),
+          }));
+  }
+  // Backlog W-2 — the mains head at each meter vs the fill requirement.
+  for (final m in d.mainsChecks) {
+    final c = m.check;
+    ws.writeln(strings.format(RptStringKey.wsMainsPressure, {
+      'meter': m.meterTag,
+      'tank': m.tankTag,
+      'avail': c.available.meters.toStringAsFixed(1),
+      'req': c.required.meters.toStringAsFixed(2),
+      'lift': c.liftM.toStringAsFixed(2),
+      'fric': c.frictionM.toStringAsFixed(2),
+      'res': c.inletResidualM.toStringAsFixed(1),
+      'lps': c.flow.inLitersPerSecond.toStringAsFixed(3),
+      'verdict': c.ok
+          ? strings(RptStringKey.verdictOk)
+          : strings(RptStringKey.wsMainsShort),
+    }));
+  }
   ws.writeln(); // closes the cluster (one blank line, zones or not).
   blocks.add(RptMarkdown(ws.toString()));
   if (d.zones.isNotEmpty) {
@@ -904,16 +1142,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                 ? strings.format(
                     RptStringKey.fireOverPressureSystemKey, {'tag': o.tag})
                 : strings(RptStringKey.fireOverPressureKey),
-            strings.format(
-                o.standpipe
-                    ? RptStringKey.fireStandpipeOverPressureValue
-                    : RptStringKey.fireOverPressureValue,
-                {
+            // Backlog A-3 — every listed system is above the 350 psi single-
+            // zone maximum (a lower churn prints its pressure class instead).
+            strings.format(RptStringKey.fireStandpipeOverPressureValue, {
               'churn': o.churnKpa.toStringAsFixed(0),
-              'limit': (o.standpipe
-                      ? kStandpipeMaxSystemPressureKpa
-                      : kFireComponentMaxPressureKpa)
-                  .toStringAsFixed(0),
+              'limit': kStandpipeMaxSystemPressureKpa.toStringAsFixed(0),
               'share': o.frictionShare == null
                   ? ''
                   : strings.format(RptStringKey.fireOverPressureShare, {
@@ -921,8 +1154,19 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                     }),
             })
           ),
+        // Backlog A-3 — each pumped fire system's pipe pressure class.
+        for (final c in d.firePressureClasses)
+          (
+            strings.format(RptStringKey.firePressureClassKey, {'tag': c.tag}),
+            strings.format(RptStringKey.firePressureClassValue, {
+              'cls': c.label,
+              'churn': c.churnKpa.toStringAsFixed(0),
+            })
+          ),
         // Round 76 — hose outlets above the NFPA 14 hose-connection limits
-        // (printed only when present ⇒ byte-identical).
+        // (printed only when present ⇒ byte-identical). Backlog A-3 — a
+        // static range is printed as its designated pressure-regulating hose
+        // valves.
         for (final o in d.standpipeOutletOverPressure)
           (
             strings.format(
@@ -939,6 +1183,26 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   'min': o.minKpa.toStringAsFixed(0),
                   'limit': o.limitKpa.toStringAsFixed(0),
                 })
+          ),
+        // Backlog A-2 — the fire-water reserve per fire tank (printed only
+        // when a fire tank is drawn ⇒ byte-identical otherwise).
+        for (final t in d.fireTankReserves)
+          (
+            strings.format(RptStringKey.fireTankReserveKey, {'tank': t.tag}),
+            strings.format(RptStringKey.fireTankReserveValue, {
+              'flow': t.flowLps.toStringAsFixed(2),
+              'min': t.durationMin.toStringAsFixed(0),
+              'need': t.requiredLitres.toStringAsFixed(0),
+              'm3': (t.requiredLitres / 1000).toStringAsFixed(1),
+              'cap': t.capacityLitres == null
+                  ? strings(RptStringKey.fireTankReserveUnset)
+                  : '${t.capacityLitres!.toStringAsFixed(0)} L',
+              'verdict': t.capacityLitres == null
+                  ? ''
+                  : t.capacityLitres! + 1e-9 < t.requiredLitres
+                      ? strings(RptStringKey.fireTankReserveShort)
+                      : strings(RptStringKey.fireTankReserveOk),
+            })
           ),
         // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
         // Round 52 r2 — also a LONE line when no project rating block is
@@ -968,6 +1232,65 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                     : strings(RptStringKey.firePumpVerdictWithin),
               })
             ),
+        // Backlog Z-2 — one block per designed fire zone (printed only when
+        // the drawing holds a break tank ⇒ byte-identical otherwise).
+        for (final z in d.fireZones) ...[
+          (
+            strings.format(RptStringKey.fireZoneKey,
+                {'n': '${z.number}', 'floors': z.floors}),
+            strings.format(RptStringKey.fireZoneValue, {
+              'tag': z.tag,
+              'lps': z.ratedLps.toStringAsFixed(2),
+              'head': z.ratedHeadM.toStringAsFixed(1),
+              'motor': z.motorKw.toStringAsFixed(1),
+              'churn': z.churnKpa.toStringAsFixed(0),
+              'psi': (z.churnKpa / 6.894757).toStringAsFixed(0),
+              'cls': z.pressureClass,
+            })
+          ),
+          if (z.fillTankTag != null && z.fillHeadM != null)
+            (
+              strings.format(RptStringKey.fireZoneRelayKey,
+                  {'n': '${z.number}', 'tank': z.fillTankTag!}),
+              strings.format(RptStringKey.fireZoneRelayValue, {
+                'ownq': (z.ownLps ?? 0).toStringAsFixed(2),
+                'ownh': (z.ownHeadM ?? 0).toStringAsFixed(1),
+                'fillq': (z.fillLps ?? 0).toStringAsFixed(2),
+                'fillh': z.fillHeadM!.toStringAsFixed(1),
+                'flowby': strings(
+                    (z.fillLps ?? 0) > (z.ownLps ?? 0) + 1e-9
+                        ? RptStringKey.fireZoneGovernsFill
+                        : RptStringKey.fireZoneGovernsOwn),
+                'headby': strings(z.fillHeadM! > (z.ownHeadM ?? 0) + 1e-9
+                    ? RptStringKey.fireZoneGovernsFill
+                    : RptStringKey.fireZoneGovernsOwn),
+              })
+            ),
+          if (z.breakTankTag != null && z.breakRequiredLitres != null)
+            (
+              strings.format(RptStringKey.fireZoneBreakTankKey,
+                  {'n': '${z.number}', 'tank': z.breakTankTag!}),
+              strings.format(RptStringKey.fireZoneBreakTankValue, {
+                'flow': z.ratedLps.toStringAsFixed(2),
+                'min': (z.breakDurationMin ?? 0).toStringAsFixed(0),
+                'need': z.breakRequiredLitres!.toStringAsFixed(0),
+                'cap': z.breakCapacityLitres == null
+                    ? strings(RptStringKey.fireTankReserveUnset)
+                    : '${z.breakCapacityLitres!.toStringAsFixed(0)} L',
+                'verdict': z.breakCapacityLitres == null
+                    ? ''
+                    : z.breakCapacityLitres! + 1e-9 < z.breakRequiredLitres!
+                        ? strings(RptStringKey.fireTankReserveShort)
+                        : strings(RptStringKey.fireTankReserveOk),
+                'fill': z.fillPipeMm == null
+                    ? ''
+                    : strings.format(RptStringKey.fireZoneFillPipe, {
+                        'lps': (z.fillPipeLps ?? 0).toStringAsFixed(2),
+                        'mm': z.fillPipeMm!.round(),
+                      }),
+              })
+            ),
+        ],
         // Round 52 — a gravity system's own head verdict (no pump drawn).
         for (final g in d.fireGravity)
           (
@@ -1146,7 +1469,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               // a `*` marks a size that came from a MANUAL override, resolved by
               // the footnote below.
               line.manual ? '${line.sizeLabel} *' : line.sizeLabel,
-              line.material,
+              // Backlog A-3 — a fire line's pressure class beside its material.
+              line.pressureClass.isEmpty
+                  ? line.material
+                  : '${line.material} ${line.pressureClass}',
               line.totalLength.meters.toStringAsFixed(1),
               '${line.segmentCount}',
             ],

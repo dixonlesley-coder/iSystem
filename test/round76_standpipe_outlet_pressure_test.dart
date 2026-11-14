@@ -185,17 +185,30 @@ void main() {
     expect(r.maxKpa, closeTo(_staticKpa(h, 1), 0.05));
     expect(r.minKpa, closeTo(_staticKpa(h, over.last), 0.05));
     expect(r.lowestOutletId, 'HB1');
+    // Backlog A-3 — the range is DESIGNATED pressure-regulating hose valves:
+    // an INFO listing the floors, never the old warning.
+    expect(
+        c.read(designIssuesProvider).any(
+            (i) => i.kind.startsWith('standpipe-outlet-over-pressure')),
+        isFalse);
     final issues = c
         .read(designIssuesProvider)
-        .where((i) => i.kind.startsWith('standpipe-outlet-over-pressure'))
+        .where((i) => i.kind.startsWith('standpipe-prv-hose-valves'))
         .toList();
     expect(issues, hasLength(1));
-    expect(issues.single.kind,
-        'standpipe-outlet-over-pressure:FP:1-${over.last}');
-    expect(issues.single.severity, IssueSeverity.warning);
+    expect(issues.single.kind, 'standpipe-prv-hose-valves:FP:1-${over.last}');
+    expect(issues.single.severity, IssueSeverity.info);
     expect(issues.single.locate?.nodeId, 'HB1');
     expect(issues.single.message, contains('L1-L${over.last}'));
     expect(issues.single.message, contains('175 psi'));
+    expect(issues.single.message, contains('690 kPa'));
+    // The per-outlet flag: exactly the over floors, each with its solved
+    // (unclamped) inlet static.
+    final prv = c.read(prvHoseValvesProvider);
+    expect(prv.keys.toSet(), {for (final f in over) 'HB$f'});
+    for (final f in over) {
+      expect(prv['HB$f']!.staticKpa, closeTo(_staticKpa(h, f), 0.05));
+    }
     // The 350 psi system judge is untouched (2150 kPa < 2413).
     expect(c.read(fireOverPressureProvider), isEmpty);
   });

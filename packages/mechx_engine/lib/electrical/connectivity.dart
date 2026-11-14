@@ -65,6 +65,11 @@ class ElectricalConnectivityDefect {
 /// project where every panel is fed (a feeder cycle with no root — a distinct
 /// defect `compute.dart` warns on) yields no unfed-panel defect here.
 ///
+/// Backlog E-1 (2026-11-13) — the legitimacy test is now
+/// [serviceEntrancePanelIds] (rules 1-3 above plus an explicit
+/// [ElectricalPanel.serviceEntrance] flag), the SAME set the supply study
+/// takes as its service roots.
+///
 /// Pure + read-only — never sizes. Deterministic: the result is sorted by panel
 /// id.
 List<ElectricalConnectivityDefect> electricalConnectivityDefects(
@@ -72,61 +77,107 @@ List<ElectricalConnectivityDefect> electricalConnectivityDefects(
 ) {
   final panels = project.panels;
   if (panels.length <= 1) return const [];
-
-  // Panels referenced by some circuit's feedsPanelId ("fed by a feeder").
-  final fed = <String>{};
-  for (final p in panels) {
-    for (final c in p.circuits) {
-      final target = c.feedsPanelId;
-      if (target != null) fed.add(target);
-    }
-  }
-
-  // A declared genset is what legitimises an essential (emergency) main sitting
-  // outside the feeder tree. Solar / battery deliberately do NOT count.
-  final gensetDeclared = project.sources?.generator != null;
-
-  // The un-fed boards, in list order. The FIRST is THE primary root (mirrors
-  // compute.dart's root candidates; the MDP is listed first) and is never a
-  // defect.
-  final unfed = [
-    for (final p in panels)
-      if (!fed.contains(p.id)) p,
-  ];
-  if (unfed.isEmpty) return const [];
-
-  // Pass 1 — every essential board with a declared genset is a legitimate
-  // source-fed root (rule 3), independent of position in the list.
-  final legit = <String>{unfed.first.id};
-  if (gensetDeclared) {
-    for (final p in unfed) {
-      if (p.essential) legit.add(p.id);
-    }
-  }
-
-  // Pass 2 — a dual-transformer service expects TWO LV mains, so it legitimises
-  // exactly ONE further root beyond the primary (never "any number of roots"):
-  // the allowance is spent on the first board not already legitimised above, so
-  // a THIRD floating main is still reported. A genset-backed essential main is
-  // counted separately under rule 3 — it is a different supply, not the second
-  // transformer.
-  if (project.dualTransformer) {
-    for (final p in unfed) {
-      if (legit.contains(p.id)) continue;
-      legit.add(p.id);
-      break;
-    }
-  }
-
+  final legit = serviceEntrancePanelIds(project);
   final defects = <ElectricalConnectivityDefect>[];
-  for (final p in unfed) {
+  for (final p in unfedPanelsOf(project)) {
     if (legit.contains(p.id)) continue;
     defects.add(ElectricalConnectivityDefect(
       panelId: p.id,
       kind: ElectricalConnectivityDefectKind.unfedPanel,
     ));
   }
-
   defects.sort((a, b) => a.panelId.compareTo(b.panelId));
   return defects;
+}
+
+/// The un-fed boards of [project] in list order: no circuit's
+/// [ElectricalCircuit.feedsPanelId] references them (the connectivity
+/// semantics `compute.dart`'s root candidates use). Pure.
+List<ElectricalPanel> unfedPanelsOf(ElectricalProject project) {
+  final fed = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+          c.feedsPanelId!,
+  };
+  return [
+    for (final p in project.panels)
+      if (!fed.contains(p.id)) p,
+  ];
+}
+
+/// Backlog E-1 (2026-11-13) — the ONE set of legitimate SERVICE ROOTS among
+/// the un-fed boards, read by BOTH the connectivity judge
+/// ([electricalConnectivityDefects]: every other un-fed board is
+/// `unfed-panel`) and the supply study (`originPanelIdsOf`, `computeSystem`'s
+/// service roots: the multi-root capacity judge, the per-line allocation, the
+/// supply demand and connected load) — so one project is never judged two
+/// ways. An un-fed board is a service root when:
+///
+///   0. it carries an explicit [ElectricalPanel.serviceEntrance] `true` (its
+///      own utility meter — several separately metered entrances);
+///   1. its flag is unset and it is the FIRST un-fed board (the MDP, listed
+///      first) — the pre-E-1 default, so an old file judges unchanged;
+///   2. it is a further LV main of a SECTIONED service (`serviceSections`:
+///      [ElectricalProject.transformerUnits], else 2 on a
+///      [ElectricalProject.dualTransformer]): while rules 0-1 gave fewer roots
+///      than sections, the next board neither explicitly `false` nor a
+///      genset-fed essential main is one (H2's "second main of a dual
+///      service", generalised to N sections);
+///   3. it is an [ElectricalPanel.essential] board while a generator source
+///      is declared (the genset spine feeds an emergency main directly).
+///
+/// A declared solar / battery legitimises nothing (H2). A board flagged
+/// `false` is never a root by rules 0-2; when NO board qualifies at all the
+/// first un-fed board stays the root (a service needs one). Pure;
+/// deterministic.
+Set<String> serviceEntrancePanelIds(ElectricalProject project) {
+  final unfed = unfedPanelsOf(project);
+  if (unfed.isEmpty) return const {};
+  final gensetDeclared = project.sources?.generator != null;
+  final legit = <String>{};
+  for (final p in unfed) {
+    if (p.serviceEntrance == true) legit.add(p.id);
+  }
+  if (unfed.first.serviceEntrance == null) legit.add(unfed.first.id);
+  // Rule 2 before rule 3: a section main is a TRANSFORMER main — counted
+  // against the metered roots, never against a genset-fed essential main.
+  final units = project.transformerUnits;
+  final sections = units != null && units >= 1
+      ? units
+      : (project.dualTransformer ? 2 : 1);
+  for (final p in unfed) {
+    if (legit.length >= sections) break;
+    if (legit.contains(p.id) || p.serviceEntrance == false) continue;
+    if (p.essential && gensetDeclared) continue;
+    legit.add(p.id);
+  }
+  if (gensetDeclared) {
+    for (final p in unfed) {
+      if (p.essential) legit.add(p.id);
+    }
+  }
+  if (legit.isEmpty) legit.add(unfed.first.id);
+  return legit;
+}
+
+/// Backlog E-1 (reviewer, 2026-11-13) — the SERVICE ROOTS the supply study
+/// counts: every un-fed board NOT explicitly flagged
+/// [ElectricalPanel.serviceEntrance] `false`. An unset flag (every pre-E-1
+/// project) keeps EXACTLY the pre-E-1 study — every un-fed board is a root
+/// (demand, per-line allocation, daya, transformer unchanged), never a silent
+/// reduction — while [electricalConnectivityDefects] still flags the unset
+/// boards outside [serviceEntrancePanelIds] (`unfed-panel`, "feed it or mark
+/// it a service entrance"). `true` is a root for both; `false` for neither
+/// (its load is on no service). When every un-fed board is `false` the first
+/// stays the root. Pure; list order.
+Set<String> studyServiceRootIds(ElectricalProject project) {
+  final unfed = unfedPanelsOf(project);
+  if (unfed.isEmpty) return const {};
+  final out = <String>{
+    for (final p in unfed)
+      if (p.serviceEntrance != false) p.id,
+  };
+  if (out.isEmpty) out.add(unfed.first.id);
+  return out;
 }

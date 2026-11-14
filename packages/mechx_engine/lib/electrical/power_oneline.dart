@@ -14,6 +14,7 @@ library;
 import '../units.dart';
 import 'model.dart' show SupplyKind;
 import 'sources.dart';
+import 'supply_design.dart' show mvVoltageV;
 
 /// What kind of node sits on the power one-line.
 enum PowerNodeKind {
@@ -27,6 +28,14 @@ enum PowerNodeKind {
   hybridInverter,
   bus,
   mainPanel,
+
+  /// Fix round F7 (2026-11-13) — the service transformer of a declared MV
+  /// service (drawn between the MV main and the LV bus, as E-301 draws it).
+  transformer,
+
+  /// Fix round F7 — the LV-bus capacitor bank (installed and/or the PF
+  /// study's recommended APFC bank), the one the source spine draws.
+  capacitor,
 }
 
 /// A node on the power one-line.
@@ -96,11 +105,21 @@ class PowerOneLine {
   /// ' · start dip NN% over' label never stands without a warning.
   final GensetStartResult? gensetStart;
 
+  /// Backlog B-3 — the standby set's sizing (rating, the floors and the
+  /// governing reason) the generator node prints; null with no standby set.
+  final GeneratorResult? gensetSizing;
+
+  /// Backlog E-4 — the standby set's block-load (step) check on ATS
+  /// transfer; null with no standby set (or a primary genset plant).
+  final GensetStepLoadResult? gensetStepLoad;
+
   const PowerOneLine({
     required this.nodes,
     required this.edges,
     required this.interlocks,
     this.gensetStart,
+    this.gensetSizing,
+    this.gensetStepLoad,
   });
 
   /// First node of a kind, or null.
@@ -125,6 +144,25 @@ const String kPowerCouplerLabel = 'coupler N.O.';
 
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+/// The board-figure format the building single-line prints (`_num` there):
+/// whole numbers bare, else one decimal.
+String _fmt1(double v) => v == v.roundToDouble()
+    ? v.toInt().toString()
+    : v.toStringAsFixed(1);
+
+/// Fix round 3 (S2) — the 'Essential bus' sub-label. With the essential
+/// boards' solved demand ([essential], VA) it prints `demand <kVA> kVA` — the
+/// SAME figure E-301 / E-401 print on the essential board — and, when the
+/// genset sizing basis ([basisKva]) reads differently, `genset basis <kVA>
+/// kVA` beside it (two named quantities, never one unexplained second
+/// figure). Without it, the basis alone (byte-identical).
+String _essentialBusSub(double basisKva, ApparentPower? essential) {
+  final ess = essential?.inKilovoltAmperes;
+  if (ess == null || ess <= 0) return '${_fmt(basisKva)} kVA';
+  final d = _fmt1(ess), b = _fmt1(basisKva);
+  return d == b ? 'demand $d kVA' : 'demand $d kVA · genset basis $b kVA';
+}
 
 /// Build the hybrid power one-line from the sources design.
 ///
@@ -157,6 +195,32 @@ PowerOneLine buildPowerOneLine(
   // edge (+ a mechanical interlock row) — never one paralleled bus. 1 ⇒
   // byte-identical.
   int lvSections = 1,
+  // Fix round F7 (2026-11-13) — the declared SOURCE ARRANGEMENT the building
+  // single-line's source spine draws (`serviceArrangementOf`, ONE source):
+  // on a PLN, non-sectioned MV service [transformerLabel] inserts the rated
+  // transformer (the head reads 'MV supply + MV main') between the utility and the LV bus; [capacitor]
+  // hangs the LV-bus bank off the bus. Both null ⇒ byte-identical.
+  String? transformerLabel,
+  // Backlog E-3 — the MV transformer feeder's device (fuse / CB + relay),
+  // printed beside the MV main on the utility head. Null ⇒ byte-identical.
+  String? mvDevice,
+  // Backlog E-4 — the real power the standby set picks up in ONE step on ATS
+  // transfer (the backed boards' demand W). Null ⇒ no step check.
+  Power? stepLoad,
+  ({String head, String sub})? capacitor,
+  // Backlog B-3 — the disconnection floor of an unforced set
+  // (`gensetAdsFloorFor`). Null ⇒ byte-identical.
+  ApparentPower? minKvaForAds,
+  // Fix round 3 (S2, 2026-11-13) — the solved diversified demand of the
+  // ESSENTIAL board(s) (`essentialDemandVa`), the figure E-301 / E-401 print
+  // on the essential board. With it the 'Essential bus' prints that demand by
+  // name and, when the genset is sized on a different basis (worst phase /
+  // largest machine), names that basis beside it. Null ⇒ byte-identical.
+  ApparentPower? essentialDemand,
+  // Fix round 3 (O3) — the transfer switch's label from the declared service
+  // arrangement (`serviceArrangementOf(...).transfer`), the SAME switch the
+  // building single-line draws on its genset tie. Null ⇒ derived here.
+  String? transferLabel,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -198,14 +262,18 @@ PowerOneLine buildPowerOneLine(
   final cap = supplyCapacity?.inKilovoltAmperes;
   final capText = (cap != null && cap > 0) ? '${_fmt(cap)} kVA' : null;
   final headId = supplyKind == SupplyKind.pln ? 'utility' : 'supply';
-  final utilityOut = headId;
+  final mvChain = supplyKind == SupplyKind.pln &&
+      transformerLabel != null &&
+      lvSections <= 1;
+  final utilityOut = mvChain ? 'tx' : headId;
 
   // Pre-size the configured sources.
   final gen = sources.generator;
   final genResult = gen == null
       ? null
       : _sizeGen(gen, demand, backupDemand, backupPower,
-          minKvaForStart: gensetStartFloorKva(motors));
+          minKvaForStart: gensetStartFloorKva(motors),
+          minKvaForAds: minKvaForAds);
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
@@ -236,8 +304,24 @@ PowerOneLine buildPowerOneLine(
         id: 'utility',
         kind: PowerNodeKind.utility,
         label: 'PLN utility',
-        sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
+        // The MV main rides on the head's sub-label (one tier, not two: the
+        // sheet must still plot at the 7 pt floor on A3).
+        sub: mvChain
+            // Drawing backlog C-5 (i) — the declared MV service's voltage
+            // (the supply design's PLN TM figure).
+            ? 'MV supply ${_fmt(mvVoltageV / 1000)} kV + MV main'
+                '${mvDevice == null ? '' : ' ($mvDevice)'}'
+            : (utilitySub ?? '${_fmt(voltage.volts)} V LV'),
       ));
+      if (mvChain) {
+        nodes.add(PowerNode(
+          id: 'tx',
+          kind: PowerNodeKind.transformer,
+          label: transformerLabel,
+          sub: '${_fmt(voltage.volts)} V LV',
+        ));
+        edge('utility', 'tx');
+      }
     case SupplyKind.generator:
       final dip = (plantStart != null && !plantStart.acceptable)
           ? ' · start dip ${plantStart.estimatedDipPct}% over'
@@ -304,7 +388,7 @@ PowerOneLine buildPowerOneLine(
     nodes.add(PowerNode(
       id: 'ats',
       kind: PowerNodeKind.ats,
-      label: manualTransfer ? 'COS' : 'ATS',
+      label: transferLabel ?? (manualTransfer ? 'COS' : 'ATS'),
       sub: manualTransfer ? 'manual changeover' : 'transfer switch',
     ));
     gridOut = 'ats';
@@ -313,7 +397,8 @@ PowerOneLine buildPowerOneLine(
         id: 'ess-bus',
         kind: PowerNodeKind.bus,
         label: 'Essential bus',
-        sub: '${_fmt(genResult.backupKva.inKilovoltAmperes)} kVA',
+        sub: _essentialBusSub(
+            genResult.backupKva.inKilovoltAmperes, essentialDemand),
       ));
       edge(utilityOut, 'bus', 'mains');
       edge('bus', 'ats', 'normal');
@@ -523,11 +608,29 @@ PowerOneLine buildPowerOneLine(
     }
   }
 
+  // Fix round F7 — the LV-bus capacitor bank E-301's spine draws.
+  if (capacitor != null) {
+    nodes.add(PowerNode(
+      id: 'cap',
+      kind: PowerNodeKind.capacitor,
+      label: capacitor.head,
+      sub: capacitor.sub,
+    ));
+    edge('bus', 'cap');
+  }
+
   return PowerOneLine(
     nodes: nodes,
     edges: edges,
     interlocks: interlocks,
     gensetStart: genPrimary ? plantStart : gensetStart,
+    gensetStepLoad: genPrimary || genResult == null || stepLoad == null
+        ? null
+        : gensetStepLoadCheck(
+            ratedKva: ApparentPower.kilovoltAmperes(
+                genResult.ratingKva.inKilovoltAmperes * genResult.units),
+            stepW: stepLoad),
+    gensetSizing: genPrimary ? null : genResult,
   );
 }
 
@@ -541,7 +644,7 @@ PowerOneLine buildPowerOneLine(
 /// the 'backing N kVA' note never echo whatever nameplate was typed.
 GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     ApparentPower? backupDemand, Power? backupPower,
-    {ApparentPower? minKvaForStart}) {
+    {ApparentPower? minKvaForStart, ApparentPower? minKvaForAds}) {
   final backup =
       backupDemand ?? ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
@@ -552,6 +655,7 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     forcedUnits: gen.units,
     backupPower: backupPower,
     minKvaForStart: minKvaForStart,
+    minKvaForAds: minKvaForAds,
   );
 }
 

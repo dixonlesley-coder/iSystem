@@ -18,6 +18,7 @@ import 'dart:math' as math;
 
 import '../geometry/building.dart' show BuildingLevels;
 import '../network/network.dart';
+import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/pipe_products.dart' show PipeProduct;
 import '../standards/sni.dart' show PlumbingFixture;
@@ -88,6 +89,132 @@ const double kMechRiserLabelCharW = 0.6;
 // A chosen label slot pulled more than this far (drawing units) from its default
 // anchor gets a short leader line back to the element it tags.
 const double _kLeaderThreshold = 14;
+
+/// Drawing-review D5 (2026-11-13) — the LONGEST leader a riser tag may have,
+/// in label heights (× the tag's size): 4 × 8 = 32 drawing units, about 9 mm
+/// on an A3 plot. A tag whose every clear slot needs a longer leader — or a
+/// leader crossing another leader / a pipe it does not name — is not placed
+/// at all: the element gets a numbered KEY TAG and its text goes into the
+/// sheet's KETERANGAN PIPA / PIPE KEY table. A drafting rule, not a standard.
+const double kMechRiserMaxLeaderLabelHeights = 4.0;
+
+/// Drawing-review D5 — the longest leader of a KEY TAG (its small numbered
+/// circle needs far less room than the text it replaces, so it is tried
+/// hugging the element first): 6 label heights, still a short local tie.
+const double kMechRiserMaxKeyLeaderLabelHeights = 6.0;
+
+/// Fix round 5 (2026-11-14) — the HARD cap on any riser key leader, in label
+/// heights (anchor to circle edge), the key ROWS included: a key that finds
+/// no clear slot within it is counted as an overprint, so the page
+/// escalation (pitch / band, single-floor pages, column split, plant row /
+/// page) gives the layout room instead of a leader stretched across the
+/// sheet. Tighter than the plan's `kPlanKeyTagLeaderReachFactor` (12).
+const double kMechRiserKeyLeaderCapLabelHeights = 10.0;
+
+/// Drawing review R2 — which of the extras (plant detail, reference
+/// callouts, system notes) a riser page draws: `auto` on the page carrying
+/// the building's lowest floor, `none`, or `only` them (a continuation sheet).
+enum MechRiserExtras { auto, none, only }
+
+/// Drawing review R2 (2026-11-13) — the least horizontal pitch between two
+/// distinct node columns of a riser band (drawing units; 60 ≈ 17 mm on an A3
+/// plot, room for a branch tag beside its stub). The diagram is NTS, so the
+/// columns are re-spaced over the band's free width ([riserColumnRespace])
+/// before any tag is placed. A drafting rule, not a standard.
+const double kMechRiserMinColumnPitch = 60;
+
+/// Drawing review R2 — a MONOTONE re-spacing of a riser band's node columns:
+/// breakpoints `(old x, new x)` over the distinct values of [xs] (within
+/// [tol]) such that every gap between two neighbouring columns is at least
+/// [minPitch] where the width [lo]..[hi] allows (else the pitches share it
+/// evenly), and otherwise keeps the columns' own proportions — the empty
+/// stretches give their width to the dense ones (one λ scales every original
+/// gap: new gap = max(minPitch, λ × old gap), the ends included with no
+/// minimum). Order is kept, coincident columns stay coincident, so a riser
+/// stack keeps ONE column on every floor. Empty input ⇒ no breakpoints. Pure.
+List<(double, double)> riserColumnRespace(Iterable<double> xs,
+    {required double lo,
+    required double hi,
+    required double minPitch,
+    Iterable<double>? taggedXs,
+    double tol = 0.5}) {
+  final sorted = xs.toList()..sort();
+  final v = <double>[];
+  for (final x in sorted) {
+    if (v.isEmpty || x - v.last > tol) v.add(x);
+  }
+  if (v.isEmpty) return const [];
+  final t = hi - lo;
+  if (v.length == 1 || !(t > 0)) return [for (final x in v) (x, x)];
+  // Gaps: lead, inner…, trail (ends may shrink to zero).
+  final g = <double>[
+    math.max(0.0, v.first - lo),
+    for (var i = 0; i + 1 < v.length; i++) v[i + 1] - v[i],
+    math.max(0.0, hi - v.last),
+  ];
+  // A column carrying a tagged element (a fixture / equipment glyph) needs
+  // the full pitch beside it; a bare junction column none (half when only
+  // one side is tagged). No [taggedXs] ⇒ every column is tagged.
+  final tagged = taggedXs?.toList();
+  double share(double x) =>
+      tagged == null || tagged.any((t) => (t - x).abs() <= tol) ? 1 : 0;
+  final p = <double>[
+    0,
+    for (var i = 0; i + 1 < v.length; i++)
+      minPitch * (share(v[i]) + share(v[i + 1])) / 2,
+    0,
+  ];
+  final sumP = p.fold<double>(0, (a, b) => a + b);
+  late List<double> ng;
+  if (sumP >= t) {
+    ng = [for (final q in p) q * t / sumP];
+  } else {
+    double f(double lam) {
+      var s = 0.0;
+      for (var i = 0; i < g.length; i++) {
+        s += math.max(p[i], lam * g[i]);
+      }
+      return s;
+    }
+
+    final sumG = g.fold<double>(0, (a, b) => a + b);
+    var a = 0.0, b = sumG > 0 ? t / sumG * 2 + 1 : 1.0;
+    for (var it = 0; it < 80; it++) {
+      final m = (a + b) / 2;
+      if (f(m) < t) {
+        a = m;
+      } else {
+        b = m;
+      }
+    }
+    ng = [for (var i = 0; i < g.length; i++) math.max(p[i], b * g[i])];
+  }
+  final out = <(double, double)>[];
+  var x = lo + ng.first;
+  for (var i = 0; i < v.length; i++) {
+    out.add((v[i], x));
+    x += ng[i + 1];
+  }
+  return out;
+}
+
+/// The re-spaced position of [x] under [bp] ([riserColumnRespace]):
+/// piecewise-linear between breakpoints, shifted beyond the ends. Pure.
+double riserRespaceAt(List<(double, double)> bp, double x) {
+  if (bp.isEmpty) return x;
+  if (x <= bp.first.$1) return x + (bp.first.$2 - bp.first.$1);
+  if (x >= bp.last.$1) return x + (bp.last.$2 - bp.last.$1);
+  for (var i = 0; i + 1 < bp.length; i++) {
+    final (a0, a1) = bp[i];
+    final (b0, b1) = bp[i + 1];
+    if (x <= b0) {
+      final f = b0 - a0 > 0 ? (x - a0) / (b0 - a0) : 0.0;
+      return a1 + f * (b1 - a1);
+    }
+  }
+  return x;
+}
+
 // When the ladder finds no CLEAR slot (two short branch tags share a midpoint),
 // the placer escapes further out in these steps until it clears, then leaders
 // back — so tags never fuse into one unreadable token (N3). VERIFY: a drafting
@@ -209,8 +336,435 @@ SldSheet buildMechanicalRiserSld({
   Map<String, String> nodeTags = const {},
   Set<String> transferPumpNodeIds = const {},
   ({int lo, int hi})? floorRange,
+  MechRiserExtras extras = MechRiserExtras.auto,
+  int? columnPart,
+  MechRiserPlant plant = MechRiserPlant.auto,
+  Set<String> fireBreakTankIds = const {},
+}) {
+  // Drawing review S2 — a LONE floor page whose key circles still overprint
+  // gets a taller band (1.5x, then 2x): the page is width-bound, so the
+  // extra height costs no label size, and the key rows / hugging slots get
+  // free room under the stacked lanes. The fewest overprints win (ties keep
+  // the standard band, so every other page is byte-identical).
+  // Drawing review S3 — then a wider fan-out / service-lane / column PITCH
+  // (x1.25 .. x3, each with the band steps): the first step that clears
+  // wins ([riserPitchEscalation]).
+  SldSheet at(double h, double p, {bool plantRow = false}) =>
+      _buildMechanicalRiserSld(
+        network: network,
+        sizing: sizing,
+        building: building,
+        focus: focus,
+        downfeed: downfeed,
+        supplyNote: supplyNote,
+        equipmentDetailByNodeId: equipmentDetailByNodeId,
+        edgeLengths: edgeLengths,
+        notes: notes,
+        detailCallouts: detailCallouts,
+        hotWaterRecirc: hotWaterRecirc,
+        nodeTags: nodeTags,
+        transferPumpNodeIds: transferPumpNodeIds,
+        fireBreakTankIds: fireBreakTankIds,
+        floorRange: floorRange,
+        extras: extras,
+        columnPart: columnPart,
+        bandH: h,
+        pitchScale: p,
+        plantRow: plantRow,
+        plantSplit: plant == MechRiserPlant.split,
+      );
+  final lone = floorRange != null && floorRange.lo == floorRange.hi;
+  // Drawing backlog L-2 (2026-11-13) — a SHORT multi-floor page (at most
+  // [kMechRiserEscalationMaxFloors] storeys, the whole riser of a low-rise
+  // building included) whose keys still overprint gets the same S2/S3
+  // escalation: the office's whole-building riser with its two return
+  // grilles left one `WC` key whose every clear key-row slot needed a leader
+  // across another tag. A clear page is built once (byte-identical); a tall
+  // page keeps the page-split rules (`paginatedRiserSheets`) instead, where
+  // a 30-storey re-draw per step would cost more than the split.
+  final floors = floorRange == null
+      ? (building?.levelCount ?? 1 << 30)
+      : floorRange.hi - floorRange.lo + 1;
+  if (plant == MechRiserPlant.row) {
+    return riserPitchEscalation(
+        build: (h, p) => at(h, p, plantRow: true), bandH: _bandH);
+  }
+  final best = riserPitchEscalation(
+    build: at,
+    bandH: _bandH,
+    enabled: lone || floors <= kMechRiserEscalationMaxFloors,
+  );
+  // Drawing backlog I-2 (2026-11-13) — a lone plant-level floor page whose
+  // PLANT items (tanks, pumps, booster, PRV, water meter) or the trunk pipes
+  // between them still print as keys re-draws its plant group in its own row
+  // under the fixture band ([riserPlantGroup], [riserPlantRows]), at a pitch
+  // that fits each plant tag beside its symbol. Kept only when it keys fewer
+  // plant items, overprints no more and stays width-bound (so it costs no
+  // label size); a page that already tags every plant item directly is
+  // returned as built (byte-identical).
+  if (!lone ||
+      columnPart != null ||
+      plant != MechRiserPlant.auto ||
+      best.plantKeyCount == 0) {
+    return best;
+  }
+  final row = riserPitchEscalation(
+    build: (h, p) => at(h, p, plantRow: true),
+    bandH: _bandH,
+  );
+  return riserPlantRowWins(best: best, row: row) ? row : best;
+}
+
+/// Drawing backlog I-2 — how a lone floor page draws its plant group:
+/// [auto] in its own row when that keys fewer plant items at no size cost
+/// ([riserPlantRowWins]); [row] always in its own row; [split] as the two
+/// parts of a plant split (with `columnPart`: 1 = the floor without its
+/// plant group, 2 = the `<floor> - PLANT` page); [none] as laid out.
+enum MechRiserPlant { auto, row, split, none }
+
+/// Drawing backlog I-2 — whether the plant-row re-draw [row] replaces the
+/// standard lone-floor page [best]: strictly fewer plant keys, no more
+/// overprints, and a drawing still width-bound on the A3 area (its height /
+/// width within [kMechRiserKeyBandMaxAspect], or no taller in proportion
+/// than [best]) so the extra row costs no label size. Pure.
+bool riserPlantRowWins({required SldSheet best, required SldSheet row}) {
+  double aspect(SldSheet s) {
+    final w = s.maxX - s.minX;
+    return w <= 0 ? double.infinity : (s.maxY - s.minY) / w;
+  }
+
+  return row.plantKeyCount < best.plantKeyCount &&
+      row.overlapCount <= best.overlapCount &&
+      aspect(row) <= math.max(aspect(best), kMechRiserKeyBandMaxAspect) + 1e-9;
+}
+
+/// Drawing backlog I-2 — the components a riser page treats as PLANT: the
+/// water / fire sources and movers and the metering / pressure-reducing
+/// sets between them.
+const Set<NodeComponent> kRiserPlantComponents = {
+  NodeComponent.pump,
+  NodeComponent.groundTank,
+  NodeComponent.roofTank,
+  NodeComponent.boosterSet,
+  NodeComponent.prv,
+  NodeComponent.waterMeter,
+};
+
+/// Drawing backlog I-2 — the PLANT GROUP of one floor page: every page node
+/// carrying a [kRiserPlantComponents] component (a roof tank parked on the
+/// roof line excepted by the caller), plus any non-fixture node that is not
+/// a riser end and sits BETWEEN two members (at least two of its run
+/// neighbours in the group — a gate valve between two pumps), to a fixed
+/// point. A run with both ends in the group is a plant TRUNK. Order-
+/// independent (set semantics; the fixed point never reads list order).
+/// Pure.
+Set<String> riserPlantGroup(Network network, List<NetNode> pageNodes,
+    {ServiceType? focus}) {
+  final byId = {for (final n in pageNodes) n.id: n};
+  final riserEnds = <String>{
+    for (final e in network.edges)
+      if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
+  };
+  final group = <String>{
+    for (final n in pageNodes)
+      if (kRiserPlantComponents.contains(n.component)) n.id,
+  };
+  if (group.isEmpty) return group;
+  final nbrs = <String, Set<String>>{};
+  for (final e in network.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    if (focus != null && e.service != focus) continue;
+    if (!byId.containsKey(e.fromId) || !byId.containsKey(e.toId)) continue;
+    (nbrs[e.fromId] ??= <String>{}).add(e.toId);
+    (nbrs[e.toId] ??= <String>{}).add(e.fromId);
+  }
+  var grew = true;
+  while (grew) {
+    grew = false;
+    for (final n in pageNodes) {
+      if (group.contains(n.id) ||
+          n.role == NodeRole.fixture ||
+          riserEnds.contains(n.id)) {
+        continue;
+      }
+      final inGroup = (nbrs[n.id] ?? const <String>{}).where(group.contains);
+      if (inGroup.length >= 2) {
+        group.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  return group;
+}
+
+/// Drawing backlog I-2 — the plant row's left-to-right order: trunk-connected
+/// members adjacent (a walk from the leftmost member of each trunk component,
+/// neighbours by layout x then id), components by their leftmost member.
+/// [normX] is the shared layout x ([riserLayoutPositions]). Order-
+/// independent. Pure.
+List<String> riserPlantOrder(
+    Network network, Set<String> group, Map<String, double> normX,
+    {ServiceType? focus}) {
+  int cmp(String a, String b) {
+    final d = (normX[a] ?? 0.5).compareTo(normX[b] ?? 0.5);
+    return d != 0 ? d : a.compareTo(b);
+  }
+
+  final nbrs = <String, Set<String>>{};
+  for (final e in network.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    if (focus != null && e.service != focus) continue;
+    if (!group.contains(e.fromId) || !group.contains(e.toId)) continue;
+    (nbrs[e.fromId] ??= <String>{}).add(e.toId);
+    (nbrs[e.toId] ??= <String>{}).add(e.fromId);
+  }
+  final out = <String>[];
+  final seen = <String>{};
+  for (final start in group.toList()..sort(cmp)) {
+    if (seen.contains(start)) continue;
+    // Depth-first walk, neighbours in layout order.
+    final stack = [start];
+    while (stack.isNotEmpty) {
+      final id = stack.removeLast();
+      if (!seen.add(id)) continue;
+      out.add(id);
+      final next = (nbrs[id] ?? const <String>{})
+          .where((m) => !seen.contains(m))
+          .toList()
+        ..sort(cmp);
+      stack.addAll(next.reversed);
+    }
+  }
+  return out;
+}
+
+/// Drawing backlog I-2 — pack the plant row: [order] laid left to right from
+/// [lo], each member taking [widthOf] (its symbol + its tag beside it + a
+/// gap), wrapping to a further row below when the next would pass [hi]. Each
+/// member's x is its SYMBOL centre, in the middle of its slot (its tag is
+/// centred under it, a trunk tag over the pipe beside it). Pure.
+List<List<({String id, double x})>> riserPlantRows(
+    List<String> order, double Function(String id) widthOf,
+    {required double lo, required double hi}) {
+  final rows = <List<({String id, double x})>>[[]];
+  var x = lo;
+  for (final id in order) {
+    final w = widthOf(id);
+    if (rows.last.isNotEmpty && x + w > hi) {
+      rows.add([]);
+      x = lo;
+    }
+    rows.last.add((id: id, x: x + w / 2));
+    x += w;
+  }
+  return rows.where((r) => r.isNotEmpty).toList();
+}
+
+/// Drawing backlog I-2 — the plant row's per-row pitch and its margin above
+/// the first / below the last row (drawing units).
+const double kRiserPlantRowPitch = 44;
+
+/// Drawing backlog I-2 — the fixture band kept above the plant row on a
+/// '<floor> - PLANT' page (it holds only the continuation marks).
+const double kRiserPlantPageFixtureBandH = 60;
+const double kRiserPlantRowPad = 18;
+
+/// Drawing backlog L-2 — the most storeys a multi-floor riser page may span
+/// and still take the S2/S3 band / pitch escalation (a taller page splits).
+const int kMechRiserEscalationMaxFloors = 4;
+
+/// Drawing review S2/S3 — the band heights ([kMechRiserBandSteps], × the
+/// standard band) and fan-out / lane / column PITCH scales
+/// ([kMechRiserPitchSteps]) a lone-floor riser page whose key circles still
+/// overprint is re-drawn at. The diagram is NTS, so both are free.
+const List<double> kMechRiserBandSteps = [1.0, 1.5, 2.0];
+const List<double> kMechRiserPitchSteps = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+
+/// Drawing review S2/S3 — the escalation [buildMechanicalRiserSld] runs on a
+/// lone-floor page: `build(bandH, 1.0)` as drawn when it already clears (or
+/// [enabled] is false — byte-identical), else each pitch step in order
+/// ([kMechRiserPitchSteps], the branch fan-out pitch, the service-lane pitch
+/// and the least column pitch scaled together) × each band step, keeping the
+/// FIRST sheet that reaches zero overprints, else the one with the strictly
+/// fewest (ties keep the earlier, plainer step). Pure.
+SldSheet riserPitchEscalation({
+  required SldSheet Function(double bandH, double pitchScale) build,
+  required double bandH,
+  bool enabled = true,
+}) {
+  var best = build(bandH, 1.0);
+  if (!enabled) return best;
+  var bestK = 1.0, bestP = 1.0;
+  if (best.overlapCount > 0) {
+    search:
+    for (final p in kMechRiserPitchSteps) {
+      for (final k in kMechRiserBandSteps) {
+        if (p == 1.0 && k == 1.0) continue;
+        final s = build(bandH * k, p);
+        if (s.overlapCount < best.overlapCount) {
+          best = s;
+          bestK = k;
+          bestP = p;
+        }
+        if (best.overlapCount == 0) break search;
+      }
+    }
+  }
+  return riserKeyBandEscalation(
+      build: build, bandH: bandH, best: best, bandStep: bestK, pitch: bestP);
+}
+
+/// Drawing backlog C-4 — the taller lone-floor bands tried to tag a crowded
+/// plant level DIRECTLY: the band height is free on a width-bound page, so the
+/// extra rows give the placer clear slots before it falls back to a numbered
+/// key. Steps beyond [kMechRiserBandSteps].
+const List<double> kMechRiserKeyBandSteps = [1.5, 2.0, 2.5, 3.0];
+
+/// Largest drawing height / width a taller band may reach: the page stays
+/// WIDTH-bound on the A3 drawing area (under its ~0.59 ratio, with room for
+/// the title strip), so the band costs no label size.
+const double kMechRiserKeyBandMaxAspect = 0.5;
+
+/// Drawing backlog C-4 — from the escalation's [best] (band step [bandStep],
+/// pitch [pitch]) a page that still prints KEY circles is re-drawn at each
+/// taller band ([kMechRiserKeyBandSteps]) at the same pitch; the first sheet
+/// with no more overprints, strictly fewer keys and a width-bound aspect wins
+/// a step, and the search keeps the fewest keys. No key ⇒ [best]. Pure.
+SldSheet riserKeyBandEscalation({
+  required SldSheet Function(double bandH, double pitchScale) build,
+  required double bandH,
+  required SldSheet best,
+  double bandStep = 1.0,
+  double pitch = 1.0,
+}) {
+  var out = best;
+  for (final k in kMechRiserKeyBandSteps) {
+    if (out.keyCount == 0) break;
+    if (k <= bandStep) continue;
+    final s = build(bandH * k, pitch);
+    final w = s.maxX - s.minX, h = s.maxY - s.minY;
+    if (w <= 0 || h / w > kMechRiserKeyBandMaxAspect) break;
+    if (s.overlapCount <= out.overlapCount && s.keyCount < out.keyCount) {
+      out = s;
+    }
+  }
+  return out;
+}
+
+/// Drawing review S4 — the FIXTURE COLUMNS of one floor page moved to part 2
+/// of a two-part column split, or null when the floor has fewer than two
+/// fixture groups. A group is a connected set of fixtures joined through
+/// their plain branch headers (a run neighbour with no component, no riser
+/// and no plant role — a unit tee `K`); a header rides with its group, so a
+/// fixture's cold-water and drainage runs never part. Risers, stacks, plant
+/// and the floor main stay on part 1. Groups are ordered by mean layout x
+/// ([riserLayoutPositions], then the least id) and cut where the two parts'
+/// fixture counts balance best (ties: the earlier cut); everything after the
+/// cut moves. Order-independent. Pure.
+Set<String>? riserColumnSplit(Network network, List<NetNode> pageNodes,
+    {ServiceType? focus}) {
+  final byId = {for (final n in pageNodes) n.id: n};
+  final riserEnds = <String>{
+    for (final e in network.edges)
+      if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
+  };
+  bool header(NetNode n) =>
+      n.role == NodeRole.main &&
+      n.component == null &&
+      !riserEnds.contains(n.id);
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  void union(String a, String b) {
+    final ra = find(a), rb = find(b);
+    if (ra == rb) return;
+    // The lesser id roots — the grouping never reads list order.
+    if (ra.compareTo(rb) < 0) {
+      parent[rb] = ra;
+    } else {
+      parent[ra] = rb;
+    }
+  }
+
+  for (final n in pageNodes) {
+    if (n.role == NodeRole.fixture && n.component == null) parent[n.id] = n.id;
+  }
+  if (parent.length < 2) return null;
+  for (final e in network.edges) {
+    if (focus != null && e.service != focus) continue;
+    if (e.kind != EdgeKind.run) continue;
+    final a = byId[e.fromId], b = byId[e.toId];
+    if (a == null || b == null) continue;
+    for (final (f, h) in [(a, b), (b, a)]) {
+      if (parent.containsKey(f.id) && f.role == NodeRole.fixture && header(h)) {
+        parent.putIfAbsent(h.id, () => h.id);
+        union(f.id, h.id);
+      }
+    }
+  }
+  final groups = <String, List<String>>{};
+  for (final id in parent.keys) {
+    (groups[find(id)] ??= <String>[]).add(id);
+  }
+  if (groups.length < 2) return null;
+  final normX = riserLayoutPositions(network, focus: focus);
+  int fixtures(List<String> g) =>
+      g.where((id) => byId[id]!.role == NodeRole.fixture).length;
+  double meanX(List<String> g) =>
+      g.map((id) => normX[id] ?? 0.5).reduce((a, b) => a + b) / g.length;
+  final ordered = groups.entries.toList()
+    ..sort((x, y) {
+      final d = meanX(x.value).compareTo(meanX(y.value));
+      return d != 0 ? d : x.key.compareTo(y.key);
+    });
+  final total = ordered.fold<int>(0, (a, g) => a + fixtures(g.value));
+  var bestK = 1;
+  var bestD = 1 << 30;
+  var run = 0;
+  for (var k = 1; k < ordered.length; k++) {
+    run += fixtures(ordered[k - 1].value);
+    final d = (total - 2 * run).abs();
+    if (d < bestD) {
+      bestD = d;
+      bestK = k;
+    }
+  }
+  return {
+    for (final g in ordered.skip(bestK)) ...g.value,
+  };
+}
+
+SldSheet _buildMechanicalRiserSld({
+  required Network network,
+  Map<String, EdgeSizing> sizing = const {},
+  BuildingLevels? building,
+  ServiceType? focus,
+  bool downfeed = false,
+  String supplyNote = '',
+  Map<String, String> equipmentDetailByNodeId = const {},
+  Map<String, Length> edgeLengths = const {},
+  List<String> notes = const [],
+  bool detailCallouts = false,
+  bool hotWaterRecirc = false,
+  Map<String, String> nodeTags = const {},
+  Set<String> transferPumpNodeIds = const {},
+  Set<String> fireBreakTankIds = const {},
+  ({int lo, int hi})? floorRange,
+  MechRiserExtras extras = MechRiserExtras.auto,
+  int? columnPart,
+  required double bandH,
+  double pitchScale = 1.0,
+  bool plantRow = false,
+  bool plantSplit = false,
 }) {
   final prims = <SldPrim>[];
+  final lanePitch = kRiserLanePitch * pitchScale;
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
   final flowFromByEdge = flowFromBySizing(sizing);
 
@@ -235,14 +789,45 @@ SldSheet buildMechanicalRiserSld({
       floorRange == null ||
       (n.floorIndex >= floorRange.lo && n.floorIndex <= floorRange.hi);
   final allVisible = network.nodes.where(nodeVisible).toList(growable: false);
-  final nodes = allVisible.where(onPage).toList(growable: false);
+  final pageNodes = allVisible.where(onPage).toList(growable: false);
+  // Drawing review S4 — a lone-floor page split by FIXTURE COLUMNS: part 2
+  // draws the moved fixture groups, part 1 everything else ([columnPart]
+  // null / no split ⇒ the whole page, byte-identical).
+  final Set<String>? split =
+      columnPart == null || floorRange == null || floorRange.lo != floorRange.hi
+          ? null
+          : plantSplit
+              // Drawing backlog I-2 — the plant group on its own page.
+              ? (() {
+                  final g = riserPlantGroup(network, pageNodes, focus: focus);
+                  return g.isEmpty || g.length == pageNodes.length ? null : g;
+                })()
+              : riserColumnSplit(network, pageNodes, focus: focus);
+  final nodes = split == null
+      ? pageNodes
+      : [
+          for (final n in pageNodes)
+            if (split.contains(n.id) == (columnPart == 2)) n,
+        ];
+  final onPart = {for (final n in nodes) n.id};
+  // The runs crossing the cut (one end on each part).
+  final crossing = <String>{
+    if (split != null)
+      for (final e in network.edges)
+        if ((focus == null || e.service == focus) &&
+            e.kind == EdgeKind.run &&
+            pageNodes.any((n) => n.id == e.fromId) &&
+            pageNodes.any((n) => n.id == e.toId) &&
+            split.contains(e.fromId) != split.contains(e.toId))
+          e.id,
+  };
   if (allVisible.isEmpty) {
     return SldSheet(
       prims: const [],
       minX: 0,
       minY: 0,
       maxX: _gutterW + _drawW,
-      maxY: _topPad + _bandH,
+      maxY: _topPad + bandH,
       legend: _fittingLegend(network, focus, const []),
       supplyNote: supplyNote,
     );
@@ -274,12 +859,29 @@ SldSheet buildMechanicalRiserSld({
   final roofH = roofBand ? _roofBandH : 0.0;
   // The extras (plant detail, reference callouts, notes) ride the page that
   // carries the building's LOWEST floor (the last page of a set).
-  final drawExtras = floorRange == null || loFloor == fullLo;
+  // Drawing review R2 — [extras] `none` leaves them to a continuation sheet
+  // (`only`), when the lowest-floor page cannot print at 7 pt with them.
+  // Drawing backlog I-2 — a plant split's extras (the pump-set detail and
+  // its notes) ride the '<floor> - PLANT' page, never the floor page.
+  final drawExtras = split != null && (columnPart == 2) != plantSplit
+      ? false
+      : switch (extras) {
+          MechRiserExtras.auto => floorRange == null || loFloor == fullLo,
+          MechRiserExtras.none => false,
+          MechRiserExtras.only => true,
+        };
+  String floorNameOf(int f) => (building != null && f < building.levelCount)
+      ? building.floors[f].name
+      : 'Level ${f + 1}';
 
+  // Drawing backlog I-2 — the plant row's height (set below, before any
+  // node is placed; 0 ⇒ no plant row).
+  var plantRowH = 0.0;
   // Band centre y for a floor index — highest floor at the TOP.
   double bandTop(int floorIndex) =>
-      _topPad + roofH + (hiFloor - floorIndex) * _bandH;
-  double bandCentreY(int floorIndex) => bandTop(floorIndex) + _bandH / 2;
+      _topPad + roofH + (hiFloor - floorIndex) * bandH;
+  double bandCentreY(int floorIndex) =>
+      bandTop(floorIndex) + (bandH - plantRowH) / 2;
   final roofLineY = _topPad + roofH - _roofLineInset;
   bool parksOnRoof(NetNode n) =>
       roofBand &&
@@ -300,11 +902,82 @@ SldSheet buildMechanicalRiserSld({
   // floor band (the shared [riserServiceLanes], mirrored by the canvas Auto
   // painter), so CW / HW and drainage / vent branches no longer overdraw.
   final lanes = riserServiceLanes(network, focus: focus);
+
+  // Drawing backlog I-2 — the node's tag text (equipment tag + role word +
+  // duty suffix), the one string the node loop below places.
+  String? nodeLabelText(NetNode n) {
+    final tagged = nodeTags[n.id];
+    // Backlog Z-4 — a fire zone break tank is named so, never 'Roof tank'.
+    final word =
+        fireBreakTankIds.contains(n.id) ? kFireBreakTankLabel : _nodeLabel(n);
+    final base = (tagged != null && tagged.isNotEmpty)
+        ? (word == null ? tagged : '$tagged $word')
+        : word;
+    if (base == null) return null;
+    final detail = equipmentDetailByNodeId[n.id];
+    return detail == null ? base : '$base · $detail';
+  }
+
+  // Drawing backlog I-2 — the plant group of a lone floor page (counted on
+  // every such page; re-drawn in its own row only when [plantRow]).
+  final lonePage = floorRange != null && floorRange.lo == floorRange.hi;
+  final plantIds = !lonePage
+      ? const <String>{}
+      : split == null
+          ? riserPlantGroup(network,
+              [for (final n in nodes) if (!parksOnRoof(n)) n], focus: focus)
+          // The '<floor> - PLANT' page of a plant split counts its own.
+          : plantSplit && columnPart == 2
+              ? split
+              : const <String>{};
+  // The '<floor> - PLANT' page lays its whole group out as the plant row.
+  final plantPage = plantSplit && split != null && columnPart == 2;
+  final rowPlant =
+      (plantRow && split == null || plantPage) && plantIds.isNotEmpty;
+  final plantRows = !rowPlant
+      ? const <List<({String id, double x})>>[]
+      : riserPlantRows(
+          riserPlantOrder(network, plantIds, normX, focus: focus),
+          (id) {
+            // The member's tag, or a longer trunk tag riding beside it.
+            final n = nodes.firstWhere((m) => m.id == id);
+            final t = nodeLabelText(n);
+            var w = t == null ? 0.0 : _labelWidth(t, 8);
+            for (final e in network.edges) {
+              if (e.kind != EdgeKind.run ||
+                  (focus != null && e.service != focus) ||
+                  (e.fromId != id && e.toId != id) ||
+                  !plantIds.contains(e.fromId) ||
+                  !plantIds.contains(e.toId)) {
+                continue;
+              }
+              final tag = _pipeTag(sizing[e.id], e,
+                  function: riserFunctionFor(network, e,
+                      downfeed: downfeed, flowFrom: flowFromByEdge),
+                  length: edgeLengths[e.id]);
+              w = math.max(w, _labelWidth(tag, 8));
+            }
+            return math.max(_symbolSize, w) + 24 * pitchScale;
+          },
+          lo: _gutterW + _sidePad,
+          hi: _gutterW + _drawW - _sidePad,
+        );
+  // The row pitch grows with the escalation's band step, so a crowded row
+  // gets room above / below its pipes for the tags.
+  final plantPitch = kRiserPlantRowPitch * math.max(1.0, bandH / _bandH);
+  plantRowH = plantRows.isEmpty
+      ? 0.0
+      : plantRows.length * plantPitch + 2 * kRiserPlantRowPad;
+  // The floor band grows by the plant row; the fixture band keeps [bandH].
+  // On the '<floor> - PLANT' page only the continuation marks ride the
+  // fixture band, so it keeps a short one.
+  if (plantPage && rowPlant) bandH = kRiserPlantPageFixtureBandH;
+  bandH += plantRowH;
   Offset posOf(NetNode n) => Offset(
       placeX(n.id),
       parksOnRoof(n)
           ? roofLineY - _symbolSize / 2
-          : bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * kRiserLanePitch);
+          : bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * lanePitch);
 
   final posById = <String, Offset>{
     for (final n in nodes) n.id: posOf(n),
@@ -318,7 +991,7 @@ SldSheet buildMechanicalRiserSld({
   // lane fan out to distinct y offsets (filled below, after the B5 spread).
   final fanOff = <String, double>{};
   double runY(NetEdge e, Offset a) =>
-      a.dy + (edgeLanes[e.id] ?? 0) * kRiserLanePitch + (fanOff[e.id] ?? 0);
+      a.dy + (edgeLanes[e.id] ?? 0) * lanePitch + (fanOff[e.id] ?? 0);
 
   // ── Spread coincident node positions minimally in x (B5) ─────────────────────
   // Two fixtures at the same world x land on the same band point and stack their
@@ -334,6 +1007,55 @@ SldSheet buildMechanicalRiserSld({
     final p = posById[e.key]!;
     posById[e.key] = Offset(p.dx + e.value, p.dy);
   }
+  // Drawing review R2 — the band's node columns re-spaced over the free
+  // width (NTS): a toilet group compressed into a few cm of plan no longer
+  // stacks its stubs under each other's tags while the sheet stays empty.
+  final respace = riserColumnRespace([
+    for (final e in posById.entries)
+      if (!rowPlant || !plantIds.contains(e.key)) e.value.dx
+  ],
+      lo: _gutterW + _sidePad,
+      hi: _gutterW + _drawW - _sidePad,
+      minPitch: kMechRiserMinColumnPitch * pitchScale,
+      taggedXs: [
+        for (final n in nodes)
+          if (posById[n.id] != null &&
+              (!rowPlant || !plantIds.contains(n.id)) &&
+              (n.component != null || n.role == NodeRole.fixture))
+            posById[n.id]!.dx,
+      ]);
+  for (final id in posById.keys.toList()) {
+    final p = posById[id]!;
+    posById[id] = Offset(riserRespaceAt(respace, p.dx), p.dy);
+  }
+  // Drawing backlog I-2 — the plant row: each member at its packed x, rows
+  // stacked under the fixture band of its floor.
+  final plantRowTop = !rowPlant ? 0.0 : bandTop(loFloor) + bandH - plantRowH;
+  for (var r = 0; r < plantRows.length; r++) {
+    for (final m in plantRows[r]) {
+      posById[m.id] = Offset(m.x,
+          plantRowTop + kRiserPlantRowPad + (r + 0.5) * plantPitch);
+    }
+  }
+  double pageX(String nodeId) => riserRespaceAt(respace, placeX(nodeId));
+  // Drawing review S4 — part 2 of a column split: each part-1 end of a run
+  // crossing the cut becomes a PHANTOM at the band's left edge (no symbol,
+  // a 'LANJUTAN DARI' mark), so the moved branches still read from it.
+  final phantoms = <String>{};
+  if (split != null && columnPart == 2) {
+    for (final e in network.edges) {
+      if (!crossing.contains(e.id)) continue;
+      final id = onPart.contains(e.fromId) ? e.toId : e.fromId;
+      if (!phantoms.add(id)) continue;
+      final n = pageNodes.firstWhere((m) => m.id == id);
+      posById[id] = Offset(_gutterW + 6, posOf(n).dy);
+    }
+  }
+  // An edge drawn on THIS sheet: both ends drawn, and a phantom only through
+  // a crossing run.
+  bool drawsEdge(NetEdge e) =>
+      !(phantoms.contains(e.fromId) || phantoms.contains(e.toId)) ||
+      crossing.contains(e.id);
 
   // ── Round 21 (riser-drafting-2-4) — branch fan-out from one header ─────────
   // Runs out of one node on the same lane were collinear (WC / lavatory /
@@ -347,12 +1069,14 @@ SldSheet buildMechanicalRiserSld({
     if (e.kind != EdgeKind.run) continue;
     if (focus != null && e.service != focus) continue;
     if (posById[e.fromId] == null || posById[e.toId] == null) continue;
+    if (!drawsEdge(e)) continue;
     final lane = edgeLanes[e.id] ?? 0;
     (siblings['${e.fromId}|${e.service.index}|$lane'] ??= <NetEdge>[]).add(e);
   }
   final singleService =
       focus != null || network.edges.map((e) => e.service).toSet().length < 2;
-  final fanPitch = singleService ? _kFanPitchSingle : _kFanPitchCombined;
+  final fanPitch =
+      (singleService ? _kFanPitchSingle : _kFanPitchCombined) * pitchScale;
   // Each fan group is (the shared header node, its runs); the far end of a
   // run is the endpoint that is NOT the header.
   final fanGroups = <(String, List<NetEdge>)>[];
@@ -419,14 +1143,40 @@ SldSheet buildMechanicalRiserSld({
   // colliding tag along an offset ladder, adding a leader when pulled far off
   // its anchor (B5). Fixed labels (gutter, fan-out) are reserved FIRST so the
   // movable band tags divert around them.
+  // Drawing backlog I-2 — the tag texts of the plant items and trunks.
+  final plantTexts = <String>{};
   final placer = _LabelPlacer(prims)
     // Round 34 — a tag that lands in a different floor band than the
     // element it names is counted unresolved (the sheet's overlap warning).
     ..bandIndexAt = (double y) {
       final rel = y - (_topPad + roofH);
       if (rel < 0) return null;
-      final i = (rel / _bandH).floor();
+      final i = (rel / bandH).floor();
       return i >= bandCount ? null : i;
+    }
+    // Drawing review S2 — the band span of a sheet y (the KEY ROWS).
+    ..bandSpanAt = (double y) {
+      final rel = y - (_topPad + roofH);
+      if (rel < 0) {
+        return roofBand && y >= _topPad
+            ? (top: _topPad, bottom: _topPad + roofH)
+            : null;
+      }
+      final i = (rel / bandH).floor();
+      if (i >= bandCount) return null;
+      final top = _topPad + roofH + i * bandH;
+      return (top: top, bottom: top + bandH);
+    }
+    // Drawing-review D5 — the floor name of a sheet y (key-table LEVEL).
+    ..levelAt = (double y) {
+      final rel = y - (_topPad + roofH);
+      if (rel < 0) return roofBand ? 'ATAP' : null;
+      final i = (rel / bandH).floor();
+      if (i >= bandCount) return null;
+      final f = hiFloor - i;
+      return (building != null && f < building.levelCount)
+          ? building.floors[f].name
+          : 'Level ${f + 1}';
     };
 
   // ── Floor bands: a baseline hairline + the FFL gutter label ─────────────────
@@ -444,7 +1194,7 @@ SldSheet buildMechanicalRiserSld({
   }
   for (var f = loFloor; f <= hiFloor; f++) {
     final top = bandTop(f);
-    final yBase = top + _bandH - 1;
+    final yBase = top + bandH - 1;
     prims.add(SldLine(_gutterW, yBase, _gutterW + _drawW, yBase,
         weight: SldWeight.thin));
     // X1: the floor datum is ink too — a riser tag whose mid-point lands on the
@@ -457,12 +1207,27 @@ SldSheet buildMechanicalRiserSld({
     final name = (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
-    placer.reserve(SldLabel(8, top + 18, name, size: 10, bold: true));
+    // Drawing backlog I-2 — the plant split's own page is '<floor> - PLANT'.
+    placer.reserve(SldLabel(8, top + 18, plantPage ? '$name - PLANT' : name,
+        size: 10, bold: true));
     if (building != null && f < building.levelCount) {
       final ffl = building.elevationOf(f).meters;
       placer.reserve(
           SldLabel(8, top + 32, fflLabel(ffl), size: 8, role: SldRole.source));
     }
+    if (split != null && !plantSplit) {
+      placer.reserve(
+          SldLabel(8, top + 46, 'BAGIAN $columnPart/2', size: 8, bold: true));
+    }
+  }
+  // Drawing backlog I-2 — the plant row's own band: a thin dashed divider
+  // under the fixture band and its 'PLANT' caption in the gutter.
+  if (rowPlant && !plantPage) {
+    prims.add(SldLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop,
+        weight: SldWeight.thin, dashed: true));
+    placer.reserveLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop);
+    placer.reserve(
+        SldLabel(8, plantRowTop + 16, 'PLANT', size: 8, bold: true));
   }
 
   // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
@@ -470,8 +1235,7 @@ SldSheet buildMechanicalRiserSld({
   // Round 34 — counted over the FULL network: collapsed terminals still
   // appear here (the one place they are stated).
   final fanOuts = floorFanOuts(fullNetwork,
-      visibleNodeIds: fullVisible,
-      labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
+      visibleNodeIds: fullVisible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
   const fanX = _gutterW + _drawW + 12;
   for (final fo in fanOuts) {
     if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
@@ -505,7 +1269,7 @@ SldSheet buildMechanicalRiserSld({
   // label placer can reserve those blocks before it places any movable tag;
   // the blocks themselves are still EMITTED further down, unchanged.
   const contentMaxX = _gutterW + _drawW + _fanColW;
-  final extrasTop = _topPad + roofH + bandCount * _bandH + 12.0;
+  final extrasTop = _topPad + roofH + bandCount * bandH + 12.0;
   // Round 32 (riser-drawings-4-3) — a per-service sheet carries only the
   // reference details of the system it DRAWS: with a focus, a callout is
   // gated on the focused-service nodes ([nodeVisible]); the combined view
@@ -599,13 +1363,25 @@ SldSheet buildMechanicalRiserSld({
       ? 0.0
       : detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
   const notesLeft = contentMaxX - _notesW;
-  var calloutX0 = _gutterW + (_drawW - calloutTotalW) / 2;
+  // Drawing-review D4 (2026-11-13) — the PUMP-SET DETAIL rides the extras
+  // strip BELOW the bands (bottom-left), never a right-margin column: that
+  // column widened the lowest-floor page by 252 units, so the A3 fit printed
+  // every tag of the issued sheet at ~5.3-6.1 pt. The callouts start right
+  // of it.
+  final plantH = plantWillDraw
+      ? _plantDetailH(network,
+          ground: plant.ground, pump: plant.pump, include: nodeVisible)
+      : 0.0;
+  const plantLeft = 8.0;
+  final calloutMinX = plantWillDraw ? plantLeft + _plantW + 16 : _gutterW;
+  var calloutX0 =
+      math.max(calloutMinX, _gutterW + (_drawW - calloutTotalW) / 2);
   var notesTop = extrasTop;
   if (detailBoxes.isNotEmpty &&
       showNotes &&
       calloutX0 + calloutTotalW > notesLeft - 16) {
     final shifted = notesLeft - 16 - calloutTotalW;
-    if (shifted >= _gutterW) {
+    if (shifted >= calloutMinX) {
       calloutX0 = shifted;
     } else {
       notesTop = extrasTop + _calloutH + 12;
@@ -624,13 +1400,14 @@ SldSheet buildMechanicalRiserSld({
   for (final n in nodes) {
     final p = posById[n.id]!;
     final half = (n.component != null ? _symbolSize : _nodeBox) / 2;
-    placer.reserveBox(p.dx - half, p.dy - half, p.dx + half, p.dy + half);
+    placer.reserveGlyph(p.dx - half, p.dy - half, p.dx + half, p.dy + half);
   }
   for (final e in network.edges) {
     if (focus != null && e.service != focus) continue;
     final a = posById[e.fromId];
     final b = posById[e.toId];
     if (a == null || b == null) continue;
+    if (!drawsEdge(e)) continue;
     final y = runY(e, a);
     if ((y - a.dy).abs() > 0.5) placer.reserveLine(a.dx, a.dy, a.dx, y);
     if ((b.dx - a.dx).abs() >= 0.5) placer.reserveLine(a.dx, y, b.dx, y);
@@ -640,12 +1417,7 @@ SldSheet buildMechanicalRiserSld({
   }
   if (plantWillDraw) {
     placer.reserveBox(
-        contentMaxX + 12,
-        _topPad,
-        contentMaxX + 12 + _plantW,
-        _topPad +
-            _plantDetailH(network,
-                ground: plant.ground, pump: plant.pump, include: nodeVisible));
+        plantLeft, extrasTop, plantLeft + _plantW, extrasTop + plantH);
   }
   if (detailBoxes.isNotEmpty) {
     var bx = calloutX0;
@@ -666,7 +1438,7 @@ SldSheet buildMechanicalRiserSld({
     // A vent riser reaching the TOP floor terminates through the roof: a short
     // dashed stub above the band + the 'VTR' code.
     for (final id in ventTopTerminalIds(network, topFloor: topFloor)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       final stubTop = roofBand ? roofLineY - 10 : bandTop(hiFloor) - 10;
       prims.add(SldLine(p.dx, p.dy, p.dx, stubTop,
@@ -682,7 +1454,7 @@ SldSheet buildMechanicalRiserSld({
         ..reserveLine(p.dx, p.dy, p.dx, stubTop)
         ..reserveLine(p.dx - 4, stubTop, p.dx + 4, stubTop);
       placer
-          .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
+          .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 8, bold: true));
     }
   }
   if (focus == null ||
@@ -690,7 +1462,7 @@ SldSheet buildMechanicalRiserSld({
       focus == ServiceType.drainage) {
     // The drawn vent-to-soil tee: a short bar across the shared junction.
     for (final id in ventSoilTeeNodeIds(network)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       prims.add(SldLine(p.dx - 9, p.dy, p.dx + 9, p.dy,
           weight: SldWeight.medium,
@@ -702,7 +1474,7 @@ SldSheet buildMechanicalRiserSld({
     // cleanouts the engineer actually drew (a missing one is an ADVISORY in the
     // Review panel, never fabricated here).
     for (final id in cleanoutAtStackBaseIds(network)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       placer.reserve(SldLabel(
           p.dx - _symbolSize / 2 - 2, p.dy - _symbolSize / 2 - 4, 'CO',
@@ -721,16 +1493,26 @@ SldSheet buildMechanicalRiserSld({
       focus == ServiceType.drainage ||
       focus == ServiceType.rainwater) {
     final exitId = _drainageExitNodeId(network);
-    final p = exitId == null ? null : posById[exitId];
+    final p =
+        exitId == null || phantoms.contains(exitId) ? null : posById[exitId];
     if (p != null) {
       final gy = p.dy + _symbolSize;
       prims.addAll(planSewerTerminusPrims(cx: p.dx, cy: gy, size: _symbolSize));
       // Round 15 — the terminus glyph is ink a node tag must not print over.
-      placer.reserveBox(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
+      placer.reserveGlyph(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
           p.dx + _symbolSize / 2, gy + _symbolSize / 2);
-      placer.reserve(SldLabel(
-          p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
-          size: 7, bold: true));
+      // Drawing backlog C-4 — the note takes its own CLEAR slot: placed
+      // (not forced) after every pipe leg is reserved, so it never sits on a
+      // line, and reserved before the pipe tags, which then avoid it.
+      // Drawing-review D4 — 8 units like the tags, so it still plots at
+      // >= 7 pt on a page fitted below 1:1.
+      const note = 'KE SALURAN PEMBUANGAN';
+      placer.place(p.dx + _symbolSize / 2 + 4, gy + 3, note,
+          size: 8,
+          bold: true,
+          anchorX: p.dx,
+          anchorY: gy,
+          candidates: _riserLadder(note));
     }
   }
 
@@ -747,9 +1529,9 @@ SldSheet buildMechanicalRiserSld({
                 lo: loFloor,
                 hi: hiFloor,
                 topY: bandTop(hiFloor) + 2,
-                bottomY: bandTop(loFloor) + _bandH - 2,
+                bottomY: bandTop(loFloor) + bandH - 2,
                 byId: {for (final n in allVisible) n.id: n},
-                placeX: placeX,
+                placeX: pageX,
               ));
   }
 
@@ -767,7 +1549,7 @@ SldSheet buildMechanicalRiserSld({
   if (floorRange != null) {
     final byId = {for (final n in allVisible) n.id: n};
     final topEdgeY = bandTop(hiFloor) + 2;
-    final bottomEdgeY = bandTop(loFloor) + _bandH - 2;
+    final bottomEdgeY = bandTop(loFloor) + bandH - 2;
     String floorName(int f) => (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
@@ -817,6 +1599,7 @@ SldSheet buildMechanicalRiserSld({
       final a = posById[e.fromId];
       final b = posById[e.toId];
       final layer = riserServiceCode(e.service);
+      if (!drawsEdge(e)) continue;
       if (a == null && b == null) {
         // A pass-through: both ends visible on OTHER pages, one above and one
         // below this page's floor range.
@@ -828,7 +1611,7 @@ SldSheet buildMechanicalRiserSld({
         if (!(lo < loFloor && hi > hiFloor)) continue;
         final lower = na.floorIndex <= nb.floorIndex ? na : nb;
         final upper = identical(lower, na) ? nb : na;
-        final x = placeX(lower.id);
+        final x = pageX(lower.id);
         prims.add(SldLine(x, bottomEdgeY, x, topEdgeY,
             weight: SldWeight.medium,
             role: _edgeRole(network, e),
@@ -846,6 +1629,11 @@ SldSheet buildMechanicalRiserSld({
         final here = a ?? b!;
         final farNode = byId[a == null ? e.fromId : e.toId];
         if (farNode == null) continue;
+        // Drawing review S4 — a far end on THIS floor is on the other column
+        // part (its run is marked below), never a floor continuation.
+        if (farNode.floorIndex >= loFloor && farNode.floorIndex <= hiFloor) {
+          continue;
+        }
         final up = farNode.floorIndex > hiFloor;
         final edgeY = up ? topEdgeY : bottomEdgeY;
         prims.add(SldLine(here.dx, here.dy, here.dx, edgeY,
@@ -866,6 +1654,122 @@ SldSheet buildMechanicalRiserSld({
     }
   }
 
+  // ── Drawing review S4 — the column-split CUT marks ──────────────────────────
+  // Part 1: each part-1 node whose runs cross the cut gets ONE stub per
+  // service lane to the band's right edge, marked 'LANJUT KE <floor> -
+  // BAGIAN 2' (the runs' tags ride part 2, where they are drawn whole).
+  // Part 2: each phantom names the sheet it continues from.
+  if (split != null) {
+    final floor = floorNameOf(loFloor);
+    if (columnPart == 2) {
+      final ids = phantoms.toList()..sort();
+      // Fix round 3 (O2) — each mark names the pipe it continues (the run
+      // crossing the cut into this phantom, its size-service-material tag),
+      // so stacked marks are told apart.
+      final tagOf = <String, List<String>>{};
+      for (final e in network.edges) {
+        if (!crossing.contains(e.id)) continue;
+        final id = phantoms.contains(e.fromId) ? e.fromId : e.toId;
+        final t = _pipeTag(sizing[e.id], e,
+            function: riserFunctionFor(network, e,
+                downfeed: downfeed, flowFrom: flowFromByEdge));
+        final l = tagOf.putIfAbsent(id, () => <String>[]);
+        if (!l.contains(t)) l.add(t);
+      }
+      for (final id in ids) {
+        final p = posById[id]!;
+        final pipe = (tagOf[id] ?? const <String>[]).join(', ');
+        // In brackets, not after ' - ': a keyed mark keeps its pipe in the
+        // same PIPE KEY cell (the table splits a tag at its first ' - ').
+        final via = pipe.isEmpty ? '' : ' ($pipe)';
+        final text = plantSplit
+            ? 'LANJUTAN DARI $floor$via'
+            : 'LANJUTAN DARI $floor - BAGIAN 1$via';
+        placer.place(p.dx + 4, p.dy - 4, text,
+            size: 8,
+            bold: true,
+            anchorX: p.dx,
+            anchorY: p.dy,
+            candidates: _runLadder(text));
+      }
+    } else {
+      const xEdge = _gutterW + _drawW - 4;
+      final stubs = <String, (Offset, double, NetEdge)>{};
+      for (final e in network.edges) {
+        if (!crossing.contains(e.id)) continue;
+        final id = onPart.contains(e.fromId) ? e.fromId : e.toId;
+        final a = posById[id]!;
+        final y = a.dy + (edgeLanes[e.id] ?? 0) * lanePitch;
+        final k = '$id|${e.service.index}|${edgeLanes[e.id] ?? 0}';
+        final prev = stubs[k];
+        if (prev == null || e.id.compareTo(prev.$3.id) < 0) {
+          stubs[k] = (a, y, e);
+        }
+      }
+      final keys = stubs.keys.toList()..sort();
+      for (final k in keys) {
+        final (a, y, e) = stubs[k]!;
+        final role = _edgeRole(network, e);
+        final layer = riserServiceCode(e.service);
+        final dashed = e.service == ServiceType.vent;
+        if ((y - a.dy).abs() > 0.5) {
+          prims.add(SldLine(a.dx, a.dy, a.dx, y,
+              weight: SldWeight.medium,
+              role: role,
+              layer: layer,
+              dashed: dashed));
+          placer.reserveLine(a.dx, a.dy, a.dx, y);
+        }
+        prims.add(SldLine(a.dx, y, xEdge, y,
+            weight: SldWeight.medium,
+            role: role,
+            layer: layer,
+            dashed: dashed));
+        placer.reserveLine(a.dx, y, xEdge, y);
+      }
+      for (final k in keys) {
+        final (_, y, _) = stubs[k]!;
+        final text = plantSplit
+            ? 'LANJUT KE $floor - PLANT'
+            : 'LANJUT KE $floor - BAGIAN 2';
+        placer.place(xEdge - _labelWidth(text, 8), y - 6, text,
+            size: 8,
+            bold: true,
+            anchorX: xEdge,
+            anchorY: y,
+            candidates: _runLadder(text));
+      }
+    }
+  }
+
+  // Drawing backlog I-2 — a plant-row member's tag is placed FIRST (before
+  // any pipe tag can take its slot), centred UNDER its symbol (its slot is
+  // as wide as the tag), clear of the trunk pipes leaving it sideways.
+  if (rowPlant) {
+    final ids = plantIds.toList()..sort();
+    for (final id in ids) {
+      final n = nodes.firstWhere((m) => m.id == id);
+      final p = posById[id];
+      final label = nodeLabelText(n);
+      if (p == null || label == null) continue;
+      plantTexts.add(label);
+      final w = _labelWidth(label, 8);
+      final inset = (n.component != null ? _symbolSize : _nodeBox) / 2;
+      placer.place(p.dx - w / 2, p.dy + _symbolSize / 2 + 10, label,
+          size: 8,
+          role: _nodeRole(n),
+          anchorX: p.dx,
+          anchorY: p.dy,
+          candidates: [
+            const Offset(0, 0),
+            const Offset(0, 10),
+            const Offset(0, -(_symbolSize + 18)),
+            ..._nodeLadder(label).skip(1).map((o) => Offset(
+                o.dx + w / 2 + inset + 4, o.dy - _symbolSize / 2 - 7)),
+          ]);
+    }
+  }
+
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
   // B4: every pipe run/riser is MEDIUM weight (vs the thin datum), carries its
   // service code as the CAD layer, and the vent service draws DASHED.
@@ -874,6 +1778,7 @@ SldSheet buildMechanicalRiserSld({
     final a = posById[e.fromId];
     final b = posById[e.toId];
     if (a == null || b == null) continue;
+    if (!drawsEdge(e)) continue;
     final role = _edgeRole(network, e);
     final layer = riserServiceCode(e.service);
     final dashed = e.service == ServiceType.vent;
@@ -908,6 +1813,11 @@ SldSheet buildMechanicalRiserSld({
     final fn = riserFunctionFor(network, e,
         downfeed: downfeed, flowFrom: flowFromByEdge);
     final tag = _pipeTag(sz, e, function: fn, length: edgeLengths[e.id]);
+    if (e.kind == EdgeKind.run &&
+        plantIds.contains(e.fromId) &&
+        plantIds.contains(e.toId)) {
+      plantTexts.add(tag);
+    }
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg. Round 10
       // (mech-drawing-props-7) — the default slot sits INSIDE the upper
@@ -915,7 +1825,7 @@ SldSheet buildMechanicalRiserSld({
       // centres, so the old mid-point of two adjacent floors landed exactly on
       // the reserved floor datum and EVERY riser tag walked the ladder to a
       // leader.
-      final midY = math.min(a.dy, b.dy) + _bandH / 4;
+      final midY = math.min(a.dy, b.dy) + bandH / 4;
       placer.place(b.dx + 6, midY, tag,
           size: 8,
           role: role,
@@ -940,7 +1850,10 @@ SldSheet buildMechanicalRiserSld({
           role: role,
           anchorX: midX,
           anchorY: y,
-          candidates: _runLadder(tag));
+          candidates: _runLadder(tag),
+          // Fix round 3 (O2) — a SHORT run (its tag wider than the drawn
+          // run) is leadered to its tag.
+          alwaysLead: _labelWidth(tag, 8) > (b.dx - a.dx).abs());
     }
   }
 
@@ -972,16 +1885,11 @@ SldSheet buildMechanicalRiserSld({
     // same `equipmentNodeTags` number the plan + schedule carry) ahead of its
     // descriptive word, so the riser cross-references them without losing
     // what the unit is (`TK-01 Roof tank · 5 m3`, `P-02 Pump · 2.2 kW`).
-    final tagged = nodeTags[n.id];
-    final word = _nodeLabel(n);
-    final base = (tagged != null && tagged.isNotEmpty)
-        ? (word == null ? tagged : '$tagged $word')
-        : word;
-    if (base != null) {
-      // B1 equipment-detail suffix (capacity / duty) — only when the app
-      // supplied a real datum for this node.
-      final detail = equipmentDetailByNodeId[n.id];
-      final label = detail == null ? base : '$base · $detail';
+    // B1 equipment-detail suffix (capacity / duty) — only when the app
+    // supplied a real datum for this node ([nodeLabelText]).
+    final label = nodeLabelText(n);
+    if (label != null && !(rowPlant && plantIds.contains(n.id))) {
+      if (plantIds.contains(n.id)) plantTexts.add(label);
       placer.place(p.dx + labelInset + 4, p.dy + 3, label,
           size: 8,
           role: role,
@@ -992,15 +1900,16 @@ SldSheet buildMechanicalRiserSld({
   }
 
   // ── B1 detail callouts + system-notes block (drawn only when supplied) ──────
-  // The callouts sit in a strip BELOW the floor bands (clear of every band tag)
-  // and the plant detail in a right margin column, so the placer never has to
-  // divert around them; the bounds grow to include whatever was drawn.
-  var maxX = contentMaxX;
+  // The callouts and (D4) the plant detail sit in a strip BELOW the floor
+  // bands (clear of every band tag), so the placer never has to divert around
+  // them; the bounds grow to include whatever was drawn.
+  const maxX = contentMaxX;
   var extrasBottom = extrasTop;
+  final extrasFrom = prims.length;
 
   if (detailCallouts && drawExtras) {
     if (waterFocus &&
-        _emitPlantDetail(prims, network, contentMaxX + 12, _topPad,
+        _emitPlantDetail(prims, network, plantLeft, extrasTop,
             hasRoof: plant.roof,
             hasGround: plant.ground,
             hasPump: plant.pump,
@@ -1009,7 +1918,7 @@ SldSheet buildMechanicalRiserSld({
             equipmentDetailByNodeId: equipmentDetailByNodeId,
             downfeed: downfeed,
             transferPumpNodeIds: transferPumpNodeIds)) {
-      maxX = contentMaxX + 12 + _plantW;
+      extrasBottom = math.max(extrasBottom, extrasTop + plantH);
     }
     // Reference detail callouts, bottom-centre of the band — each drawn ONLY
     // when the network actually carries the assembly's key device (G7/G4,
@@ -1043,6 +1952,35 @@ SldSheet buildMechanicalRiserSld({
     extrasBottom = math.max(extrasBottom, notesTop + notesH);
   }
 
+  // Drawing review R2 — the extras-only continuation sheet: the plant
+  // detail, reference callouts and notes of the lowest-floor page, lifted to
+  // the top of their own sheet (the bands, tags and key table stay on the
+  // floor page).
+  if (extras == MechRiserExtras.only) {
+    final dy = _topPad - extrasTop;
+    final moved = [
+      for (final p in prims.sublist(extrasFrom)) _shiftY(p, dy),
+    ];
+    return SldSheet(
+      prims: moved,
+      minX: 0,
+      minY: 0,
+      maxX: maxX,
+      maxY: extrasBottom == extrasTop ? _topPad + 12 : extrasBottom + dy + 12,
+      legend: _fittingLegend(network, focus, moved),
+      supplyNote: supplyNote,
+    );
+  }
+
+  // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of every keyed
+  // tag, below the extras strip, on THIS sheet.
+  final keyRows = placer.keyRows();
+  if (keyRows.isNotEmpty) {
+    final top = extrasBottom == extrasTop ? extrasTop : extrasBottom + 16;
+    extrasBottom = emitMechRiserKeyTable(prims,
+        rows: keyRows, left: 8, top: top, maxRight: contentMaxX);
+  }
+
   // ── Bounds ──────────────────────────────────────────────────────────────────
   final maxY = extrasBottom == extrasTop ? extrasTop : extrasBottom + 12;
   return SldSheet(
@@ -1054,10 +1992,24 @@ SldSheet buildMechanicalRiserSld({
     legend: _fittingLegend(network, focus, prims),
     supplyNote: supplyNote,
     overlapCount: placer.unresolvedCount,
+    keyCount: placer.keyOf.length,
+    plantKeyCount: placer.keyOf.keys.where(plantTexts.contains).length,
   );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// [p] moved by [dy] (drawing review R2 — the extras continuation sheet).
+SldPrim _shiftY(SldPrim p, double dy) => switch (p) {
+      final SldLine l => SldLine(l.x1, l.y1 + dy, l.x2, l.y2 + dy,
+          weight: l.weight, role: l.role, layer: l.layer, dashed: l.dashed),
+      final SldRect r =>
+        SldRect(r.x, r.y + dy, r.w, r.h, weight: r.weight, role: r.role),
+      final SldLabel t => SldLabel(t.x, t.y + dy, t.text,
+          size: t.size, bold: t.bold, role: t.role),
+      final SldCircle c =>
+        SldCircle(c.cx, c.cy + dy, c.r, weight: c.weight, role: c.role),
+    };
 
 /// Node ids kept when one system is focused — endpoints of that service's edges
 /// (null ⇒ no filtering ⇒ the combined view). Mirrors the painter's filter.
@@ -1248,7 +2200,9 @@ String _fixtureLabel(PlumbingFixture f) => switch (f) {
       PlumbingFixture.waterClosetFlushValve ||
       PlumbingFixture.waterClosetFlushTank =>
         'WC',
-      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.urinalFlushTank ||
+      PlumbingFixture.urinalFlushValve =>
+        'Urinal',
       PlumbingFixture.lavatory => 'Lavatory',
       PlumbingFixture.shower => 'Shower',
       PlumbingFixture.bathtub => 'Bathtub',
@@ -1528,7 +2482,10 @@ bool _emitPlantDetail(
 
   if (!hasRoof && !hasGround && !hasPump) return false;
 
-  prims.add(SldRect(left, top, _plantW,
+  prims.add(SldRect(
+      left,
+      top,
+      _plantW,
       _plantDetailH(network,
           ground: hasGround, pump: hasPump, include: moverVisible),
       weight: SldWeight.thin));
@@ -1720,9 +2677,8 @@ double _plantDetailH(Network network,
     required bool pump,
     bool Function(NetNode)? include}) {
   final groundBelowTrain = ground && pump;
-  final movers = _plantMovers(network)
-      .where((m) => include == null || include(m))
-      .length;
+  final movers =
+      _plantMovers(network).where((m) => include == null || include(m)).length;
   return _plantH +
       math.max(0, movers - 2) * 12.0 +
       (groundBelowTrain ? 36.0 : 0.0);
@@ -1890,7 +2846,7 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
       ..add(SldLine(legX + 4, midY - 4, legX, midY,
           weight: SldWeight.thin, layer: layer));
     placer.place(legX + 5, midY, 'HWR',
-        size: 7,
+        size: 8,
         bold: true,
         anchorX: legX,
         anchorY: midY,
@@ -1928,9 +2884,9 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
     prims.addAll(planComponentPrims(NodeComponent.pump,
         cx: px, cy: lp.dy, size: _nodeBox + 4));
     const half = (_nodeBox + 4) / 2;
-    placer.reserveBox(px - half, lp.dy - half, px + half, lp.dy + half);
+    placer.reserveGlyph(px - half, lp.dy - half, px + half, lp.dy + half);
     placer.place(px + (_nodeBox + 4) / 2 + 4, lp.dy + 3, 'HWR PUMP',
-        size: 7,
+        size: 8,
         anchorX: px,
         anchorY: lp.dy,
         candidates: _nodeLadder('HWR PUMP'));
@@ -1964,11 +2920,146 @@ double mechRiserLabelWidth(String text, double size) {
   return w;
 }
 
+/// Fix round 6 — work counters of the riser placer's obstacle index (the
+/// guard test's operation count): [mechRiserObstacleTests] boxes the index
+/// actually examined, [mechRiserObstacleScan] the boxes the old full scans
+/// would have visited for the same queries.
+int mechRiserObstacleTests = 0;
+int mechRiserObstacleScan = 0;
+
+/// Fix round 6 (2026-11-14) — the riser label placer's obstacle lists with a
+/// uniform-grid spatial index. [near] yields every item whose bounding box
+/// meets the query box (inclusive, with a hair of margin), in INSERTION
+/// order: a cost loop over [near] visits exactly the items that can add to
+/// it, in the order the full scan did, so every sum is bit-identical — the
+/// skipped items each added exactly 0. The full scans made one M-201 build
+/// O(slots x obstacles) (~1 s for the shophouse whole riser, times the
+/// pitch / band escalation and the paginator's rebuilds).
+class _RectIndex<T> extends Iterable<T> {
+  static const double _cell = 32;
+  static const double _hair = 1e-6;
+  final List<T> _items = <T>[];
+  final List<(double, double, double, double)> _boxes = [];
+  final Map<int, List<int>> _grid = <int, List<int>>{};
+  final List<int> _seen = <int>[];
+  int _stamp = 0;
+
+  @override
+  Iterator<T> get iterator => _items.iterator;
+
+  @override
+  int get length => _items.length;
+
+  static int _key(int cx, int cy) => (cx & 0xFFFFF) << 20 | (cy & 0xFFFFF);
+
+  void _add(T item, double minX, double minY, double maxX, double maxY) {
+    final i = _items.length;
+    _items.add(item);
+    _boxes.add((minX, minY, maxX, maxY));
+    _seen.add(0);
+    if (!(minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite)) {
+      (_grid[_key(0x7FFFF, 0x7FFFF)] ??= <int>[]).add(i);
+      return;
+    }
+    final x0 = (minX / _cell).floor(), x1 = (maxX / _cell).floor();
+    final y0 = (minY / _cell).floor(), y1 = (maxY / _cell).floor();
+    for (var gx = x0; gx <= x1; gx++) {
+      for (var gy = y0; gy <= y1; gy++) {
+        (_grid[_key(gx, gy)] ??= <int>[]).add(i);
+      }
+    }
+  }
+
+  /// Add a box item (a [_LabelRect]).
+  void addRect(T item) {
+    final r = item as _LabelRect;
+    _add(item, r.minX, r.minY, r.maxX, r.maxY);
+  }
+
+  /// Add a segment item (x1, y1, x2, y2).
+  void addSeg(T item) {
+    final (x1, y1, x2, y2) = item as (double, double, double, double);
+    _add(item, math.min(x1, x2), math.min(y1, y2), math.max(x1, x2),
+        math.max(y1, y2));
+  }
+
+  /// Items whose box meets the segment's bounding box.
+  Iterable<T> nearSeg(double x1, double y1, double x2, double y2) => near(
+      math.min(x1, x2), math.min(y1, y2), math.max(x1, x2), math.max(y1, y2));
+
+  /// Items whose box meets [minX]..[maxX] x [minY]..[maxY], in insertion
+  /// order.
+  List<T> near(double minX, double minY, double maxX, double maxY) {
+    mechRiserObstacleScan += _items.length;
+    if (_items.isEmpty) return const [];
+    _stamp++;
+    final hits = <int>[];
+    void visit(List<int>? cell) {
+      if (cell == null) return;
+      for (final i in cell) {
+        if (_seen[i] == _stamp) continue;
+        _seen[i] = _stamp;
+        mechRiserObstacleTests++;
+        final (a, b, c, d) = _boxes[i];
+        if (a <= maxX + _hair &&
+            minX <= c + _hair &&
+            b <= maxY + _hair &&
+            minY <= d + _hair) {
+          hits.add(i);
+        }
+      }
+    }
+
+    visit(_grid[_key(0x7FFFF, 0x7FFFF)]);
+    if (!(minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite) ||
+        (maxX - minX) / _cell * ((maxY - minY) / _cell) > _grid.length) {
+      // A query wider than the index: scan every item instead.
+      for (var i = 0; i < _items.length; i++) {
+        if (_seen[i] == _stamp) continue;
+        mechRiserObstacleTests++;
+        final (a, b, c, d) = _boxes[i];
+        if (a <= maxX + _hair &&
+            minX <= c + _hair &&
+            b <= maxY + _hair &&
+            minY <= d + _hair) {
+          hits.add(i);
+        }
+      }
+    } else {
+      final x0 = ((minX - _hair) / _cell).floor();
+      final x1 = ((maxX + _hair) / _cell).floor();
+      final y0 = ((minY - _hair) / _cell).floor();
+      final y1 = ((maxY + _hair) / _cell).floor();
+      for (var gx = x0; gx <= x1; gx++) {
+        for (var gy = y0; gy <= y1; gy++) {
+          visit(_grid[_key(gx, gy)]);
+        }
+      }
+    }
+    hits.sort();
+    return [for (final i in hits) _items[i]];
+  }
+}
+
 /// An axis-aligned label box in drawing space (baseline at [maxY], the text
 /// rising to [minY]).
 class _LabelRect {
   final double minX, minY, maxX, maxY;
-  const _LabelRect(this.minX, this.minY, this.maxX, this.maxY);
+
+  /// Fix round 4 (R2) — true for the drawn extent of a SYMBOL (an equipment
+  /// glyph, a fixture terminal, a junction box): a key circle clears it by
+  /// its full radius plus a gap, never the 0.85 r box a thin pipe gets.
+  final bool glyph;
+  const _LabelRect(this.minX, this.minY, this.maxX, this.maxY,
+      {this.glyph = false});
+
+  /// Fix round 4 (R2) — how far a circle of radius [r] about ([cx], [cy])
+  /// reaches INTO this box (0 when the circle is clear of it).
+  double circlePenetration(double cx, double cy, double r) {
+    final dx = math.max(math.max(minX - cx, 0.0), cx - maxX);
+    final dy = math.max(math.max(minY - cy, 0.0), cy - maxY);
+    return math.max(r - math.sqrt(dx * dx + dy * dy), 0.0);
+  }
 
   /// Round 29 — do the two label boxes FUSE (glyph bodies overlap: more than
   /// the descender allowance of a [size]-pt label vertically, more than a
@@ -1997,20 +3088,36 @@ class _LabelPlacer {
   final List<SldPrim> prims;
 
   /// Boxes of LABELS already on the sheet (fixed + placed movable tags).
-  final List<_LabelRect> _labels = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _labels = _RectIndex<_LabelRect>();
 
   /// Boxes of reserved INK — pipe legs, equipment glyphs, bordered blocks.
-  final List<_LabelRect> _ink = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _ink = _RectIndex<_LabelRect>();
 
   /// Leader segments already drawn (x1, y1, x2, y2) — Round 15: reserved so a
   /// later tag never lands on an earlier leader.
-  final List<(double, double, double, double)> _leaders = [];
+  final _RectIndex<(double, double, double, double)> _leaders =
+      _RectIndex<(double, double, double, double)>();
 
   /// Round 17 (drafting-visual-3-6) — HARD obstacles a leader may never cross
   /// (the per-floor BRANCHES fan-out column): a tag parked on the far side of
   /// the column used to run its leader through the fan-out text.
-  final List<_LabelRect> _hard = <_LabelRect>[];
+  final _RectIndex<_LabelRect> _hard = _RectIndex<_LabelRect>();
   _LabelPlacer(this.prims);
+
+  /// Drawing-review D5 — the keyed entries (text → key) of tags that found no
+  /// legal slot, in key order; identical texts share one key.
+  final Map<String, int> keyOf = <String, int>{};
+
+  /// The level names each keyed text was tagged on (key table LEVEL column).
+  final Map<String, List<String>> keyLevels = <String, List<String>>{};
+
+  /// Drawing-review D5 — the level (floor) name of a sheet y, for the key
+  /// table; null outside the floor bands.
+  String? Function(double y)? levelAt;
+
+  /// Drawing review S2 — the vertical span (top, bottom) of the floor band
+  /// holding sheet y (null outside the bands): where a KEY ROW may run.
+  ({double top, double bottom})? Function(double y)? bandSpanAt;
 
   /// Round 29 (drawings-3-1) — tags that could only be placed FUSED into
   /// another label (the least-cost fallback after every escape). Carried on
@@ -2038,7 +3145,7 @@ class _LabelPlacer {
   /// Record a region no leader may cross (see [_hard]); also ink for labels.
   void reserveHardBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _hard.add(_LabelRect(minX, minY, maxX, maxY));
+    _hard.addRect(_LabelRect(minX, minY, maxX, maxY));
   }
 
   /// Round 15 (drafting-visual-2-1) — the COST of a label box at ([x], [y]):
@@ -2053,17 +3160,20 @@ class _LabelPlacer {
       required bool withLeader}) {
     final r = _rectFor(x, y, text, size);
     var total = 0.0;
-    for (final p in _labels) {
+    // Fix round 6 — only the items whose boxes meet the slot (the rest add
+    // exactly 0), visited in insertion order: the same sum, bit for bit.
+    for (final p in _labels.near(r.minX, r.minY, r.maxX, r.maxY)) {
       final a = p.overlap(r);
       total += r.fusesWith(p, size) ? _kFusedLabelWeight * a : a;
     }
-    for (final p in _ink) {
+    for (final p in _ink.near(r.minX, r.minY, r.maxX, r.maxY)) {
       total += _kInkWeight * p.overlap(r);
     }
-    for (final (x1, y1, x2, y2) in _leaders) {
+    for (final (x1, y1, x2, y2)
+        in _leaders.near(r.minX, r.minY, r.maxX, r.maxY)) {
       if (_segmentHitsRect(x1, y1, x2, y2, r)) total += _kInkWeight * size;
     }
-    for (final p in _hard) {
+    for (final p in _hard.near(r.minX, r.minY, r.maxX, r.maxY)) {
       total += _kInkWeight * p.overlap(r);
     }
     // Round 34 — a slot in another floor band than the element it names is
@@ -2075,14 +3185,14 @@ class _LabelPlacer {
     }
     if (withLeader) {
       final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
-      for (final p in _labels) {
+      for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
         if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) {
           total += _kInkWeight * size;
         }
       }
       // A leader through a hard obstacle is never acceptable: a cost no
       // ordinary overlap can reach, so any other slot wins.
-      for (final p in _hard) {
+      for (final p in _hard.nearSeg(anchorX, anchorY, ex, ey)) {
         if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) total += 1e9;
       }
     }
@@ -2113,12 +3223,12 @@ class _LabelPlacer {
     // crossings (9 either way) but a junction tag pushed into a slot that
     // trapped its neighbour, striking a tag through with a leader — so a
     // leader leaving its junction over the adjacent run may still clear.
-    final longLeader = math.sqrt((ex - anchorX) * (ex - anchorX) +
-            (ey - anchorY) * (ey - anchorY)) >
+    final longLeader = math.sqrt(
+            (ex - anchorX) * (ex - anchorX) + (ey - anchorY) * (ey - anchorY)) >
         _kLongLeader;
     var total = 0.0;
     var soft = 0.0;
-    for (final p in _ink) {
+    for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
       final len = _segmentClipLength(anchorX, anchorY, ex, ey, p);
       if (len <= 0) continue;
       final strip = (p.maxX - p.minX) <= 2 * _kInkHalfThickness + 0.01 ||
@@ -2153,10 +3263,290 @@ class _LabelPlacer {
     return (hard: total, soft: soft);
   }
 
+  /// Set per [place] call: is candidate slot `c` (with leader soft cost) a
+  /// LEGAL leader (drawing-review D5)?
+  bool Function(Offset c, double soft) _leaderLegal = (_, __) => true;
+
+  /// Drawing-review D5 — the KEY TAG fallback: a numbered circle hugging the
+  /// element at ([anchorX], [anchorY]) (first clear slot of a small ring, a
+  /// short leader for the outer ring), its text recorded for the key table
+  /// (identical texts share one key). A tag that cannot even fit its circle
+  /// clear is counted in [unresolvedCount] — the honest overlap stamp.
+  void _placeKey(String text,
+      {required double size,
+      required SldRole role,
+      required double anchorX,
+      required double anchorY}) {
+    final key = keyOf.putIfAbsent(text, () => keyOf.length + 1);
+    final level = levelAt?.call(anchorY);
+    if (level != null) {
+      final ls = keyLevels.putIfAbsent(text, () => <String>[]);
+      if (!ls.contains(level)) ls.add(level);
+    }
+    final num = '$key';
+    final w = _labelWidth(num, size);
+    final r = math.max(0.9 * size, w / 2 + 2);
+    // Fix round 3 (S5/S6) — against TEXT the circle tests its full drawn
+    // radius plus a clear gap (a 0.85 r box left the circle tangent to, or
+    // on, a neighbouring tag's glyphs); against ink the 0.85 r box stands.
+    // Fix round 4 (R2, 2026-11-13) — against a SYMBOL (equipment glyph,
+    // fixture terminal, junction box) the circle keeps its full radius plus
+    // the same gap as against text: tested at 0.85 r a key sat tight to a
+    // tank, and the on-element last resort below put keys 24 / 25 on the
+    // tank and pump they key.
+    final rt = r + 0.2 * size;
+    double glyphCost(_LabelRect p, double cx, double cy) =>
+        p.circlePenetration(cx, cy, rt) * size;
+    double rectCost(_LabelRect q) {
+      var t = 0.0;
+      final cx = (q.minX + q.maxX) / 2, cy = (q.minY + q.maxY) / 2;
+      final qt = _LabelRect(cx - rt, cy - rt, cx + rt, cy + rt);
+      // Fix round 6 — qt holds q, the glyph test circle (rt) and the leader
+      // test circle (r + 0.1 size): every item that can add is near it.
+      for (final p in _labels.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
+        t += p.overlap(qt);
+      }
+      for (final p in _ink.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
+        t += p.glyph ? glyphCost(p, cx, cy) : p.overlap(q);
+      }
+      for (final p in _hard.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
+        t += p.overlap(q);
+      }
+      for (final (x1, y1, x2, y2)
+          in _leaders.near(qt.minX, qt.minY, qt.maxX, qt.maxY)) {
+        // Fix round 5 — a drawn leader may not pass through the CIRCLE (its
+        // full radius + a hairline), not only through its 0.85 r box: a
+        // later key grazed an earlier key's leader.
+        if (_segmentHitsRect(x1, y1, x2, y2, q) ||
+            _segPointDist(cx, cy, x1, y1, x2, y2) < r + 0.1 * size) {
+          t += size;
+        }
+      }
+      return t;
+    }
+
+    // Candidate centres on a 4-unit grid around the element, nearest first:
+    // hugging it (no leader) out to a leader of at most
+    // [kMechRiserMaxLeaderLabelHeights] label heights.
+    final maxLead = kMechRiserMaxKeyLeaderLabelHeights * size;
+    // A sliver of a pipe's 2-unit clearance halo (< 0.15 size squared units
+    // of box overlap) is not an overprint — the drawn line is 0.5 wide.
+    final tol = 0.15 * size;
+    final cands = <(double, double, double)>[];
+    final reach = (maxLead + r) ~/ 4 + 1;
+    for (var i = -reach; i <= reach; i++) {
+      for (var j = -reach; j <= reach; j++) {
+        final dx = i * 4.0, dy = j * 4.0;
+        final d = math.sqrt(dx * dx + dy * dy);
+        if (d < r + 3 || d - r > maxLead) continue;
+        cands.add((dx, dy, d));
+      }
+    }
+    cands.sort((a, b) {
+      final c = a.$3.compareTo(b.$3);
+      if (c != 0) return c;
+      final c2 = a.$2.compareTo(b.$2);
+      return c2 != 0 ? c2 : a.$1.compareTo(b.$1);
+    });
+    // The 16-direction rings first (the preferred hugging slots), then the
+    // grid.
+    cands.insertAll(0, [
+      for (final gap in const [4.0, 7.0, 10.0, 14.0, 18.0, 23.0, 28.0])
+        for (var k = 0; k < 16; k++)
+          (
+            math.sin(k * math.pi / 8) * (r + gap),
+            -math.cos(k * math.pi / 8) * (r + gap),
+            r + gap
+          ),
+    ]);
+    (double, double)? best;
+    var bestCost = double.infinity;
+    var bestSoft = 0;
+    var bestFar = false;
+    for (final (dx, dy, d) in cands) {
+      final cx = anchorX + dx, cy = anchorY + dy;
+      // The circle's collision box: its bbox less the empty corners (a
+      // 0.85 r half-side square keeps the round ink, not the corners).
+      final q = _LabelRect(
+          cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
+      final far = d - r > 6;
+      var c = rectCost(q);
+      var soft = 0;
+      if (far) {
+        // Its leader must cross no other leader and no placed label.
+        final ex = cx - dx / d * r, ey = cy - dy / d * r;
+        for (final (x1, y1, x2, y2)
+            in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
+          if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+            c += size;
+          }
+        }
+        for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
+          if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
+        }
+        // … and preferably no pipe / glyph it does not name (a SOFT
+        // preference: it orders the clear slots, never blocks the key).
+        for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
+          final own = anchorX >= p.minX - 0.01 &&
+              anchorX <= p.maxX + 0.01 &&
+              anchorY >= p.minY - 0.01 &&
+              anchorY <= p.maxY + 0.01;
+          if (!own && _segmentHitsRect(anchorX, anchorY, ex, ey, p)) soft++;
+        }
+      }
+      final hardOk = c <= tol;
+      if (best == null ||
+          (hardOk && bestCost > tol) ||
+          (hardOk == (bestCost <= tol) &&
+              (hardOk ? soft < bestSoft : c < bestCost))) {
+        bestCost = c;
+        bestSoft = soft;
+        best = (cx, cy);
+        bestFar = far;
+      }
+      if (hardOk && soft == 0) break;
+    }
+    // Last resort before the honest stamp: the circle ON its own element
+    // (the element's own pipe may pass under its tag; nothing else may —
+    // fix round 4: not its own SYMBOL either, which it would hide).
+    if (bestCost > tol) {
+      final q = _LabelRect(anchorX - 0.85 * r, anchorY - 0.85 * r,
+          anchorX + 0.85 * r, anchorY + 0.85 * r);
+      var c = 0.0;
+      for (final p in _labels.near(q.minX, q.minY, q.maxX, q.maxY)) {
+        c += p.overlap(q);
+      }
+      for (final p in _ink.near(
+          anchorX - rt, anchorY - rt, anchorX + rt, anchorY + rt)) {
+        if (p.glyph) {
+          c += glyphCost(p, anchorX, anchorY);
+          continue;
+        }
+        final own = anchorX >= p.minX - 0.01 &&
+            anchorX <= p.maxX + 0.01 &&
+            anchorY >= p.minY - 0.01 &&
+            anchorY <= p.maxY + 0.01;
+        if (!own) c += p.overlap(q);
+      }
+      for (final p in _hard.near(q.minX, q.minY, q.maxX, q.maxY)) {
+        c += p.overlap(q);
+      }
+      for (final (x1, y1, x2, y2)
+          in _leaders.near(q.minX, q.minY, q.maxX, q.maxY)) {
+        // A leader leaving this same element is its own linework.
+        final mine = (x1 - anchorX).abs() < 0.01 && (y1 - anchorY).abs() < 0.01;
+        if (!mine && _segmentHitsRect(x1, y1, x2, y2, q)) c += size;
+      }
+      if (c <= tol) {
+        bestCost = 0;
+        best = (anchorX, anchorY);
+        bestFar = false;
+      }
+    }
+    // Drawing review S2 — the KEY ROWS: when no hugging slot (nor the
+    // element itself) is clear, the circle may sit in one of two rows along
+    // the top or the bottom of its OWN floor band, as near the element in x
+    // as is clear, on a straight leader that crosses no other leader / label
+    // (pipes it passes are the soft preference, as for the near slots).
+    final span = bestCost > tol ? bandSpanAt?.call(anchorY) : null;
+    if (span != null) {
+      final pitch = 2 * r + 3;
+      final rows = <double>[
+        for (var j = 0; j < 2; j++) ...[
+          span.top + r + 2 + j * pitch,
+          span.bottom - r - 2 - j * pitch,
+        ],
+      ];
+      (double, double)? rb;
+      var rbSoft = 1 << 30;
+      var rbD = double.infinity;
+      for (final ry in rows) {
+        for (var k = 0; k <= 60; k++) {
+          for (final sgn in k == 0 ? const [1.0] : const [-1.0, 1.0]) {
+            final cx = anchorX + sgn * k * 4.0, cy = ry;
+            final dx = cx - anchorX, dy = cy - anchorY;
+            final d = math.sqrt(dx * dx + dy * dy);
+            if (d < r + 3) continue;
+            // Fix round 5 — never a leader beyond the hard cap (the rows
+            // used to fan leaders across the whole band / plant row).
+            if (d - r > kMechRiserKeyLeaderCapLabelHeights * size) continue;
+            final q = _LabelRect(
+                cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
+            var c = rectCost(q);
+            if (c > tol) continue;
+            final ex = cx - dx / d * r, ey = cy - dy / d * r;
+            for (final (x1, y1, x2, y2)
+                in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
+              if (_segmentsCrossProper(
+                  anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+                c += size;
+              }
+            }
+            for (final p in _labels.nearSeg(anchorX, anchorY, ex, ey)) {
+              if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
+            }
+            if (c > tol) continue;
+            var soft = 0;
+            for (final p in _ink.nearSeg(anchorX, anchorY, ex, ey)) {
+              final own = anchorX >= p.minX - 0.01 &&
+                  anchorX <= p.maxX + 0.01 &&
+                  anchorY >= p.minY - 0.01 &&
+                  anchorY <= p.maxY + 0.01;
+              if (!own && _segmentHitsRect(anchorX, anchorY, ex, ey, p)) soft++;
+            }
+            if (soft < rbSoft || (soft == rbSoft && d < rbD)) {
+              rb = (cx, cy);
+              rbSoft = soft;
+              rbD = d;
+            }
+          }
+        }
+      }
+      if (rb != null) {
+        best = rb;
+        bestCost = 0;
+        bestFar = true;
+      }
+    }
+    final (cx, cy) = best!;
+    if (bestCost > tol) unresolvedCount++;
+    // Fix round 3 — registered with its clear gap, so a LATER tag keeps
+    // off the circle too (a fixture name sat tangent to it).
+    final rg = r + 0.2 * size;
+    _labels.addRect(_LabelRect(cx - rg, cy - rg, cx + rg, cy + rg));
+    if (bestFar) {
+      final dx = cx - anchorX, dy = cy - anchorY;
+      final dl = math.sqrt(dx * dx + dy * dy);
+      final ex = cx - dx / dl * r, ey = cy - dy / dl * r;
+      prims.add(SldLine(anchorX, anchorY, ex, ey,
+          weight: SldWeight.thin, role: role));
+      _leaders.addSeg((anchorX, anchorY, ex, ey));
+    }
+    prims
+      ..add(SldCircle(cx, cy, r, weight: SldWeight.thin, role: role))
+      ..add(
+          SldLabel(cx - w / 2, cy + 0.36 * size, num, size: size, role: role));
+  }
+
+  /// The key-table rows in key order (drawing-review D5).
+  List<({int key, String text, String levels})> keyRows() {
+    String levels(List<String>? ls) {
+      if (ls == null || ls.isEmpty) return '-';
+      if (ls.length <= 2) return ls.join(', ');
+      return '${ls.last}..${ls.first} (x${ls.length})';
+    }
+
+    final out = [
+      for (final MapEntry(:key, :value) in keyOf.entries)
+        (key: value, text: key, levels: levels(keyLevels[key])),
+    ]..sort((a, b) => a.key.compareTo(b.key));
+    return out;
+  }
+
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
-    _labels.add(_rectFor(label.x, label.y, label.text, label.size));
+    _labels.addRect(_rectFor(label.x, label.y, label.text, label.size));
     prims.add(label);
   }
 
@@ -2167,7 +3557,16 @@ class _LabelPlacer {
   /// moves. Zero-area regions are ignored.
   void reserveBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _ink.add(_LabelRect(minX, minY, maxX, maxY));
+    _ink.addRect(_LabelRect(minX, minY, maxX, maxY));
+  }
+
+  /// Fix round 4 (R2) — [reserveBox] for a drawn SYMBOL's full extent (an
+  /// equipment glyph, a fixture terminal, a junction box): ink for tags as
+  /// before, and a region a KEY circle clears by its whole radius plus a
+  /// gap — its own element's symbol included.
+  void reserveGlyph(double minX, double minY, double maxX, double maxY) {
+    if (maxX <= minX || maxY <= minY) return;
+    _ink.addRect(_LabelRect(minX, minY, maxX, maxY, glyph: true));
   }
 
   /// Record a drawn LINE as a thin occupied strip so a label is never struck
@@ -2204,9 +3603,26 @@ class _LabelPlacer {
     required double anchorX,
     required double anchorY,
     List<Offset> candidates = const [Offset(0, 0)],
+    bool alwaysLead = false,
   }) {
     bool needsLeader(Offset c) =>
         math.sqrt(c.dx * c.dx + c.dy * c.dy) > _kLeaderThreshold;
+    _leaderLegal = (Offset c, double soft) {
+      if (!needsLeader(c)) return true;
+      if (soft > 0) return false;
+      final r = _rectFor(defaultX + c.dx, defaultY + c.dy, text, size);
+      final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
+      final len = math.sqrt(
+          (ex - anchorX) * (ex - anchorX) + (ey - anchorY) * (ey - anchorY));
+      if (len > kMechRiserMaxLeaderLabelHeights * size) return false;
+      for (final (x1, y1, x2, y2)
+          in _leaders.nearSeg(anchorX, anchorY, ex, ey)) {
+        if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+          return false;
+        }
+      }
+      return true;
+    };
     double cost(Offset c) =>
         _costAt(defaultX + c.dx, defaultY + c.dy, text, size,
             anchorX: anchorX, anchorY: anchorY, withLeader: needsLeader(c));
@@ -2227,10 +3643,11 @@ class _LabelPlacer {
       if (total > bestCost) return;
       final (:hard, :soft) = leaderCost(c);
       final lead = hard + soft;
-      // A primary-clear slot whose leader is HARD-free ends the search (a
-      // short hop over the adjacent run does not block it); every crossing,
-      // soft or hard, orders the slots that cannot clear.
-      if (total <= 0 && hard <= 0) {
+      // Drawing-review D5 — a slot is LEGAL only when it overlaps nothing AND
+      // its leader (if any) is short ([kMechRiserMaxLeaderLabelHeights]),
+      // crosses no pipe it does not name and no other leader. Only a legal
+      // slot ends the search; with none, the tag is keyed (below).
+      if (total <= 0 && hard <= 0 && _leaderLegal(c, soft)) {
         bestCost = total;
         bestLeader = lead;
         best = c;
@@ -2307,30 +3724,118 @@ class _LabelPlacer {
         }
       }
     }
+    // Drawing-review D5 — no legal slot: KEY the element instead of parking
+    // its text far away / over another tag.
+    if (!cleared) {
+      _placeKey(text,
+          size: size, role: role, anchorX: anchorX, anchorY: anchorY);
+      return;
+    }
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
     final rect = _rectFor(lx, ly, text, size);
     final bandOf = bandIndexAt;
     final anchorBand = bandOf?.call(anchorY);
     final labelBand = bandOf?.call((rect.minY + rect.maxY) / 2);
-    if (!cleared && _labels.any((p) => rect.fusesWith(p, size))) {
-      unresolvedCount++;
-    } else if (anchorBand != null && labelBand != anchorBand) {
+    if (anchorBand != null && labelBand != anchorBand) {
       unresolvedCount++;
     }
-    _labels.add(rect);
+    _labels.addRect(rect);
     // A tag pulled well off its default anchor — or one that could not be fully
     // cleared — gets a leader so its element stays legible / unfused.
-    if (!cleared || needsLeader(best)) {
+    // Fix round 3 (O2) — [alwaysLead]: a tag wider than the short run it
+    // names is tied to it by a leader even in its default slot, so it never
+    // floats between two headers unattributed.
+    if (!cleared || needsLeader(best) || alwaysLead) {
       final (ex, ey) = _leaderEnd(rect, anchorX, anchorY);
-      if (ex != anchorX || ey != anchorY) {
+      if ((ex - anchorX).abs() > 0.5 || (ey - anchorY).abs() > 0.5) {
         prims.add(SldLine(anchorX, anchorY, ex, ey,
             weight: SldWeight.thin, role: role));
-        _leaders.add((anchorX, anchorY, ex, ey));
+        _leaders.addSeg((anchorX, anchorY, ex, ey));
       }
     }
     prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));
   }
+}
+
+/// Proper crossing of two segments (shared endpoints / touches do not count).
+bool _segmentsCrossProper(double ax, double ay, double bx, double by, double cx,
+    double cy, double dx, double dy) {
+  double o(double px, double py, double qx, double qy, double rx, double ry) =>
+      (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  final d1 = o(cx, cy, dx, dy, ax, ay), d2 = o(cx, cy, dx, dy, bx, by);
+  final d3 = o(ax, ay, bx, by, cx, cy), d4 = o(ax, ay, bx, by, dx, dy);
+  const eps = 1e-9;
+  return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) &&
+      ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+}
+
+/// Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of a riser
+/// sheet: one row per key (key, size-service-material / tag, length, level),
+/// in column blocks of at most [maxRows] rows laid left to right from
+/// ([left], [top]) within [maxRight]; text at [size] (the tag size, so it
+/// prints at the same >= 7 pt as the tags). Returns the table's bottom y.
+double emitMechRiserKeyTable(
+  List<SldPrim> prims, {
+  required List<({int key, String text, String levels})> rows,
+  required double left,
+  required double top,
+  required double maxRight,
+  double size = 8,
+}) {
+  if (rows.isEmpty) return top;
+  const pitch = 12.0;
+  const title = 'KETERANGAN PIPA / PIPE KEY';
+  (String, String) split(String t) {
+    final i = t.indexOf(' - ');
+    return i < 0 ? (t, '-') : (t.substring(0, i), t.substring(i + 3));
+  }
+
+  final cells = [
+    for (final r in rows)
+      [
+        '${r.key}',
+        ...() {
+          final (a, b) = split(r.text);
+          return [a, b];
+        }(),
+        r.levels
+      ],
+  ];
+  const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH', 'LEVEL'];
+  final colW = [
+    for (var c = 0; c < 4; c++)
+      [heads[c], for (final row in cells) row[c]]
+              .map((t) => _labelWidth(t, size))
+              .fold(0.0, math.max) +
+          10,
+  ];
+  final blockW = colW.fold(0.0, (a, b) => a + b);
+  final fit = math.max(1, ((maxRight - left + 16) / (blockW + 16)).floor());
+  final maxRows = (rows.length / fit).ceil();
+  prims.add(SldLabel(left, top + size, title, size: size, bold: true));
+  var bottom = top;
+  for (var b = 0; b * maxRows < rows.length; b++) {
+    final x0 = left + b * (blockW + 16);
+    final y0 = top + size + 6;
+    final slice = cells.skip(b * maxRows).take(maxRows).toList();
+    final h = (slice.length + 1) * pitch + 4;
+    prims.add(SldRect(x0, y0, blockW, h, weight: SldWeight.thin));
+    var x = x0;
+    for (var c = 0; c < 4; c++) {
+      if (c > 0) prims.add(SldLine(x, y0, x, y0 + h));
+      prims.add(
+          SldLabel(x + 4, y0 + pitch - 2, heads[c], size: size, bold: true));
+      for (var r = 0; r < slice.length; r++) {
+        prims.add(
+            SldLabel(x + 4, y0 + (r + 2) * pitch - 2, slice[r][c], size: size));
+      }
+      x += colW[c];
+    }
+    prims.add(SldLine(x0, y0 + pitch + 2, x0 + blockW, y0 + pitch + 2));
+    bottom = math.max(bottom, y0 + h);
+  }
+  return bottom;
 }
 
 /// Round 15 — where a leader from ([ax], [ay]) lands on label box [r]: the
@@ -2369,6 +3874,19 @@ double _segmentClipLength(
   }
   if (t0 >= t1) return 0;
   return (t1 - t0) * math.sqrt(dx * dx + dy * dy);
+}
+
+/// Fix round 5 — the distance from ([px], [py]) to the segment
+/// ([x1], [y1])-([x2], [y2]).
+double _segPointDist(
+    double px, double py, double x1, double y1, double x2, double y2) {
+  final dx = x2 - x1, dy = y2 - y1;
+  final ll = dx * dx + dy * dy;
+  final t = ll == 0
+      ? 0.0
+      : (((px - x1) * dx + (py - y1) * dy) / ll).clamp(0.0, 1.0);
+  final ex = x1 + t * dx - px, ey = y1 + t * dy - py;
+  return math.sqrt(ex * ex + ey * ey);
 }
 
 bool _segmentHitsRect(

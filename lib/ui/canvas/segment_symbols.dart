@@ -393,6 +393,16 @@ void paintComponentSymbol(
         ..lineTo(w * 0.92, cy)
         ..lineTo(w * 0.86, cy + w * 0.06);
       canvas.drawPath(a, p);
+    case NodeComponent.waterHeater:
+      // Backlog G-2 — a storage vessel with a zig-zag heating element.
+      canvas.drawRect(Rect.fromLTRB(w * 0.26, h * 0.16, w * 0.74, h * 0.84), p);
+      final z = Path()
+        ..moveTo(w * 0.36, h * 0.66)
+        ..lineTo(w * 0.44, h * 0.40)
+        ..lineTo(w * 0.52, h * 0.66)
+        ..lineTo(w * 0.60, h * 0.40)
+        ..lineTo(w * 0.66, h * 0.66);
+      canvas.drawPath(z, p);
   }
 }
 

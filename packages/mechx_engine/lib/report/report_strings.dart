@@ -108,6 +108,27 @@ enum RptStringKey {
   wsDownfeedGravity,
   wsDownfeedBooster, // {m}
   wsHotWaterRecirc, // {lps} {loop} {kw} {c}
+  // Backlog G-2 — {tag} {n} {col} {hourly} {df} {rec} {sf} {st} {tank}
+  // {kwreq} {kw} {ph}
+  wsWaterHeater,
+  // Backlog W-1 — {tag} {kind} {cap} {h} {lps}
+  wsTankFill,
+  wsTankFillUnset, // {tag} {kind} {h}
+  wsTankKindGround,
+  wsTankKindRoof,
+  // Backlog W-2 — {meter} {tank} {avail} {req} {lift} {fric} {res} {lps} {verdict}
+  wsMainsPressure,
+  wsMainsShort,
+  // Backlog W-4 — {pop} {lpd} {m3} {lps}
+  wsDailyDemand,
+  // {tag} {kind} {cap} {fire} {dom}
+  wsReserveTank,
+  wsReserveFireShare, // {fire}
+  wsReserveTotal, // {m3} {days}
+  wsReserveDays, // {d}
+  wsReserveDaysHours, // {d} {h}
+  wsReserveNoDemand,
+  wsReserveExcluded, // {n} {tags}
   wsLegionella, // {c}
 
   // Pressure-zone table.
@@ -146,6 +167,22 @@ enum RptStringKey {
   fireOverPressureShare, // {pct}
   fireOutletStaticKey, // {tag} {floors}
   fireOutletStaticValue, // {max} {min} {limit}
+  firePressureClassKey,
+  firePressureClassValue,
+  fireTankReserveKey,
+  fireTankReserveValue,
+  fireTankReserveUnset,
+  fireTankReserveOk,
+  fireTankReserveShort,
+  fireZoneKey, // {n} {floors}
+  fireZoneValue, // {tag} {lps} {head} {motor} {churn} {psi} {cls}
+  fireZoneRelayKey, // {n} {tank}
+  fireZoneRelayValue, // {ownq} {ownh} {fillq} {fillh} {flowby} {headby}
+  fireZoneGovernsOwn,
+  fireZoneGovernsFill,
+  fireZoneBreakTankKey, // {n} {tank}
+  fireZoneBreakTankValue, // {flow} {min} {need} {cap} {verdict} {fill}
+  fireZoneFillPipe, // {lps} {mm}
   fireHoseStationResidualKey, // {tag} {floors}
   fireHoseStationResidualValue, // {max} {min} {limit}
   fireJockeyKey,
@@ -231,6 +268,7 @@ enum RptStringKey {
   ssSystem,
   ssDiversifiedDemand,
   ssOriginDemand,
+  ssMvProtection,
 
   // Panels.
   headingPanels,
@@ -302,6 +340,11 @@ enum RptStringKey {
   catCapacitorBank,
   catDistributedSource,
   catTanks,
+  // Backlog G-2 — water heaters.
+  catWaterHeaters,
+  esWaterHeaterService, // {fixtures}
+  esWaterHeaterDuty, // {recovery} {storage}
+  esWaterHeaterSize, // {tank} {kw} {phases}
   tblTag,
   tblDuty,
   tblModelSpec,
@@ -315,6 +358,8 @@ enum RptStringKey {
   esPanelDuty, // {kw}
   esPanelSize, // {a}
   esMotorSize, // {kw}
+  esRoomEstimateNoDucts, // backlog F-3 — room-air duty with no drawn system
+  esRoomEstimateRoomOnly, // backlog F-3 — room-air duty, ducts from elsewhere
   esAcDuty, // {btu} {pk}
   esAcSize, // {kw}
   esTransformerService,
@@ -327,7 +372,9 @@ enum RptStringKey {
   esCapBankRecommendedService,
   esRoofTankService,
   esGroundTankService,
+  esFireBreakTankService,
   esTankCapacityUnset,
+  esTankCapacityUnsetNote,
   earthNoteTnCs,
   earthNoteTnS,
   earthNoteTt,
@@ -408,6 +455,8 @@ enum RptStringKey {
   pnHybridInverter,
   pnBus,
   pnMainPanel,
+  pnTransformer,
+  pnCapacitor,
   ilMechanical,
   ilElectrical,
   hazLight,
@@ -446,6 +495,13 @@ enum RptStringKey {
   sevInfo,
   phaseCell3ph,
   olGenStandby,
+  olGenSizing,
+  olGenStepLoad,
+  olGenStepLoadOk,
+  olGenStepLoadStaged,
+  olGenSizingRunning,
+  olGenSizingMotorStart,
+  olGenSizingDisconnection,
   olGenPrime,
   // Round 30 (report-parity-2-1) — one fire-pump rating line per system.
   fireSystemPumpKey,
@@ -559,6 +615,38 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsHotWaterRecirc:
       '- Hot-water recirculation: **{lps} L/s** · return loop {len} m · '
           'head {head} m · pump {kw} kW · return {c} °C',
+  RptStringKey.wsWaterHeater:
+      '- Water heater {tag}: {n} fixtures ({col} column) · {hourly} L/h x '
+          '{df} = recovery **{rec} L/h** · storage {rec} x {sf} = {st} L '
+          '-> **{tank} L** · {kwreq} kW required -> **{kw} kW** element '
+          '({ph}) _(ASHRAE fixture demand — // VERIFY)_',
+  RptStringKey.wsTankFill:
+      '- Tank {tag} ({kind}): capacity {cap} L · refill {h} h · fill flow '
+          '**{lps} L/s** (capacity / refill time) _(// VERIFY refill time)_',
+  RptStringKey.wsTankFillUnset:
+      '- Tank {tag} ({kind}): capacity not set · refill {h} h · fill pipe '
+          'sized on the peak demand it distributes',
+  RptStringKey.wsTankKindGround: 'ground tank',
+  RptStringKey.wsTankKindRoof: 'roof tank',
+  RptStringKey.wsMainsPressure:
+      '- Mains at meter {meter} -> {tank}: available **{avail} m**, required '
+          '**{req} m** (lift {lift} + feed friction {fric} at {lps} L/s + '
+          'inlet residual {res}) · {verdict} _(// VERIFY mains pressure)_',
+  RptStringKey.wsMainsShort: 'INSUFFICIENT',
+  RptStringKey.wsDailyDemand:
+      '- Daily water demand: {pop} persons x {lpd} L/person/day = **{m3} '
+          'm3/day** · average draw {lps} L/s _(// VERIFY per-person figure)_',
+  RptStringKey.wsReserveTank:
+      '- Storage {tag} ({kind}): {cap} L{fire} -> {dom} L domestic',
+  RptStringKey.wsReserveFireShare: ' less the fire reserve {fire} L',
+  RptStringKey.wsReserveTotal:
+      '- Water reserve: **{m3} m3** stored / daily demand = **{days}** '
+          '_(informational, no threshold)_',
+  RptStringKey.wsReserveDays: '{d} days',
+  RptStringKey.wsReserveDaysHours: '{d} days ({h} h)',
+  RptStringKey.wsReserveNoDemand: 'no figure (population not set)',
+  RptStringKey.wsReserveExcluded:
+      '- The reserve excludes {n} tank(s) with no capacity set: {tags}',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -604,11 +692,38 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'standard fire components{share} - upsize the index pipe or zone '
           'the system (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
-  RptStringKey.fireOutletStaticKey: 'Hose valve static, {tag} {floors}',
+  RptStringKey.fireOutletStaticKey:
+      'Pressure-regulating hose valves, {tag} {floors}',
   RptStringKey.fireOutletStaticValue:
-      '{max}..{min} kPa at pump churn exceeds the {limit} kPa (175 psi) hose '
-          'connection limit (NFPA 14 7.2.3.2) - fit a PRV at each outlet or '
-          'zone the riser (VERIFY)',
+      '{max}..{min} kPa static at pump churn exceeds the {limit} kPa (175 '
+          'psi) hose connection limit (NFPA 14 7.2.3.2) - each outlet is a '
+          'pressure-regulating hose valve set to 690 kPa residual (VERIFY)',
+  RptStringKey.firePressureClassKey:
+      'Fire pipework pressure class, {tag}',
+  RptStringKey.firePressureClassValue:
+      '{cls}: working pressure {churn} kPa at pump churn (pipe, valves and fittings downstream of the pump; standard <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
+  RptStringKey.fireZoneKey: 'Fire zone {n} ({floors})',
+  RptStringKey.fireZoneValue:
+      '{tag}: rated {lps} L/s @ {head} m, motor {motor} kW; churn {churn} kPa ({psi} psi) at the pump; {cls}',
+  RptStringKey.fireZoneRelayKey: 'Fire zone {n} relay duty (fills {tank})',
+  RptStringKey.fireZoneRelayValue:
+      'own zone {ownq} L/s @ {ownh} m; break-tank fill {fillq} L/s @ {fillh} m (lift + fill friction + 5 m inlet); flow set by {flowby}, head by {headby}',
+  RptStringKey.fireZoneGovernsOwn: 'the own zone',
+  RptStringKey.fireZoneGovernsFill: 'the fill',
+  RptStringKey.fireZoneBreakTankKey: 'Fire zone {n} break tank, {tank}',
+  RptStringKey.fireZoneBreakTankValue:
+      '{flow} L/s x {min} min = {need} L required; tank {cap}{verdict}{fill} (VERIFY)',
+  RptStringKey.fireZoneFillPipe: '; fill {lps} L/s on DN{mm}',
+  RptStringKey.fireTankReserveKey:
+      'Fire-water reserve, {tank}',
+  RptStringKey.fireTankReserveValue:
+      '{flow} L/s x {min} min = {need} L ({m3} m3); tank {cap}{verdict} (VERIFY durations)',
+  RptStringKey.fireTankReserveUnset:
+      'capacity not set',
+  RptStringKey.fireTankReserveOk:
+      ' - OK',
+  RptStringKey.fireTankReserveShort:
+      ' - below the reserve',
   RptStringKey.fireHoseStationResidualKey:
       'Hose reel residual, {tag} {floors}',
   RptStringKey.fireHoseStationResidualValue:
@@ -712,6 +827,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
   RptStringKey.ssOriginDemand: 'Origin diversified demand:',
+  RptStringKey.ssMvProtection: 'MV transformer protection:',
 
   RptStringKey.headingPanels: 'Panels',
   RptStringKey.panelIncomer: '- Incomer: {rating} {class} {poles}P',
@@ -790,6 +906,11 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.catCapacitorBank: 'Capacitor bank',
   RptStringKey.catDistributedSource: 'Battery, PV & inverters',
   RptStringKey.catTanks: 'Tanks',
+  RptStringKey.catWaterHeaters: 'Water heaters',
+  RptStringKey.esWaterHeaterService: 'Hot water ({fixtures} fixtures)',
+  RptStringKey.esWaterHeaterDuty:
+      '{recovery} L/h recovery, {storage} L storage required',
+  RptStringKey.esWaterHeaterSize: '{tank} L tank, {kw} kW element ({phases})',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Duty',
   RptStringKey.tblModelSpec: 'Model / spec',
@@ -805,6 +926,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esPanelDuty: '{kw} kW demand',
   RptStringKey.esPanelSize: '{a} A incomer',
   RptStringKey.esMotorSize: '{kw} kW motor',
+  RptStringKey.esRoomEstimateNoDucts: 'estimate (no ducts drawn)',
+  RptStringKey.esRoomEstimateRoomOnly: 'estimate (room only)',
   RptStringKey.esAcDuty: '{btu} BTU/h cooling ({pk} PK)',
   RptStringKey.esAcSize: '{kw} kW input',
   RptStringKey.esTransformerService: 'Distribution transformer',
@@ -818,7 +941,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'PF-correction bank (APFC, recommended)',
   RptStringKey.esRoofTankService: 'Roof tank (water storage)',
   RptStringKey.esGroundTankService: 'Ground tank (water storage)',
+  RptStringKey.esFireBreakTankService: 'Fire break tank (fire zone relay)',
   RptStringKey.esTankCapacityUnset: 'capacity not set',
+  RptStringKey.esTankCapacityUnsetNote:
+      '(*) Tank capacity not set: enter the tank volume to state its duty.',
   RptStringKey.earthNoteTnCs:
       'Combined PEN from the source, split into separate N and PE at the '
           'origin. Common PLN practice.',
@@ -908,6 +1034,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.pnHybridInverter: 'hybrid inverter',
   RptStringKey.pnBus: 'bus',
   RptStringKey.pnMainPanel: 'main panel',
+  RptStringKey.pnTransformer: 'transformer',
+  RptStringKey.pnCapacitor: 'capacitor bank',
   RptStringKey.ilMechanical: 'mechanical',
   RptStringKey.ilElectrical: 'electrical',
   RptStringKey.hazLight: 'LH light hazard',
@@ -963,6 +1091,19 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3ph',
   RptStringKey.olGenStandby: 'Standby',
+  RptStringKey.olGenStepLoad:
+      'Genset step load on transfer: {step} kW in one step vs the allowable '
+          'first step {allow} kW ({pct} % of {rated} kW rated) — {verdict}',
+  RptStringKey.olGenStepLoadOk: 'OK',
+  RptStringKey.olGenStepLoadStaged:
+      'above it: stage the pick-up (load-shed groups, timed starters)',
+  RptStringKey.olGenSizing:
+      'Genset sizing: {kva} kVA, governed by {reason} (running {run} kVA, '
+          'motor start {start} kVA{ads})',
+  RptStringKey.olGenSizingRunning: 'the running load',
+  RptStringKey.olGenSizingMotorStart: 'motor start',
+  RptStringKey.olGenSizingDisconnection:
+      'disconnection (ADS on the alternator fault)',
   RptStringKey.olGenPrime: 'Prime (continuous)',
   RptStringKey.fireSystemPumpKey: '{tag} — {system} pump rating curve (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',
@@ -1076,6 +1217,40 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsHotWaterRecirc:
       '- Resirkulasi air panas: **{lps} L/s** · loop balik {len} m · '
           'tinggi tekan {head} m · pompa {kw} kW · balik {c} °C',
+  RptStringKey.wsWaterHeater:
+      '- Pemanas air {tag}: {n} alat plambing (kolom {col}) · {hourly} L/jam '
+          'x {df} = pemulihan **{rec} L/jam** · tampungan {rec} x {sf} = '
+          '{st} L -> **{tank} L** · perlu {kwreq} kW -> elemen **{kw} kW** '
+          '({ph}) _(permintaan alat plambing ASHRAE — // VERIFY)_',
+  RptStringKey.wsTankFill:
+      '- Tangki {tag} ({kind}): kapasitas {cap} L · pengisian {h} jam · debit '
+          'pengisian **{lps} L/s** (kapasitas / waktu pengisian) _(// VERIFY '
+          'waktu pengisian)_',
+  RptStringKey.wsTankFillUnset:
+      '- Tangki {tag} ({kind}): kapasitas belum diisi · pengisian {h} jam · '
+          'pipa pengisi diukur dari kebutuhan puncak yang dibagikannya',
+  RptStringKey.wsTankKindGround: 'tangki bawah',
+  RptStringKey.wsTankKindRoof: 'tangki atap',
+  RptStringKey.wsMainsPressure:
+      '- PDAM di meter {meter} -> {tank}: tersedia **{avail} m**, dibutuhkan '
+          '**{req} m** (angkat {lift} + gesekan pipa {fric} pada {lps} L/s + '
+          'sisa tekanan inlet {res}) · {verdict} _(// VERIFY tekanan PDAM)_',
+  RptStringKey.wsMainsShort: 'TIDAK CUKUP',
+  RptStringKey.wsDailyDemand:
+      '- Kebutuhan air harian: {pop} orang x {lpd} L/orang/hari = **{m3} '
+          'm3/hari** · pemakaian rata-rata {lps} L/s _(// VERIFY angka per '
+          'orang)_',
+  RptStringKey.wsReserveTank:
+      '- Tampungan {tag} ({kind}): {cap} L{fire} -> {dom} L domestik',
+  RptStringKey.wsReserveFireShare: ' dikurangi cadangan kebakaran {fire} L',
+  RptStringKey.wsReserveTotal:
+      '- Cadangan air: **{m3} m3** tersimpan / kebutuhan harian = **{days}** '
+          '_(informasi, tanpa ambang)_',
+  RptStringKey.wsReserveDays: '{d} hari',
+  RptStringKey.wsReserveDaysHours: '{d} hari ({h} jam)',
+  RptStringKey.wsReserveNoDemand: 'tanpa angka (jumlah penghuni belum diisi)',
+  RptStringKey.wsReserveExcluded:
+      '- Cadangan tidak menghitung {n} tangki tanpa kapasitas: {tags}',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
@@ -1120,11 +1295,38 @@ const Map<RptStringKey, String> kReportStringsId = {
           'komponen kebakaran standar{share} - perbesar pipa indeks atau '
           'bagi sistem menjadi zona (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
-  RptStringKey.fireOutletStaticKey: 'Statis katup selang, {tag} {floors}',
+  RptStringKey.fireOutletStaticKey:
+      'Katup selang pengatur tekanan, {tag} {floors}',
   RptStringKey.fireOutletStaticValue:
-      '{max}..{min} kPa saat churn pompa melampaui batas {limit} kPa (175 '
-          'psi) sambungan selang (NFPA 14 7.2.3.2) - pasang PRV di setiap '
-          'outlet atau bagi pipa tegak menjadi zona (VERIFY)',
+      '{max}..{min} kPa statis saat churn pompa melampaui batas {limit} kPa '
+          '(175 psi) sambungan selang (NFPA 14 7.2.3.2) - setiap outlet adalah '
+          'katup selang pengatur tekanan disetel ke residual 690 kPa (VERIFY)',
+  RptStringKey.firePressureClassKey:
+      'Kelas tekanan pipa kebakaran, {tag}',
+  RptStringKey.firePressureClassValue:
+      '{cls}: tekanan kerja {churn} kPa pada churn pompa (pipa, katup dan fiting di hilir pompa; standar <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
+  RptStringKey.fireZoneKey: 'Zona kebakaran {n} ({floors})',
+  RptStringKey.fireZoneValue:
+      '{tag}: rating {lps} L/s @ {head} m, motor {motor} kW; churn {churn} kPa ({psi} psi) di pompa; {cls}',
+  RptStringKey.fireZoneRelayKey: 'Tugas relai zona kebakaran {n} (mengisi {tank})',
+  RptStringKey.fireZoneRelayValue:
+      'zona sendiri {ownq} L/s @ {ownh} m; pengisian tangki antara {fillq} L/s @ {fillh} m (angkat + gesekan pengisian + 5 m inlet); debit ditentukan oleh {flowby}, head oleh {headby}',
+  RptStringKey.fireZoneGovernsOwn: 'zona sendiri',
+  RptStringKey.fireZoneGovernsFill: 'pengisian',
+  RptStringKey.fireZoneBreakTankKey: 'Tangki antara zona kebakaran {n}, {tank}',
+  RptStringKey.fireZoneBreakTankValue:
+      '{flow} L/s x {min} menit = {need} L dibutuhkan; tangki {cap}{verdict}{fill} (VERIFY)',
+  RptStringKey.fireZoneFillPipe: '; pengisian {lps} L/s pada DN{mm}',
+  RptStringKey.fireTankReserveKey:
+      'Cadangan air kebakaran, {tank}',
+  RptStringKey.fireTankReserveValue:
+      '{flow} L/s x {min} menit = {need} L ({m3} m3); tangki {cap}{verdict} (VERIFY durasi)',
+  RptStringKey.fireTankReserveUnset:
+      'kapasitas belum diisi',
+  RptStringKey.fireTankReserveOk:
+      ' - OK',
+  RptStringKey.fireTankReserveShort:
+      ' - di bawah cadangan',
   RptStringKey.fireHoseStationResidualKey:
       'Residual gulungan selang, {tag} {floors}',
   RptStringKey.fireHoseStationResidualValue:
@@ -1230,6 +1432,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',
   RptStringKey.ssOriginDemand: 'Permintaan terdiversifikasi sumber:',
+  RptStringKey.ssMvProtection: 'Proteksi TM trafo:',
 
   RptStringKey.headingPanels: 'Panel',
   RptStringKey.panelIncomer: '- Pemutus masuk: {rating} {class} {poles}P',
@@ -1309,6 +1512,12 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.catCapacitorBank: 'Bank kapasitor',
   RptStringKey.catDistributedSource: 'Baterai, PV & inverter',
   RptStringKey.catTanks: 'Tangki',
+  RptStringKey.catWaterHeaters: 'Pemanas air',
+  RptStringKey.esWaterHeaterService: 'Air panas ({fixtures} alat plambing)',
+  RptStringKey.esWaterHeaterDuty:
+      'Pemulihan {recovery} L/jam, tampungan perlu {storage} L',
+  RptStringKey.esWaterHeaterSize:
+      'Tangki {tank} L, elemen {kw} kW ({phases})',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Kapasitas',
   RptStringKey.tblModelSpec: 'Model / spesifikasi',
@@ -1324,6 +1533,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esPanelDuty: 'Permintaan {kw} kW',
   RptStringKey.esPanelSize: 'Pemutus masuk {a} A',
   RptStringKey.esMotorSize: 'Motor {kw} kW',
+  RptStringKey.esRoomEstimateNoDucts: 'estimasi (belum ada ducting)',
+  RptStringKey.esRoomEstimateRoomOnly: 'estimasi (ruang saja)',
   RptStringKey.esAcDuty: 'Pendinginan {btu} BTU/h ({pk} PK)',
   RptStringKey.esAcSize: 'Daya masuk {kw} kW',
   RptStringKey.esTransformerService: 'Transformator distribusi',
@@ -1337,7 +1548,11 @@ const Map<RptStringKey, String> kReportStringsId = {
       'Bank kapasitor APFC (rekomendasi)',
   RptStringKey.esRoofTankService: 'Tangki atap (penampungan air)',
   RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
+  RptStringKey.esFireBreakTankService:
+      'Tangki antara kebakaran (relai zona kebakaran)',
   RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
+  RptStringKey.esTankCapacityUnsetNote:
+      '(*) Kapasitas tangki belum diisi: masukkan volume tangki untuk menyatakan kapasitasnya.',
   RptStringKey.earthNoteTnCs:
       'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
           'asal. Praktik umum PLN.',
@@ -1426,6 +1641,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.pnHybridInverter: 'inverter hibrida',
   RptStringKey.pnBus: 'bus',
   RptStringKey.pnMainPanel: 'panel utama',
+  RptStringKey.pnTransformer: 'transformator',
+  RptStringKey.pnCapacitor: 'bank kapasitor',
   RptStringKey.ilMechanical: 'mekanis',
   RptStringKey.ilElectrical: 'elektrik',
   RptStringKey.hazLight: 'Bahaya Kebakaran Ringan',
@@ -1481,6 +1698,21 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3 fasa',
   RptStringKey.olGenStandby: 'Siaga',
+  RptStringKey.olGenStepLoad:
+      'Beban langkah genset saat transfer: {step} kW sekaligus vs langkah '
+          'pertama yang diizinkan {allow} kW ({pct} % dari {rated} kW '
+          'pengenal) — {verdict}',
+  RptStringKey.olGenStepLoadOk: 'OK',
+  RptStringKey.olGenStepLoadStaged:
+      'melebihi: ambil beban bertahap (grup pelepasan beban, starter '
+          'bertunda)',
+  RptStringKey.olGenSizing:
+      'Ukuran genset: {kva} kVA, ditentukan oleh {reason} (beban jalan '
+          '{run} kVA, start motor {start} kVA{ads})',
+  RptStringKey.olGenSizingRunning: 'beban jalan',
+  RptStringKey.olGenSizingMotorStart: 'start motor',
+  RptStringKey.olGenSizingDisconnection:
+      'pemutusan otomatis (ADS pada arus gangguan alternator)',
   RptStringKey.olGenPrime: 'Utama (kontinu)',
   RptStringKey.fireSystemPumpKey: '{tag} — kurva rating pompa {system} (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',
@@ -1561,6 +1793,8 @@ String powerNodeKindLabel(PowerNodeKind k, ReportStrings s) => s(switch (k) {
       PowerNodeKind.hybridInverter => RptStringKey.pnHybridInverter,
       PowerNodeKind.bus => RptStringKey.pnBus,
       PowerNodeKind.mainPanel => RptStringKey.pnMainPanel,
+      PowerNodeKind.transformer => RptStringKey.pnTransformer,
+      PowerNodeKind.capacitor => RptStringKey.pnCapacitor,
     });
 
 /// Localized label for a [PowerInterlockKind].

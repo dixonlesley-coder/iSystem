@@ -425,8 +425,9 @@ void main() {
       // meter's 3.5 m L0 ceiling datum), which was the drop.
       expect(meter.requiredPumpHead.meters,
           closeTo(pump.requiredPumpHead.meters, 1e-9));
-      // Without the datum the meter drawing read the ceiling: lower by
-      // exactly the L0 ceiling height.
+      // Without the datum the meter drawing reads the meter's own datum:
+      // lower by exactly that height (the L0 ceiling before backlog D-3,
+      // now the floor + kWaterMeterHeightM 0.5 m).
       final legacy = solvePressurized(
         net: Network(nodes: [
           n('M', 0, 0, c: NodeComponent.waterMeter),
@@ -446,13 +447,13 @@ void main() {
         building: building,
         targetResidual: target,
       );
-      // No sizing ⇒ zero friction ⇒ head = target + (F1 − M ceiling).
+      // No sizing ⇒ zero friction ⇒ head = target + (F1 − M datum).
       final f1 =
           nodeElevation(n('F1', 40, 1, role: NodeRole.fixture), building);
       final mCeiling =
           nodeElevation(n('M', 0, 0, c: NodeComponent.waterMeter), building);
       expect(mCeiling.meters,
-          closeTo(building.ceilingElevationOf(0).meters, 1e-12));
+          closeTo(building.elevationOf(0).meters + kWaterMeterHeightM, 1e-12));
       expect(
           legacy.requiredPumpHead.meters,
           closeTo(headFromPressure(target).meters + f1.meters - mCeiling.meters,

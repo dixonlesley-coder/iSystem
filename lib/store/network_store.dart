@@ -30,6 +30,7 @@ import 'schematic_layout_store.dart';
 import 'selection_store.dart';
 import 'sheets_store.dart';
 import 'smart_input_store.dart' show canvasAutoPanProbeProvider;
+import 'tank_fill_store.dart' show autoTankCapacitiesProvider;
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
@@ -1377,6 +1378,19 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// Backlog W-1 — set the refill time (hours) of a tank component node; its
+  /// fill flow is capacity / refill time. Pass null (or a non-positive value)
+  /// to revert to the tank type's default (`// VERIFY`).
+  void setNodeTankRefillHours(String id, double? hours) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final clear = hours == null || hours <= 0;
+    _replaceNode(node.copyWith(
+      tankRefillHours: clear ? null : hours,
+      clearTankRefillHours: clear,
+    ));
+  }
+
   /// Set the explicit electrical load (W) on a motorised equipment node (pump /
   /// fan / air unit) — its draw on the electrical panel. Pass null to revert to
   /// the component's default rating.
@@ -1955,6 +1969,66 @@ class NetworkController extends Notifier<DrawingState> {
     }
     final node = componentAt(world.dx, world.dy);
     _commit(Network(nodes: [...state.network.nodes, node], edges: state.network.edges));
+    return node.id;
+  }
+
+  /// Backlog D-4 (2026-11-13) — put an INLINE component (PRV, valve, meter…)
+  /// ON riser [edgeId] at floor [floorIndex]: the riser is split into two
+  /// RISER segments (from → component → to) that both keep its service /
+  /// size override / product ([_splitEdgeInserting]), and the component node
+  /// sits on that floor at the riser's plan position (the end node on that
+  /// floor, else the lower end) and at its own datum there ([nodeElevation] —
+  /// a PRV / valve at the floor's ceiling, like the riser's bare junctions),
+  /// or at the explicit [elevation] when given. [sheetId] defaults to the
+  /// sheet of the end node on that floor (else the lower end's).
+  ///
+  /// The split elevation must lie within the riser's own span (its two
+  /// [riserEndElevation]s) and [floorIndex] within its floors; otherwise —
+  /// or for a missing edge / a run — nothing changes and null is returned.
+  /// One undo step. Returns the new node id.
+  ///
+  /// Old files that splice a component with a 0 m RUN keep solving exactly as
+  /// before; this intent is the drawn way to get the same station.
+  String? insertComponentOnRiser(
+    String edgeId,
+    NodeComponent component, {
+    required int floorIndex,
+    String? sheetId,
+    Length? elevation,
+  }) {
+    final net = state.network;
+    final e = net.edgeById(edgeId);
+    if (e == null || e.kind != EdgeKind.riser) return null;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) return null;
+    final lo = math.min(a.floorIndex, b.floorIndex);
+    final hi = math.max(a.floorIndex, b.floorIndex);
+    if (floorIndex < lo || floorIndex > hi) return null;
+    final anchor = a.floorIndex == floorIndex
+        ? a
+        : b.floorIndex == floorIndex
+            ? b
+            : (a.floorIndex <= b.floorIndex ? a : b);
+    final node = NetNode(
+      id: _id('n'),
+      sheetId: sheetId ?? anchor.sheetId,
+      x: anchor.x,
+      y: anchor.y,
+      floorIndex: floorIndex,
+      role: component.role,
+      component: component,
+      elevation: elevation,
+    );
+    final project = ref.read(projectControllerProvider);
+    double z(NetNode n) =>
+        riserEndElevation(e, n, project.building, project.mounting, net).meters;
+    final za = z(a), zb = z(b), zn = z(node);
+    if (zn < math.min(za, zb) - 1e-9 || zn > math.max(za, zb) + 1e-9) {
+      return null;
+    }
+    final (nodes, edges) = _splitEdgeInserting(edgeId, node);
+    _commit(Network(nodes: nodes, edges: edges));
     return node.id;
   }
 
@@ -3135,6 +3209,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        tankRefillHours: n.tankRefillHours,
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
@@ -3236,6 +3311,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        tankRefillHours: n.tankRefillHours,
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
@@ -4202,7 +4278,7 @@ class DragSessionController extends Notifier<DragSession> {
 /// network only when the throttle advances (or the session opens/closes), so the
 /// per-frame position updates that keep the canvas paint live do NOT re-run the
 /// whole pipeline every frame (K1).
-final sizingNetworkProvider = Provider<Network>((ref) {
+final drawnSizingNetworkProvider = Provider<Network>((ref) {
   final drag = ref.watch(dragSessionProvider);
   if (!drag.active || drag.frozen == null) {
     // At rest: watch the live network so any edit recomputes immediately.
@@ -4214,6 +4290,26 @@ final sizingNetworkProvider = Provider<Network>((ref) {
   // ends — while the canvas paint path, which watches networkControllerProvider
   // directly, stays per-frame live.
   return drag.frozen!;
+});
+
+/// Backlog W-5 (2026-11-14) — THE network every sizing / solve / schedule /
+/// report consumer reads: the drawn network ([drawnSizingNetworkProvider])
+/// with each domestic tank that has no entered capacity given its AUTO
+/// capacity (`autoTankCapacitiesProvider`) — the ONE effective-capacity
+/// source. The auto value is derived, never persisted (the live network
+/// keeps the tank's capacity unset). No auto tank ⇒ the drawn network itself
+/// (the same instance).
+final sizingNetworkProvider = Provider<Network>((ref) {
+  final net = ref.watch(drawnSizingNetworkProvider);
+  final auto = ref.watch(autoTankCapacitiesProvider);
+  if (auto.isEmpty) return net;
+  return Network(nodes: [
+    for (final n in net.nodes)
+      if (auto[n.id] case final a?)
+        n.copyWith(tankCapacityLitres: a.litres)
+      else
+        n,
+  ], edges: net.edges);
 });
 
 /// Whether run drawing snaps to the nearest 45° (ortho). Default on.

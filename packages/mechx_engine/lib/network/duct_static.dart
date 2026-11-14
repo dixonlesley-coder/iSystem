@@ -98,7 +98,8 @@ DuctStaticSolution solveDuctStatic({
           edgeSizing.diameter,
           // Per-segment material → wall roughness ε. The product defaults by
           // service (PU for AC supply/return, BJLS for exhaust) when unset.
-          roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
+          // Backlog F-1: the SAME resolver the room-air estimate reads.
+          roughness: effectiveDuctRoughnessFor(edge),
         ) *
         length.meters *
         fittingFactor;

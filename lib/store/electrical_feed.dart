@@ -11,6 +11,8 @@ library;
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/electrical/load_kind.dart'
+    show LoadKind, loadDefaults, singlePhaseMaxW;
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -20,6 +22,8 @@ import 'package:mechx_engine/sizing/ejector.dart'
     show drawnEjectorPumpIds, duplexEjectorSets;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
+    show kStandpipePrvSetResidualKpa;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show
         FireSystem,
@@ -30,6 +34,7 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart'
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show serviceComponentRoots;
 import 'package:mechx_engine/sizing/pump.dart' show PumpDuty, sizePump;
+import 'package:mechx_engine/sizing/water_heater.dart' show waterHeaterPhases;
 import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
@@ -863,18 +868,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   // hot-water loop (a drawn one carries it via [equipmentNodeDutiesProvider]).
   // Round 26 (hot-water-2-separate-systems-merged) — ONE way per hot-water
   // system with no pump drawn on it (the primary keeps the legacy id).
-  final recircSystems = ref.watch(hotWaterRecircSystemsProvider);
-  for (var i = 0; i < recircSystems.length; i++) {
-    final sys = recircSystems[i];
-    if (sys.nodeIds.any(bind.hwRecircPumpNodeIds.contains)) continue;
-    if (sys.design.pump.selectedMotor.watts <= 0) continue;
-    loads.add(MepEquipmentLoad.fromPumpDuty(
-      sys.design.pump,
-      id: i == 0 ? 'hw-recirc-pump' : 'hw-recirc-pump-${i + 1}',
-      name: i == 0 ? kHwRecircPumpLoadName : '$kHwRecircPumpLoadName ${i + 1}',
-      source: MepLoadSource.hotWaterRecircPump,
-    ));
-  }
+  loads.addAll(ref.watch(hwRecircDutyLoadsProvider).map((r) => r.load));
 
   // The fire-pump way is sized on the SELECTED NFPA 20 motor frame (the same
   // kW the equipment schedule tells the contractor to buy — it must carry the
@@ -898,6 +892,37 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   }
 
   return loads;
+});
+
+/// Round 16 / Round 26 — ONE solved recirculation-duty way per hot-water
+/// system with no pump DRAWN on it (the primary keeps the legacy id), with
+/// whether that system's return is DRAWN. Backlog G-3 (2026-11-13) — a
+/// system whose return is drawn has its circulator in the design even when
+/// the pump symbol is not drawn: its way joins the DEFAULT sync
+/// ([mepAutoFeedCircuitsProvider]); an assumed return stays behind the
+/// 'Feed solved MEP duties' opt-in. (A pump node drawn on the loop is a
+/// placed machine and is minted by default already.)
+final hwRecircDutyLoadsProvider =
+    Provider<List<({MepEquipmentLoad load, bool drawnReturn})>>((ref) {
+  final bind = ref.watch(mepDutyBindingProvider);
+  final recircSystems = ref.watch(hotWaterRecircSystemsProvider);
+  final out = <({MepEquipmentLoad load, bool drawnReturn})>[];
+  for (var i = 0; i < recircSystems.length; i++) {
+    final sys = recircSystems[i];
+    if (sys.nodeIds.any(bind.hwRecircPumpNodeIds.contains)) continue;
+    if (sys.design.pump.selectedMotor.watts <= 0) continue;
+    out.add((
+      load: MepEquipmentLoad.fromPumpDuty(
+        sys.design.pump,
+        id: i == 0 ? 'hw-recirc-pump' : 'hw-recirc-pump-${i + 1}',
+        name:
+            i == 0 ? kHwRecircPumpLoadName : '$kHwRecircPumpLoadName ${i + 1}',
+        source: MepLoadSource.hotWaterRecircPump,
+      ),
+      drawnReturn: sys.drawnReturn,
+    ));
+  }
+  return out;
 });
 
 /// Map a placed motorised equipment [NodeComponent] to its electrical source
@@ -993,13 +1018,31 @@ double? _acRoomWatts(
 /// booster's kW beside the fire pump or the supply AHU's kW beside an exhaust
 /// fan while the schedule prints each unit's own duty under the same tag.
 final equipmentNodeDutiesProvider =
-    Provider<Map<String, ({Power motor, Power input})>>((ref) {
+    Provider<Map<String, ({Power motor, Power input})>>((ref) => {
+          for (final e in ref.watch(equipmentNodePumpDutiesProvider).entries)
+            e.key: (motor: e.value.motor, input: e.value.input),
+        });
+
+/// Fix round 3 (O2, 2026-11-13) — [equipmentNodeDutiesProvider] with the
+/// solved [PumpDuty] (flow + head) of each PUMP node beside its motor /
+/// input: the riser PLANT page prints a pump's `Q · H · kW` from the SAME
+/// duty the equipment schedule prints under its tag (one solve, never a
+/// parallel derivation). `pump` is null for a fan / heater / air unit.
+final equipmentNodePumpDutiesProvider =
+    Provider<Map<String, ({Power motor, Power input, PumpDuty? pump})>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final bind = ref.watch(mepDutyBindingProvider);
 
-  ({Power motor, Power input})? dutyFor(NetNode n) {
+  ({Power motor, Power input, PumpDuty? pump})? dutyFor(NetNode n) {
     PumpDuty? p;
     FanDuty? f;
+    // Backlog G-2 — a placed water heater carries its sized ELEMENT (the
+    // rating is the electrical input: a resistive load, no motor η).
+    if (n.component == NodeComponent.waterHeater) {
+      final h = ref.watch(waterHeaterDesignsProvider)[n.id];
+      if (h == null) return null;
+      return (motor: h.elementPower, input: h.elementPower, pump: null);
+    }
     if (bind.firePumpNodeIds.contains(n.id)) {
       // Round 21 — a JOCKEY is fed its own pressure-maintenance duty.
       // Round 28 (fire-3-sprinkler-pump-gets-standpipe-duty) — each pump is
@@ -1021,6 +1064,7 @@ final equipmentNodeDutiesProvider =
         motor: p.selectedMotor,
         input: MepEquipmentLoad.nameplateInput(
             p.motorInputPower, p.selectedMotor, defaultMotorEfficiency),
+        pump: p,
       );
     }
     // Round 16 — every drawn supply mover carries its OWN series / transfer
@@ -1056,10 +1100,11 @@ final equipmentNodeDutiesProvider =
       motor: motor,
       input: MepEquipmentLoad.nameplateInput(
           op, motor, defaultMotorEfficiency),
+      pump: f == null ? p : null,
     );
   }
 
-  final out = <String, ({Power motor, Power input})>{};
+  final out = <String, ({Power motor, Power input, PumpDuty? pump})>{};
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null || !c.isElectricalLoad) continue;
@@ -1077,9 +1122,46 @@ final equipmentNodeDutiesProvider =
 final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
+  // Backlog A-3 — a hose valve designated pressure-regulating carries the
+  // designation on its riser tag.
+  final prv = ref.watch(prvHoseValvesProvider);
   return {
     for (final node in net.nodes)
-      node.id: ?equipmentDetail(node, motor: duties[node.id]?.motor),
+      node.id: ?(prv.containsKey(node.id)
+          ? 'PRV ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} kPa'
+          : equipmentDetail(node, motor: duties[node.id]?.motor)),
+  };
+});
+
+/// Fix round 3 (O2, 2026-11-13) — the ISSUED riser sheet's equipment detail
+/// (M-201 PDF / DXF): [riserEquipmentDetailsProvider] with every PLANT item
+/// carrying its duty, as the equipment schedule prints it under the same tag
+/// — a pump its duty point beside the motor (`Q 10.8 L/s · H 122.1 m ·
+/// 18.5 kW`, the schedule's own [PumpDuty]), a tank with no capacity set the
+/// schedule's '-' (never a fabricated volume). The canvas and the BOM keep
+/// the motor-only map.
+final issuedRiserEquipmentDetailsProvider =
+    Provider<Map<String, String>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final base = ref.watch(riserEquipmentDetailsProvider);
+  final duties = ref.watch(equipmentNodePumpDutiesProvider);
+  const tanks = {
+    NodeComponent.roofTank,
+    NodeComponent.groundTank,
+    NodeComponent.expansionTank,
+  };
+  return {
+    ...base,
+    for (final node in net.nodes)
+      if (duties[node.id]?.pump != null &&
+          (node.component == NodeComponent.pump ||
+              node.component == NodeComponent.boosterSet))
+        node.id: equipmentDetail(node,
+            motor: duties[node.id]!.motor,
+            flow: duties[node.id]!.pump!.flow,
+            head: duties[node.id]!.pump!.head)!
+      else if (tanks.contains(node.component) && base[node.id] == null)
+        node.id: '-',
   };
 });
 
@@ -1227,6 +1309,9 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   final fed = ref.watch(nodeFedLoadsProvider);
   // Round 33 — the stable equipment tags the mechanical sheets print.
   final tags = equipmentNodeTags(net);
+  // Backlog B-4 (2026-11-13) — the pumps the solve classifies as TRANSFER
+  // pumps (ground tank → roof tank), and the mirrored standby of one.
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
 
   final loads = <MepEquipmentLoad>[];
   for (final n in net.nodes) {
@@ -1235,6 +1320,9 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     final f = fed[n.id];
     if (f == null || f.watts <= 0) continue;
     final fire = bind.firePumpNodeIds.contains(n.id);
+    final transfer = c == NodeComponent.pump &&
+        (transfers.contains(n.id) ||
+            transfers.contains(bind.supplyStandbyPumpNodeIds[n.id]));
     final input = f.input;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
@@ -1246,14 +1334,29 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
           ? MepLoadSource.firePump
           : bind.hwRecircPumpNodeIds.contains(n.id)
               ? MepLoadSource.hotWaterRecircPump
-              : _sourceFor(c),
+              // B-4: a transfer pump is its own source ('Transfer pump'),
+              // never the generic 'Supply pump'. No figure depends on it.
+              : transfer
+                  ? MepLoadSource.transferPump
+                  : c == NodeComponent.waterHeater
+                      ? MepLoadSource.waterHeater
+                      : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
       // Round 21 / 23 — a STANDBY pump (fire, supply or hot-water recirc) is
       // wired at full size but never runs with the duty pump: it adds no
       // demand to the board.
       demandFactor: bind.standbyPumpNodeIds.contains(n.id) ? 0 : null,
-      phases: _phasesFor(c),
+      // Backlog G-2 — a water heater is resistive: cos φ 1, no motor η,
+      // single-phase up to `singlePhaseMaxW`, three-phase above.
+      phases: c == NodeComponent.waterHeater
+          ? waterHeaterPhases(f.watts / 1000, singlePhaseMaxW: singlePhaseMaxW)
+          : _phasesFor(c),
+      cosPhi: c == NodeComponent.waterHeater
+          ? loadDefaults[LoadKind.heating]!.cosPhi
+          : defaultMotorCosPhi,
+      motorEfficiency:
+          c == NodeComponent.waterHeater ? 1.0 : defaultMotorEfficiency,
       loadPos: LayoutPos(
         sheetId: n.sheetId,
         floorIndex: n.floorIndex,
@@ -1342,8 +1445,21 @@ void setMepDutyFeedUndoable(
 /// (opt-out) ⇒ placed-only, IDENTICAL to the prior wiring, so an untouched
 /// project is byte-identical. This is the provider the store's reactive listener
 /// watches — the seam that finally makes the solved-duty bridge reachable.
-final mepAutoFeedCircuitsProvider = Provider<List<ElectricalCircuit>>(
-  (ref) => ref.watch(mepDutyFeedEnabledProvider)
-      ? ref.watch(mepEquipmentCircuitsProvider)
-      : ref.watch(placedEquipmentCircuitsProvider),
-);
+///
+/// Backlog G-3 (2026-11-13) — with the opt-in OFF, the solved recirculation
+/// way of a hot-water system whose return is DRAWN joins the placed circuits
+/// ([hwRecircDutyLoadsProvider]); an assumed return keeps today's opt-in.
+final mepAutoFeedCircuitsProvider = Provider<List<ElectricalCircuit>>((ref) {
+  if (ref.watch(mepDutyFeedEnabledProvider)) {
+    return ref.watch(mepEquipmentCircuitsProvider);
+  }
+  final drawnRecirc = [
+    for (final r in ref.watch(hwRecircDutyLoadsProvider))
+      if (r.drawnReturn) r.load,
+  ];
+  if (drawnRecirc.isEmpty) return ref.watch(placedEquipmentCircuitsProvider);
+  return buildEquipmentCircuits(
+    [...drawnRecirc, ...ref.watch(placedEquipmentLoadsProvider)],
+    panelVoltage: mepPanelVoltage,
+  );
+});
