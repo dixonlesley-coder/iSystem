@@ -339,6 +339,32 @@ List<LabelSegment> planDoubleLineOutline(
   ];
 }
 
+/// Fix round 4 (R3) — the two arms of the A5 flow chevron the plan PDF /
+/// DXF draw on a sized, oriented run from ([ux], [uy]) (upstream) to
+/// ([dx], [dy]): an open chevron at the 2/3 point, [arm] long, 0.75 × [arm]
+/// either side of the run — the exporters' own geometry. Empty when the run
+/// is not longer than [minLen] (no chevron is drawn). Pure.
+List<LabelSegment> planFlowChevronArms(
+    double ux, double uy, double dx, double dy,
+    {required double minLen, required double arm}) {
+  final len = math.sqrt((dx - ux) * (dx - ux) + (dy - uy) * (dy - uy));
+  if (!(len > minLen)) return const [];
+  final dirx = (dx - ux) / len, diry = (dy - uy) / len;
+  final perpx = -diry, perpy = dirx;
+  final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
+  final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
+  final backx = tipx - dirx * arm, backy = tipy - diry * arm;
+  return [
+    for (final sgn in const [1.0, -1.0])
+      (
+        x1: backx + sgn * perpx * (arm * 0.75),
+        y1: backy + sgn * perpy * (arm * 0.75),
+        x2: tipx,
+        y2: tipy,
+      ),
+  ];
+}
+
 /// Round 24 — the on-sheet warning a plan exporter prints when [overlapCount]
 /// annotations could not be placed clear (null when there are none). One
 /// text for the PDF and the DXF (bilingual — the issued set is Indonesian).
@@ -444,6 +470,7 @@ PlanAnnotations layoutPlanAnnotations({
   List<PlanDetailCallout> details = const [],
   PlanMarks extraMarks = PlanMarks.empty,
   Set<String> unlabelledIds = const {},
+  Map<String, String> flowFromIds = const {},
 }) {
   // Drawing review R1 — an element anchored inside a detail boundary is
   // labelled on the detail sheet only (its symbol and pipes stay here).
@@ -477,6 +504,17 @@ PlanAnnotations layoutPlanAnnotations({
     if (hw != null && hw > 0) {
       for (final o in planDoubleLineOutline(pa.x, pa.y, pc.x, pc.y, hw)) {
         layout.addRun(e.id, o.x1, o.y1, o.x2, o.y2);
+      }
+    }
+    // Fix round 4 (R3, 2026-11-13) — the run's flow chevron is its linework
+    // too: unregistered, a foreign tag, an UP/DN mark or a key could print
+    // across its arms.
+    final up = flowFromIds[e.id];
+    if (up != null && (up == a.id || up == c.id)) {
+      final (pu, pd) = up == a.id ? (pa, pc) : (pc, pa);
+      for (final arm in planFlowChevronArms(pu.x, pu.y, pd.x, pd.y,
+          minLen: 30 * kPlanPaperMmPerPt * u, arm: 5 * kPlanPaperMmPerPt * u)) {
+        layout.addRun(e.id, arm.x1, arm.y1, arm.x2, arm.y2);
       }
     }
   }
@@ -722,6 +760,27 @@ PlanAnnotations layoutPlanAnnotations({
         }
         if (pick != null) break;
       }
+      // Fix round 4 (R3, 2026-11-13) — every hugging quadrant crossed by a
+      // run (a stack with four runs leaving it): step out on a ring of 8
+      // directions, still clear of every run and mark, before the stack
+      // fallback (which only checked boxes, so a foreign run could strike
+      // through the 'DN' uncounted).
+      if (pick == null) {
+        ring:
+        for (final f in const [1.6, 2.4, 3.2]) {
+          final rr = gap * f;
+          for (var k = 0; k < 8; k++) {
+            final a = k * math.pi / 4;
+            // The mark's box centred on the ring point.
+            final x = p.x + rr * math.cos(a) - w / 2;
+            final y = p.y + rr * math.sin(a) - 0.5 * ts;
+            if (clearAt(x, y, 0.1 * ts, false)) {
+              pick = (x, y);
+              break ring;
+            }
+          }
+        }
+      }
       // Nothing clear: stack below the first quadrant (never dropped).
       if (pick == null) {
         var (x, y) = quads.first;
@@ -729,8 +788,10 @@ PlanAnnotations layoutPlanAnnotations({
           if (!layout.hitsBox(boxAt(x, y))) break;
           y -= 1.3 * ts;
         }
-        // Round 24 — still colliding after the stack: counted, not silent.
-        if (layout.hitsBox(boxAt(x, y))) {
+        // Round 24 — still colliding after the stack: counted, not silent
+        // (fix round 4: a run through the mark is a collision too).
+        if (layout.hitsBox(boxAt(x, y)) ||
+            layout.hitsRun(boxAt(x, y), clearance: 0)) {
           layout.markUnresolved();
           unresolvedAt.add((x: n.x, y: n.y));
         }

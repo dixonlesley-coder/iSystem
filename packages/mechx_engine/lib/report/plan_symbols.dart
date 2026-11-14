@@ -1997,8 +1997,10 @@ LeaderedLabelPlacement _placeKeyTag({
       );
       var cost = 0.0;
       if (layout.hitsBox(box)) cost += 1;
+      // Fix round 4 (R3) — the element's OWN run is linework the circle must
+      // clear too (a key on its own pipe printed the pipe through its
+      // number); only its leader may start on it.
       for (final rr in layout._runs) {
-        if (rr.id != null && rr.id == ownRunId) continue;
         if (_segHitsBox(rr.seg, inkBox, 0)) cost += 1;
       }
       if (lead) {

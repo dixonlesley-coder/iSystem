@@ -612,6 +612,10 @@ String _professionalDxf({
     }
     final onPage = layoutPlanAnnotations(
       runHalfWidths: halfPt,
+      flowFromIds: {
+        for (final MapEntry(:key, :value) in sizing.entries)
+          if (value.flowFromId case final f?) key: f,
+      },
       net: net,
       sheetId: sheetId,
       floorIndex: floorIndex,
@@ -638,6 +642,10 @@ String _professionalDxf({
   } else {
     ann = layoutPlanAnnotations(
       runHalfWidths: ductHalfMm,
+      flowFromIds: {
+        for (final MapEntry(:key, :value) in sizing.entries)
+          if (value.flowFromId case final f?) key: f,
+      },
       net: net,
       sheetId: sheetId,
       floorIndex: floorIndex,

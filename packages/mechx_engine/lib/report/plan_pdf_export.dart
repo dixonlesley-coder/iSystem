@@ -1069,6 +1069,10 @@ const double kPlanDetailMarginMm = 4;
 
   final ann = layoutPlanAnnotations(
     runHalfWidths: ductHalfPt,
+    flowFromIds: {
+      for (final MapEntry(:key, :value) in sizing.entries)
+        if (value.flowFromId case final f?) key: f,
+    },
     net: net,
     sheetId: sheetId,
     floorIndex: floorIndex,
