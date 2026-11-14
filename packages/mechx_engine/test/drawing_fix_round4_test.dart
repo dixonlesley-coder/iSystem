@@ -317,7 +317,7 @@ void main() {
       expect(tagOnArms(lay(const {'m': 'A'})), isFalse);
     });
 
-    test('a key circle never sits on its own run', () {
+    test('a key number is never struck through by its own run', () {
       final layout = PlanLabelLayout();
       // A vertical run: the first hugging slot (straight up) is ON it.
       layout.addRun('v', 0, -60, 0, 60);
@@ -332,8 +332,11 @@ void main() {
           ownRunId: 'v',
           keys: PlanKeyRegistry(),
           keyOnly: true);
-      final c = k.keyCircle!;
-      expect(c.x.abs(), greaterThan(0.85 * c.r),
+      // The number's printed glyph box (baseline 0.36 text heights below
+      // the centre, cap height above it): the run (x = 0) must miss it.
+      final n = k.lines.single;
+      final w = helveticaTextWidth(n.text, 9);
+      expect(n.x > 0 || n.x + w < 0, isTrue,
           reason: 'the pipe would print through the key number');
     });
   });

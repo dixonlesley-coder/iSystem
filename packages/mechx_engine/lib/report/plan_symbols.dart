@@ -851,6 +851,11 @@ const double kPlanKeyedLeaderMaxFactor = 4.0;
 /// short local tie (≈ 19 mm at 9 pt).
 const double kPlanKeyTagLeaderMaxFactor = 6.0;
 
+/// Fix round 4 — the furthest ring (× text size beyond the circle) a key
+/// tries when no slot within [kPlanKeyTagLeaderMaxFactor] is clear, before
+/// the sheet counts an overprint.
+const double kPlanKeyTagLeaderReachFactor = 8.0;
+
 /// Fix round F4 (2026-11-13) — the clear paper a plan's KETERANGAN PIPA /
 /// PIPE KEY table keeps round it, × text size: no mark, marker text, label
 /// or run comes nearer (≈ 3 mm at 9 pt), unless no such spot exists.
@@ -1967,81 +1972,87 @@ LeaderedLabelPlacement _placeKeyTag({
   // neighbouring duct tag / fixture code.
   final rc = r + kPlanKeyCircleClearFactor * ts;
   ({double x, double y, double cost, bool lead})? best;
-  for (final gap in [
-    0.3,
-    0.8,
-    1.5,
-    2.3,
-    3.2,
-    4.0,
-    5.0,
-    kPlanKeyTagLeaderMaxFactor
+  const rings = [0.3, 0.8, 1.5, 2.3, 3.2, 4.0, 5.0, kPlanKeyTagLeaderMaxFactor];
+  // Fix round 4 — only when NO slot of the 32-direction rings is clear (a
+  // key between two close parallel pipes), a second pass tries the same
+  // rings at 64 directions and then [kPlanKeyTagLeaderReachFactor] before
+  // the honest stamp; a key that cleared on the first pass is unchanged.
+  for (final (dirs, gaps) in [
+    (32, rings),
+    (64, [...rings, kPlanKeyTagLeaderReachFactor]),
   ]) {
-    final d = r + gap * ts;
-    final lead = gap > 0.5;
-    for (var k = 0; k < 32; k++) {
-      final ux = math.sin(k * math.pi / 16), uy = math.cos(k * math.pi / 16);
-      final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
-      final box = (
-        minX: cx - rc,
-        minY: cy - rc,
-        maxX: cx + rc,
-        maxY: cy + rc
-      );
-      // Linework keeps the long-standing 0.85 r test (a pipe is thin ink).
-      final inkBox = (
-        minX: cx - 0.85 * r,
-        minY: cy - 0.85 * r,
-        maxX: cx + 0.85 * r,
-        maxY: cy + 0.85 * r
-      );
-      var cost = 0.0;
-      if (layout.hitsBox(box)) cost += 1;
-      // Fix round 4 (R3) — the element's OWN run is linework the circle must
-      // clear too (a key on its own pipe printed the pipe through its
-      // number); only its leader may start on it.
-      for (final rr in layout._runs) {
-        if (_segHitsBox(rr.seg, inkBox, 0)) cost += 1;
-      }
-      if (lead) {
-        final ex = cx - ux * r, ey = cy - uy * r;
-        for (final rr in layout._runs) {
-          if (rr.id != null && rr.id == ownRunId) continue;
-          if (_segmentsCross(anchor.x, anchor.y, ex, ey, rr.seg.x1, rr.seg.y1,
-              rr.seg.x2, rr.seg.y2)) {
-            cost += 1;
-          }
-        }
-        final seg = [(anchor.x, anchor.y), (ex, ey)];
-        for (final l in layout._labels) {
-          if (_quadsOverlap(l, seg)) cost += 1;
-        }
-        // Fix round 4 (R1, 2026-11-13) — the leader must also miss every
-        // TEXT registered as a box (a detail bubble + its caption, an UP/DN
-        // mark, a tie figure, a mark text), not only the placed tags: a key
-        // leader used to run straight through 'DETAIL A - LIHAT M-509'.
-        // A text box stops at its baseline: the leader keeps 0.2 text
-        // heights from it (descenders, the glyph's own side bearing).
-        final lb = _quadBounds(seg);
-        final m = 0.2 * ts;
-        for (final t in layout._textBoxes) {
-          final o = (
-            minX: t.minX - m,
-            minY: t.minY - m,
-            maxX: t.maxX + m,
-            maxY: t.maxY + m
-          );
-          if (_boxesOverlap(o, lb) && _quadsOverlap(_boxQuad(o), seg)) {
-            cost += 1;
-          }
-        }
-      }
-      if (best == null || cost < best.cost) {
-        best = (x: cx, y: cy, cost: cost, lead: lead);
-      }
-      if (cost == 0) break;
-    }
     if (best != null && best.cost == 0) break;
+    for (final gap in gaps) {
+      final d = r + gap * ts;
+      final lead = gap > 0.5;
+      for (var k = 0; k < dirs; k++) {
+        final ux = math.sin(k * 2 * math.pi / dirs),
+            uy = math.cos(k * 2 * math.pi / dirs);
+        final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
+        final box =
+            (minX: cx - rc, minY: cy - rc, maxX: cx + rc, maxY: cy + rc);
+        // Linework keeps the long-standing 0.85 r test (a pipe is thin ink).
+        final inkBox = (
+          minX: cx - 0.85 * r,
+          minY: cy - 0.85 * r,
+          maxX: cx + 0.85 * r,
+          maxY: cy + 0.85 * r
+        );
+        var cost = 0.0;
+        if (layout.hitsBox(box)) cost += 1;
+        // Fix round 4 (R3) — the element's OWN run may pass under the circle
+        // but never through its NUMBER (a key on its own pipe printed the pipe
+        // through its digits); any other run keeps the 0.85 r test.
+        final numBox = (
+          minX: cx - tw / 2 - 0.1 * ts,
+          minY: cy - 0.5 * ts,
+          maxX: cx + tw / 2 + 0.1 * ts,
+          maxY: cy + 0.5 * ts
+        );
+        for (final rr in layout._runs) {
+          final own = rr.id != null && rr.id == ownRunId;
+          if (_segHitsBox(rr.seg, own ? numBox : inkBox, 0)) cost += 1;
+        }
+        if (lead) {
+          final ex = cx - ux * r, ey = cy - uy * r;
+          for (final rr in layout._runs) {
+            if (rr.id != null && rr.id == ownRunId) continue;
+            if (_segmentsCross(anchor.x, anchor.y, ex, ey, rr.seg.x1, rr.seg.y1,
+                rr.seg.x2, rr.seg.y2)) {
+              cost += 1;
+            }
+          }
+          final seg = [(anchor.x, anchor.y), (ex, ey)];
+          for (final l in layout._labels) {
+            if (_quadsOverlap(l, seg)) cost += 1;
+          }
+          // Fix round 4 (R1, 2026-11-13) — the leader must also miss every
+          // TEXT registered as a box (a detail bubble + its caption, an UP/DN
+          // mark, a tie figure, a mark text), not only the placed tags: a key
+          // leader used to run straight through 'DETAIL A - LIHAT M-509'.
+          // A text box stops at its baseline: the leader keeps 0.2 text
+          // heights from it (descenders, the glyph's own side bearing).
+          final lb = _quadBounds(seg);
+          final m = 0.2 * ts;
+          for (final t in layout._textBoxes) {
+            final o = (
+              minX: t.minX - m,
+              minY: t.minY - m,
+              maxX: t.maxX + m,
+              maxY: t.maxY + m
+            );
+            if (_boxesOverlap(o, lb) && _quadsOverlap(_boxQuad(o), seg)) {
+              cost += 1;
+            }
+          }
+        }
+        if (best == null || cost < best.cost) {
+          best = (x: cx, y: cy, cost: cost, lead: lead);
+        }
+        if (cost == 0) break;
+      }
+      if (best != null && best.cost == 0) break;
+    }
   }
   final b = best!;
   if (b.cost > 0) layout._unresolved++;
