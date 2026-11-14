@@ -22,7 +22,8 @@ notes clear of linework, 21 panel-schedule totals add up to the DAYA rows
 (E-201 / E-601), 23 no orphan schedule page, 24 cross-document figures, 25
 PDF vs DXF text; fix round 4: 6 key / detail-bubble leaders clear of every
 text, riser key circles clear of every symbol, no stroke through a printed
-glyph on a plan / detail sheet. Report only:
+glyph on a plan / detail sheet; fix round 5: 8 key / bubble leaders within
+their cap, uncrossed and clear of other key circles. Report only:
 it never edits a drawing.
 
 Needs: pdftoppm + pdftotext (poppler), ImageMagick `montage`, python3 with
@@ -784,6 +785,72 @@ def foreign_line_tag_hits(pdf):
     return out
 
 
+# ── Fix round 5 (2026-11-14) helpers ────────────────────────────────────────
+# Key leader caps, x the key number's own text height: the riser's
+# kMechRiserKeyLeaderCapLabelHeights and the plan's
+# kPlanKeyTagLeaderReachFactor (a detail bubble is measured in its letter).
+RISER_KEY_LEADER_CAP = 10.0
+PLAN_KEY_LEADER_CAP = 12.0
+
+
+def _segs_cross(a, b):
+    """Proper crossing of two segments (shared ends / touches excluded)."""
+    (x1, y1, x2, y2), (x3, y3, x4, y4) = a, b
+
+    def o(px, py, qx, qy, rx, ry):
+        return (qx - px) * (ry - py) - (qy - py) * (rx - px)
+    d1, d2 = o(x3, y3, x4, y4, x1, y1), o(x3, y3, x4, y4, x2, y2)
+    d3, d4 = o(x1, y1, x2, y2, x3, y3), o(x1, y1, x2, y2, x4, y4)
+    e = 1e-6
+    return ((d1 > e and d2 < -e) or (d1 < -e and d2 > e)) and \
+        ((d3 > e and d4 < -e) or (d3 < -e and d4 > e))
+
+
+def key_leader_hits(pdf, cap):
+    """Fix round 5 (item 8) - {page: [message]}: a KEY / DETAIL-bubble leader
+    longer than [cap] x its mark's text height, two such leaders crossing,
+    or one passing through ANOTHER key / bubble circle."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            marks = _circle_marks(pg, chars, quads)
+            size = {}
+            for cx, cy, r, mark, own in marks:
+                size[(round(cx, 1), round(cy, 1))] = max(
+                    [true_size(chars[k]) for k in own] or [0.0])
+            leads = []
+            for (seg, mark, own) in _leaders(_page_lines(pg), marks):
+                # The mark this leader ends on.
+                m = min(marks, key=lambda c: min(
+                    abs(((seg[0] - c[0]) ** 2 + (seg[1] - c[1]) ** 2) ** 0.5
+                        - c[2]),
+                    abs(((seg[2] - c[0]) ** 2 + (seg[3] - c[1]) ** 2) ** 0.5
+                        - c[2])))
+                leads.append((seg, m))
+            bad = []
+            for seg, m in leads:
+                ll = ((seg[2] - seg[0]) ** 2 + (seg[3] - seg[1]) ** 2) ** 0.5
+                ts = size.get((round(m[0], 1), round(m[1], 1)), 0.0)
+                if ts > 0 and ll > cap * ts + 0.5:
+                    bad.append(f'{m[3]} leader {ll / ts:.1f} text heights')
+                for c in marks:
+                    if c is m:
+                        continue
+                    if _seg_point_dist(c[0], c[1], *seg) < c[2] - 0.3:
+                        bad.append(f'{m[3]} leader through circle {c[3]}')
+            for a in range(len(leads)):
+                for b in range(a + 1, len(leads)):
+                    if _segs_cross(leads[a][0], leads[b][0]):
+                        bad.append(f'{leads[a][1][3]} / {leads[b][1][3]} '
+                                   'leaders cross')
+            if bad:
+                out[i] = bad
+    return out
+
+
 def red_strokes(pgp):
     """Stroked linework in the essential (red) ink on a page."""
     def red(col):
@@ -1292,6 +1359,30 @@ def run_building(root, b):
                      ', '.join(f'{m} through "{t}"' for m, t in h[:6]))
             else:
                 emit(6, 'PASS', lab, 'every key / bubble leader clear of text')
+
+    # ── Fix round 5 (2026-11-14) ─────────────────────────────────────────
+    # Item 8 - key / bubble leaders are short (capped), cross no other key
+    # leader and pass through no other key circle (plans, details, risers).
+    lines += ['', '## Item 8 - key leaders capped, uncrossed, clear of other '
+              'key circles (scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        riser = st.endswith('-riser-sld')
+        if not (riser or re.search(r'-plan-\d+-.+$', st)) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = key_leader_hits(
+            pdf, RISER_KEY_LEADER_CAP if riser else PLAN_KEY_LEADER_CAP)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(8, 'FAIL', lab, f'{len(h)} key leader fault(s): ' +
+                     '; '.join(h[:6]))
+            else:
+                emit(8, 'PASS', lab, 'key leaders capped, uncrossed, clear')
 
     # R2 (item 6) - a riser key circle never sits on (or tight to) a symbol.
     lines += ['', '## Item 6 - riser key circles clear of every symbol '

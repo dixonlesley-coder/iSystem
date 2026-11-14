@@ -1254,3 +1254,20 @@ two fewer Lantai 16 detail sheets): every added sheet holds keys that used to pr
 or a leader. PNGs to re-check (relative to `drawings-t/`): `tower/png/Menara Contoh 30-plan-16-Lantai 16-p1.png`,
 `tower/png/Menara Contoh 30-riser-sld-p19.png` (Lantai 1 + PLANT), `tower/png/Menara Contoh 30-riser-sld-p18.png`
 (Lantai 1-4), `tower/png/Menara Contoh 30-plan-7-Lantai 7-detail-p1.png`.
+
+## Fix round 5 (2026-11-14)
+
+The re-check of fix round 4 passed R1 (M-116) and R3 (M-507) but failed checklist item 8 on tower
+M-201 p19 (Lantai 1 + plant row): key 3's leader ran diagonally across the plant row, three key leaders
+(3, 1, 1) ran almost the full sheet height from the fire / rain riser stubs, and the top-right cluster's
+key leaders crowded one another.
+
+| Root cause | Fix | Pre-check (item 8) |
+|---|---|---|
+| R2 of round 4 moved crowded symbol keys off their symbols, and they fell to the riser KEY ROWS (drawing review S2), which walked up to 60 grid steps along the band's top / bottom with no leader length limit (22-38 label heights on p19). A key circle was also tested against drawn leaders with a 0.85 r box, so a later key could graze an earlier key's leader. The plan placer was not the cause: its round-4 reach is bounded (12 text heights) and no plan / detail key leader on `drawings-t` broke the rule. | `kMechRiserKeyLeaderCapLabelHeights` (10) caps every riser key leader; a key with no clear slot inside it is counted (`overlapCount`), so the existing escalation (pitch / band, single-floor pages, column split, plant row / PLANT page) makes room. The tower plant group now issues on its own `Lantai 1 - PLANT` page with short leaders. A key circle keeps r + 0.1 size from every drawn leader. The plan's 64-direction / long-reach pass now only accepts a clear slot. | Three classes on risers, plans and details: key / bubble leader over its cap (riser 10, plan 12 key text heights), two key leaders crossing, a key leader through another key circle. They FAIL 5 pages of `drawings-t` (tower riser p19 and p1, apartment riser p1, office riser p2, shophouse riser p2). |
+
+Result on `drawings-u` (scratchpad): zero FAIL on all five buildings (PASS: house 149, shophouse 227,
+office 297, apartment 690, tower 1552). Pages: apartment 74 -> 75 (riser 9 -> 10), every other building
+unchanged; only the riser sheets changed (plan PDFs byte-identical to `drawings-t`). Tower riser pages to
+re-check (relative to `drawings-u/`): `tower/png/Menara Contoh 30-riser-sld-p17.png` (Lantai 2-3),
+`-p18.png` (Lantai 1), `-p19.png` (Lantai 1 - PLANT), `-p20.png` (pump-set detail).
