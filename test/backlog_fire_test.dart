@@ -36,6 +36,7 @@ ProviderContainer _load(ReferenceBuilding b, FeedStrategy feed,
   }
   c.read(feedStrategyProvider.notifier).set(feed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
+  c.read(populationProvider.notifier).set(b.population);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(networkControllerProvider.notifier).loadNetwork(network ?? b.network);
   if (shopRooms) {

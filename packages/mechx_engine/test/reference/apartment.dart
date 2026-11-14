@@ -636,4 +636,6 @@ ReferenceBuilding buildApartment({int? prvFloor = kAptPrvFloor}) =>
       network: buildApartmentNetwork(prvFloor: prvFloor),
       electrical: buildApartmentElectrical(),
       occupancy: Occupancy.private,
+      // Backlog W-4 — 4 persons per unit x 2 units x 12 floors = 96.
+      population: 96,
     );

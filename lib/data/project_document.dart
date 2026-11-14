@@ -213,6 +213,12 @@ class DesignSettings {
   /// it differs from the default, so an untouched project is byte-identical.
   final double mainsHeadM;
 
+  /// Backlog W-4 — the building population (persons; null = unknown, no
+  /// default) and the per-person daily demand override (L/person/day; null ⇒
+  /// the occupancy default). Additive — written only when set.
+  final int? population;
+  final double? demandPerPersonL;
+
   /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
   /// allowable recirculation loop DROP ΔT (K). They set the recirc flow AND the
   /// modelled return temperature the anti-Legionella check judges. Additive —
@@ -303,6 +309,8 @@ class DesignSettings {
     this.coolingLoadMethod = 'simple',
     this.drainageSlope = 0.01,
     this.mainsHeadM = kDefaultMainsHeadM,
+    this.population,
+    this.demandPerPersonL,
     this.hotWaterFlowTempC = 60.0,
     this.hotWaterDeltaTK = 5.0,
     this.anthropicApiKey = '',
@@ -346,6 +354,8 @@ class DesignSettings {
         // untouched project sizes exactly as before).
         'drainageSlope': drainageSlope,
         if (mainsHeadM != kDefaultMainsHeadM) 'mainsHead_m': mainsHeadM,
+        if (population != null) 'population': population,
+        if (demandPerPersonL != null) 'demand_lpd': demandPerPersonL,
         'hotWaterFlowTempC': hotWaterFlowTempC,
         'hotWaterDeltaTK': hotWaterDeltaTK,
         // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
@@ -430,6 +440,16 @@ class DesignSettings {
             _clampOr(json['drainageSlope'], 0.001, 0.1, 0.01),
         mainsHeadM:
             _clampOr(json['mainsHead_m'], 0.0, 100.0, kDefaultMainsHeadM),
+        // Backlog W-4 — tolerant: absent / non-numeric / non-positive ⇒ null.
+        population: switch (json['population']) {
+          final num v when v.isFinite && v >= 1 => v.round(),
+          _ => null,
+        },
+        demandPerPersonL: switch (json['demand_lpd']) {
+          final num v when v.isFinite && v > 0 =>
+            v.toDouble().clamp(1.0, 2000.0).toDouble(),
+          _ => null,
+        },
         hotWaterFlowTempC:
             _clampOr(json['hotWaterFlowTempC'], 40.0, 90.0, 60.0),
         hotWaterDeltaTK: _clampOr(json['hotWaterDeltaTK'], 1.0, 20.0, 5.0),

@@ -192,3 +192,74 @@ MainsPressureCheck? mainsPressureCheck({
     inletResidualM: kTankInletResidualHeadM,
   );
 }
+
+/// Backlog W-4 (2026-11-14) — the daily water demand (litres / day) of
+/// [population] persons at [litresPerPersonDay]. Null when the population is
+/// unknown (never invented).
+double? dailyDemandLitres(int? population, double litresPerPersonDay) =>
+    population == null || population <= 0
+        ? null
+        : population * litresPerPersonDay;
+
+/// Backlog W-4 — one domestic storage tank's contribution to the water
+/// reserve: its capacity less any fire reserve held in it (a tank shared by
+/// a fire system), null when no capacity is entered (excluded, named).
+typedef ReserveTank = ({
+  String tankId,
+  bool roof,
+  double? capacityLitres,
+  double fireReserveLitres,
+});
+
+/// Backlog W-4 (2026-11-14) — the domestic WATER RESERVE: the total
+/// potable storage (Σ capacity − fire reserve of the domestic cold-water
+/// tanks that have a capacity) over the daily demand, in days. Report only:
+/// the owner's decision is that a tank's fill rate is outside the
+/// designer's control, so no fill-rate judge exists; the reserve is the
+/// reported figure. Never invented: [days] is null with no daily demand or
+/// no stored volume.
+class WaterReserve {
+  final List<ReserveTank> tanks;
+
+  /// The daily demand (litres / day); null when the population is unknown.
+  final double? dailyLitres;
+
+  const WaterReserve({required this.tanks, required this.dailyLitres});
+
+  /// The tanks counted (a capacity entered).
+  List<ReserveTank> get counted =>
+      [for (final t in tanks) if (t.capacityLitres != null) t];
+
+  /// The tanks excluded for having no capacity.
+  List<String> get excludedTankIds =>
+      [for (final t in tanks) if (t.capacityLitres == null) t.tankId];
+
+  /// The potable volume a counted tank holds (capacity − fire reserve,
+  /// never below 0).
+  static double domesticLitres(ReserveTank t) => (t.capacityLitres! -
+          t.fireReserveLitres)
+      .clamp(0.0, double.infinity)
+      .toDouble();
+
+  /// Σ domestic storage (litres); null when no tank has a capacity.
+  double? get storedLitres => counted.isEmpty
+      ? null
+      : counted.fold<double>(0, (a, t) => a + domesticLitres(t));
+
+  /// Reserve in days = stored / daily demand; null when either is unknown.
+  double? get days {
+    final s = storedLitres;
+    final d = dailyLitres;
+    if (s == null || d == null || d <= 0 || s <= 0) return null;
+    return s / d;
+  }
+}
+
+/// "X.X days (Y h)" for a sub-day reserve, "X.X days" otherwise.
+/// (hours to 0.1 h below 10 h).
+String formatReserveDays(double days) {
+  if (days >= 1) return '${days.toStringAsFixed(1)} days';
+  final h = days * 24;
+  return '${days.toStringAsFixed(1)} days '
+      '(${h < 10 ? h.toStringAsFixed(1) : h.toStringAsFixed(0)} h)';
+}

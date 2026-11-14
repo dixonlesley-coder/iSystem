@@ -464,4 +464,6 @@ ReferenceBuilding buildOffice() => ReferenceBuilding(
       network: buildOfficeNetwork(),
       electrical: buildOfficeElectrical(),
       occupancy: Occupancy.public,
+      // Backlog W-4 — 50 staff per floor x 4 floors = 200.
+      population: 200,
     );

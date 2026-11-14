@@ -192,6 +192,9 @@ ProjectDocument buildDocument(ProviderReader read) {
       drainageSlope: read(drainageSlopeProvider),
       // Backlog W-2 — the available mains head (default ⇒ omitted).
       mainsHeadM: read(mainsHeadProvider),
+      // Backlog W-4 — population + per-person override (unset ⇒ omitted).
+      population: read(populationProvider),
+      demandPerPersonL: read(demandPerPersonOverrideProvider),
       hotWaterFlowTempC: read(hotWaterFlowTempProvider),
       hotWaterDeltaTK: read(hotWaterDeltaTProvider),
       coolingLoadMethod: read(coolingLoadMethodProvider).code,
@@ -352,6 +355,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // decoder's engine-matching defaults, so an old project restores unchanged).
   read(drainageSlopeProvider.notifier).set(s.drainageSlope);
   read(mainsHeadProvider.notifier).set(s.mainsHeadM);
+  read(populationProvider.notifier).set(s.population);
+  read(demandPerPersonOverrideProvider.notifier).set(s.demandPerPersonL);
   read(hotWaterFlowTempProvider.notifier).set(s.hotWaterFlowTempC);
   read(hotWaterDeltaTProvider.notifier).set(s.hotWaterDeltaTK);
   read(coolingLoadMethodProvider.notifier)

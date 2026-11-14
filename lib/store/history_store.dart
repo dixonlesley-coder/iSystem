@@ -632,6 +632,22 @@ void setMainsHeadUndoable(ProviderReader read, double next) =>
         next: next,
         label: StringKey.buildingInputMainsHead);
 
+/// Backlog W-4 — undoable population change (null / <= 0 clears it).
+void setPopulationUndoable(ProviderReader read, int? next) =>
+    setSettingUndoable<int?>(read,
+        get: () => read(populationProvider),
+        apply: (v) => read(populationProvider.notifier).set(v),
+        next: next,
+        label: StringKey.buildingInputPopulation);
+
+/// Backlog W-4 — undoable per-person daily demand override (null clears).
+void setDemandPerPersonUndoable(ProviderReader read, double? next) =>
+    setSettingUndoable<double?>(read,
+        get: () => read(demandPerPersonOverrideProvider),
+        apply: (v) => read(demandPerPersonOverrideProvider.notifier).set(v),
+        next: next,
+        label: StringKey.buildingInputDemandPerPerson);
+
 /// Undoable laid drainage slope change (m/m, clamped by the store).
 void setDrainageSlopeUndoable(ProviderReader read, double next) =>
     setSettingUndoable<double>(read,

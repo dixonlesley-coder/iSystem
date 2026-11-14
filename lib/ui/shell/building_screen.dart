@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
@@ -21,10 +22,15 @@ import '../../store/app_state.dart'
         rainfallIntensityProvider,
         runoffCoefficientProvider,
         mainsHeadProvider,
+        populationProvider,
+        demandPerPersonProvider,
+        demandPerPersonOverrideProvider,
+        dailyDemandLitresProvider,
         statusMessageProvider;
 import '../../store/floor_remap.dart'
     show FloorPlacedWorkCount, floorPlacedWorkCount;
 import '../../store/history_store.dart';
+import '../../store/tank_fill_store.dart' show waterReserveProvider;
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -650,6 +656,11 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
     final mainsHead = ref.watch(mainsHeadProvider);
+    final population = ref.watch(populationProvider);
+    final perPerson = ref.watch(demandPerPersonProvider);
+    final perPersonOverride = ref.watch(demandPerPersonOverrideProvider);
+    final daily = ref.watch(dailyDemandLitresProvider);
+    final reserve = ref.watch(waterReserveProvider);
     final slope = ref.watch(drainageSlopeProvider);
     final hwFlow = ref.watch(hotWaterFlowTempProvider);
     final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
@@ -898,6 +909,81 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             ],
           ),
           caption(context.strings(StringKey.buildingInputCaptionMainsHead)),
+          // Backlog W-4 — the population (no default: unset = unknown) and
+          // the per-person daily demand (occupancy default, overridable);
+          // the daily demand they give is stated once, here.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(
+                      context.strings(StringKey.buildingInputPopulation))),
+              SteppedValueField(
+                display: population == null ? '-' : '$population',
+                editSeed: population == null ? '' : '$population',
+                label: context.strings(StringKey.buildingInputPopulation),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                onDecrement: () => setPopulationUndoable(
+                    ref.read, population == null ? null : population - 1),
+                onIncrement: () =>
+                    setPopulationUndoable(ref.read, (population ?? 0) + 1),
+                onSubmit: (v) => setPopulationUndoable(
+                    ref.read, v == null || v <= 0 ? null : v.round()),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputDemandPerPerson))),
+              SteppedValueField(
+                display: '${perPerson.toStringAsFixed(0)} L'
+                    '${perPersonOverride == null ? ' (default)' : ''}',
+                editSeed: perPersonOverride == null
+                    ? ''
+                    : perPersonOverride.toStringAsFixed(0),
+                label:
+                    context.strings(StringKey.buildingInputDemandPerPerson),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                max: 2000,
+                onDecrement: () =>
+                    setDemandPerPersonUndoable(ref.read, perPerson - 10),
+                onIncrement: () =>
+                    setDemandPerPersonUndoable(ref.read, perPerson + 10),
+                onSubmit: (v) => setDemandPerPersonUndoable(
+                    ref.read, v == null || v <= 0 ? null : v),
+              ),
+            ],
+          ),
+          caption(daily == null
+              ? context.strings(StringKey.buildingInputCaptionDailyDemandUnset)
+              : context.strings.format(StringKey.buildingInputCaptionDailyDemand,
+                  {
+                    'm3': (daily / 1000).toStringAsFixed(2),
+                    'lps': (daily / 86400).toStringAsFixed(4),
+                  })),
+          // Backlog W-4 — the water reserve beside its inputs (the same
+          // `waterReserveProvider` the Results headline and report read).
+          if (reserve.days != null)
+            caption('${context.strings(StringKey.reserveHeadlineLabel)}: '
+                '${context.strings.format(StringKey.reserveHeadlineValue, {
+                  'days': formatReserveDays(reserve.days!),
+                  'stored': (reserve.storedLitres! / 1000).toStringAsFixed(1),
+                  'daily': (reserve.dailyLitres! / 1000).toStringAsFixed(1),
+                })}'),
+          if (reserve.excludedTankIds.isNotEmpty)
+            caption(context.strings.format(StringKey.reserveExcluded,
+                {'n': '${reserve.excludedTankIds.length}'})),
           // M13 — the laid drainage gradient. Typed and displayed as the
           // drafting fraction (1:100), which is how a plumber reads a fall;
           // stored as m/m. Steps of 10 in N (1:100 → 1:90 → 1:80).

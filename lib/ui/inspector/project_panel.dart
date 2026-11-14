@@ -48,7 +48,8 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
-import 'package:mechx_engine/sizing/tank_fill.dart' show tankFillFlow, tankRefillHoursOf;
+import 'package:mechx_engine/sizing/tank_fill.dart'
+    show formatReserveDays, tankFillFlow, tankRefillHoursOf;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show firePressureClassLabel;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
@@ -80,7 +81,10 @@ import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/tank_fill_store.dart'
-    show mainsPressureChecksProvider, tankFillsProvider;
+    show
+        mainsPressureChecksProvider,
+        tankFillsProvider,
+        waterReserveProvider;
 import '../widgets/locale_number.dart' show parseLocaleNumber;
 import '../../store/inspector_store.dart';
 import '../../store/assemblies_store.dart';
@@ -373,6 +377,24 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
           fillFlow: t.fillFlow,
         ),
     ],
+    // Backlog W-4 — the daily demand (only with a known population) and the
+    // domestic water reserve (the one `waterReserveProvider`).
+    dailyDemand: switch ((
+      ref.read(populationProvider),
+      ref.read(dailyDemandLitresProvider),
+    )) {
+      (final int pop, final double l) => (
+          population: pop,
+          litresPerPerson: ref.read(demandPerPersonProvider),
+          litresPerDay: l,
+        ),
+      _ => null,
+    },
+    waterReserve: ref.read(waterReserveProvider),
+    reserveTankTags: {
+      for (final t in ref.read(waterReserveProvider).tanks)
+        t.tankId: nodeTagMap[t.tankId] ?? t.tankId,
+    },
     // Backlog W-2 — the mains-pressure verdict at each meter feed.
     mainsChecks: [
       for (final c in ref.read(mainsPressureChecksProvider))
@@ -5140,6 +5162,37 @@ class _ResultsSection extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.sm),
             headlineCard,
           ],
+          // Backlog W-4 — the domestic water reserve (days), informational:
+          // shown only when both the stored volume and the daily demand are
+          // known (never 0, never invented).
+          Builder(builder: (context) {
+            final r = ref.watch(waterReserveProvider);
+            final days = r.days;
+            final excluded = r.excludedTankIds.length;
+            if (days == null) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: MechXSpacing.sm),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ResultCard(
+                    headline: formatReserveDays(days),
+                    label:
+                        '${context.strings(StringKey.reserveHeadlineLabel)} · '
+                        '${(r.storedLitres! / 1000).toStringAsFixed(1)} m3 / '
+                        '${(r.dailyLitres! / 1000).toStringAsFixed(1)} m3 per day',
+                  ),
+                  if (excluded > 0)
+                    Text(
+                      context.strings
+                          .format(StringKey.reserveExcluded, {'n': '$excluded'}),
+                      style: context.type.caption
+                          .copyWith(color: context.colors.textMuted),
+                    ),
+                ],
+              ),
+            );
+          }),
           const SizedBox(height: MechXSpacing.sm),
           // 2026-10-17: the feed strategy is a Building design input — reported
           // read-only here, with a 'Change' link to the Building page.

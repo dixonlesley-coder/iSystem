@@ -140,6 +140,19 @@ const double kTankInletResidualHeadM = 5.0;
 /// varies by city and hour; NOT an SNI clause.
 const double kDefaultMainsHeadM = 10.0;
 
+/// Backlog W-4 (2026-11-14) — the default DAILY WATER DEMAND per person
+/// (litres / person / day) per occupancy class, the SNI 03-7065 "pemakaian
+/// air rata-rata per orang per hari" method: private (rumah tinggal) 120,
+/// public (kantor) 50, assembly (gedung pertunjukan, per seat) 10.
+/// // VERIFY — SNI 03-7065-2005 style figures NOT confirmed verbatim;
+/// surfaced via [SniProfile.dailyDemandPerPersonTable]. Editable per
+/// project.
+double dailyDemandPerPersonDefault(Occupancy o) => switch (o) {
+      Occupancy.private => 120.0,
+      Occupancy.public => 50.0,
+      Occupancy.assembly => 10.0,
+    };
+
 /// Occupancy class for UBAP fixture-unit loads (SNI 8153:2015 Tabel 3 columns):
 /// pribadi (private) / umum (public) / tempat berkumpul (assembly).
 enum Occupancy { private, public, assembly }
@@ -516,6 +529,26 @@ class SniProfile implements StandardsProfile {
             'Confirm against the project brief and the PDAM.',
       );
 
+  /// Backlog W-4 (2026-11-14) — the per-person daily water demand table
+  /// ([dailyDemandPerPersonDefault]) behind the daily demand and the
+  /// domestic water reserve in days (`WaterReserve`).
+  /// `notAnSniClause` like [tankFillBasis] (printed in the calc report's
+  /// Unverified section, no Review advisory).
+  StandardValue<Object?> get dailyDemandPerPersonTable =>
+      const StandardValue<Object?>(
+        'daily demand per person: private (rumah tinggal) 120, public '
+        '(kantor) 50, assembly (gedung pertunjukan, per seat) 10 L/person/day',
+        unit: 'L/person/day',
+        citation: 'SNI 03-7065-2005 style per-person daily water use (NOT '
+            'confirmed verbatim)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'Daily demand = population x litres per person per day (the '
+            'occupancy default, editable per project); the water reserve is '
+            'the domestic storage / the daily demand, in days. The population is entered by the '
+            'engineer and never derived. Confirm the per-person figures '
+            'against SNI 03-7065 and the project brief.',
+      );
+
   /// Backlog G-2 (2026-11-13) — the ONE verify-checklist entry behind the
   /// water-heater duty (`sizing/water_heater.dart`): the ASHRAE fixture-
   /// demand table rows, demand / storage factors and the heating constants.
@@ -589,6 +622,8 @@ class SniProfile implements StandardsProfile {
         waterHeaterFixtureDemand,
         // Backlog W-1..W-3 — the tank fill-rate basis.
         tankFillBasis,
+        // Backlog W-4 — the per-person daily demand table.
+        dailyDemandPerPersonTable,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(

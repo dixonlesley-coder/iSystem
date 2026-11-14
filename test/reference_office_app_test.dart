@@ -37,6 +37,7 @@ import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/room_air_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx/store/tank_fill_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show originPanelIdsOf, rootServiceBasisVa, servicePerPhaseBasisVa;
 import 'package:mechx_engine/electrical/panel_results.dart'
@@ -85,6 +86,7 @@ Future<ProviderContainer> _loadOffice(ReferenceBuilding b) async {
   }
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
+  c.read(populationProvider.notifier).set(b.population);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(networkControllerProvider.notifier).loadNetwork(b.network);
   final rooms = c.read(roomAreasProvider.notifier);
@@ -1117,6 +1119,23 @@ void main() {
     final c = await _loadOffice(buildOffice());
     // ignore: avoid_print
     print('COPPER office ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
+  });
+
+  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 50 staff x 4 floors = 200 x 50 L/person/day (public / office, `// VERIFY`) = 10 000 L = 10.00 m3/day; GT has no capacity (the fire tank FT is not domestic storage).
+  test('backlog W-4: daily demand 10.00 m3/day, no reserve figure (no tank capacity)', () async {
+    final c = await _loadOffice(buildOffice());
+    expect(c.read(populationProvider), 200);
+    expect(c.read(demandPerPersonProvider), 50.0);
+    expect(c.read(dailyDemandLitresProvider), closeTo(10000.0, 1e-9));
+    final r = c.read(waterReserveProvider);
+    // No domestic tank has a capacity: every one is excluded and named, no
+    // stored volume and no days figure (never 0).
+    expect(r.excludedTankIds, ['GT']);
+    expect(r.storedLitres, isNull);
+    expect(r.days, isNull);
+    final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+    expect(kinds, isNot(contains('daily-demand-unset')));
     c.dispose();
   });
 }

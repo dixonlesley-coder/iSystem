@@ -249,6 +249,33 @@ _(empty)_
 - **(i) Downstream-VD raise always enlarged the feeder — closed by B-2.** The cure now takes the least copper on the way's chain: the lighting ways of the upper floors go 1.5 → 2.5 mm² (Lampu C 4 mm² on Lt20 / 21) and the floor feeders end at the size their 63 A floor device needs (16 mm² on Lt1..21, 25 on Lt22..27, 35 on Lt28..30 — the ADS hold of the 63 A device; PP-Lt30 95 → 35 mm²). Lighting raised: Lampu A Lt18..21 and Lt28..30, B Lt12..30, C Lt6..30 (4 mm² on Lt20 / 21). Copper: see the table below; no `cumulative-voltage-drop-exceeded`.
 - **(h) `non-selective` on auto-sized feeders — closed by B-1 (bounded)** where a two-size single-run step under the upstream incomer reaches: PP-Lt1 / PP-Lt2 grow to 5 x 16 / 63 A (VD 0.25 / 0.32 %). PP-E (parallel runs) and the MEP feeder (above PP-E's own incomer) keep the warning, which now names a selective device.
 
+
+## Daily water demand and water reserve (backlog W-4, 2026-11-14)
+
+Each fixture carries a population (`ReferenceBuilding.population`, set by the
+app tests on the Building-page input). Daily demand = population x the
+occupancy's per-person figure (private 120, public 50 L/person/day, `// VERIFY`
+SNI 03-7065 style). Water reserve = Σ domestic tank capacity / daily demand
+(`waterReserveProvider`; fire-only tanks FT are not domestic). Informational:
+the owner ruled the fill rate out of the designer's control, so nothing is
+judged.
+
+| Building | Population (basis) | L/person/day | Daily m3 | Domestic storage | Reserve |
+|---|---|---|---|---|---|
+| House | 5 (one household) | 120 | 0.60 | RT no capacity: excluded | no figure |
+| Shophouse | 15 (5 per unit x 3) | 120 | 1.80 | GT_A..C, RT_A..C no capacity: all 6 excluded | no figure |
+| Office | 200 (50 staff x 4 floors) | 50 | 10.00 | GT no capacity: excluded | no figure |
+| Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 | 30 000 / 11 520 = 2.6 days |
+| Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 60 000 + RT 30 000 = 90.0 m3 | 90 000 / 150 000 = 0.6 days (14 h) |
+
+None raises `daily-demand-unset` (each has a population).
+
+### Backlog closed (2026-11-14)
+
+- **Tank fill vs the building's demand — backlog W-4** (W-1's stopped
+  judge): the population and per-person inputs exist; per the owner the
+  reported figure is the water reserve in days, not a fill-rate verdict.
+
 ## Electrical backlog copper (2026-11-13)
 
 Σ mm² × m × loaded cores (phase + neutral, × parallel runs; star-delta leads

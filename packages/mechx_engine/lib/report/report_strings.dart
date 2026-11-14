@@ -119,6 +119,16 @@ enum RptStringKey {
   // Backlog W-2 — {meter} {tank} {avail} {req} {lift} {fric} {res} {lps} {verdict}
   wsMainsPressure,
   wsMainsShort,
+  // Backlog W-4 — {pop} {lpd} {m3} {lps}
+  wsDailyDemand,
+  // {tag} {kind} {cap} {fire} {dom}
+  wsReserveTank,
+  wsReserveFireShare, // {fire}
+  wsReserveTotal, // {m3} {days}
+  wsReserveDays, // {d}
+  wsReserveDaysHours, // {d} {h}
+  wsReserveNoDemand,
+  wsReserveExcluded, // {n} {tags}
   wsLegionella, // {c}
 
   // Pressure-zone table.
@@ -613,6 +623,20 @@ const Map<RptStringKey, String> kReportStringsEn = {
           '**{req} m** (lift {lift} + feed friction {fric} at {lps} L/s + '
           'inlet residual {res}) · {verdict} _(// VERIFY mains pressure)_',
   RptStringKey.wsMainsShort: 'INSUFFICIENT',
+  RptStringKey.wsDailyDemand:
+      '- Daily water demand: {pop} persons x {lpd} L/person/day = **{m3} '
+          'm3/day** · average draw {lps} L/s _(// VERIFY per-person figure)_',
+  RptStringKey.wsReserveTank:
+      '- Storage {tag} ({kind}): {cap} L{fire} -> {dom} L domestic',
+  RptStringKey.wsReserveFireShare: ' less the fire reserve {fire} L',
+  RptStringKey.wsReserveTotal:
+      '- Water reserve: **{m3} m3** stored / daily demand = **{days}** '
+          '_(informational, no threshold)_',
+  RptStringKey.wsReserveDays: '{d} days',
+  RptStringKey.wsReserveDaysHours: '{d} days ({h} h)',
+  RptStringKey.wsReserveNoDemand: 'no figure (population not set)',
+  RptStringKey.wsReserveExcluded:
+      '- The reserve excludes {n} tank(s) with no capacity set: {tags}',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -1189,6 +1213,21 @@ const Map<RptStringKey, String> kReportStringsId = {
           '**{req} m** (angkat {lift} + gesekan pipa {fric} pada {lps} L/s + '
           'sisa tekanan inlet {res}) · {verdict} _(// VERIFY tekanan PDAM)_',
   RptStringKey.wsMainsShort: 'TIDAK CUKUP',
+  RptStringKey.wsDailyDemand:
+      '- Kebutuhan air harian: {pop} orang x {lpd} L/orang/hari = **{m3} '
+          'm3/hari** · pemakaian rata-rata {lps} L/s _(// VERIFY angka per '
+          'orang)_',
+  RptStringKey.wsReserveTank:
+      '- Tampungan {tag} ({kind}): {cap} L{fire} -> {dom} L domestik',
+  RptStringKey.wsReserveFireShare: ' dikurangi cadangan kebakaran {fire} L',
+  RptStringKey.wsReserveTotal:
+      '- Cadangan air: **{m3} m3** tersimpan / kebutuhan harian = **{days}** '
+          '_(informasi, tanpa ambang)_',
+  RptStringKey.wsReserveDays: '{d} hari',
+  RptStringKey.wsReserveDaysHours: '{d} hari ({h} jam)',
+  RptStringKey.wsReserveNoDemand: 'tanpa angka (jumlah penghuni belum diisi)',
+  RptStringKey.wsReserveExcluded:
+      '- Cadangan tidak menghitung {n} tangki tanpa kapasitas: {tags}',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '

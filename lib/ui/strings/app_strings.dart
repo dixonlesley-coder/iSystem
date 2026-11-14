@@ -1164,6 +1164,15 @@ enum StringKey {
   buildingInputCaptionRunoff,
   buildingInputMainsHead,
   buildingInputCaptionMainsHead,
+  buildingInputPopulation,
+  buildingInputDemandPerPerson,
+  buildingInputCaptionDailyDemand, // {m3} {lps}
+  buildingInputCaptionDailyDemandUnset,
+  issueDailyDemandUnsetTitle,
+  issueDailyDemandUnsetMessage,
+  reserveHeadlineLabel,
+  reserveHeadlineValue, // {days} {stored} {daily}
+  reserveExcluded, // {n}
   issueMainsPressureTitle,
   issueMainsPressureMessage,
   buildingInputCaptionSlope,
@@ -2829,6 +2838,18 @@ const Map<StringKey, String> _en = {
   StringKey.buildingInputMainsHead: 'Mains pressure at meter (m)',
   StringKey.buildingInputCaptionMainsHead:
       'Available PDAM head at the water meter. Judged at each meter feeding a ground tank (lift + friction + float valve 5 m); no size depends on it. Default 10 m - // VERIFY with the utility.',
+  StringKey.buildingInputPopulation: 'Population (persons)',
+  StringKey.buildingInputDemandPerPerson: 'Daily demand per person (L)',
+  StringKey.buildingInputCaptionDailyDemand:
+      'Daily water demand {m3} m3/day (average draw {lps} L/s). Per-person default by occupancy - // VERIFY vs SNI 03-7065.',
+  StringKey.buildingInputCaptionDailyDemandUnset:
+      'Enter the population to compute the daily water demand (not derived from the drawing). Per-person default by occupancy - // VERIFY vs SNI 03-7065.',
+  StringKey.issueDailyDemandUnsetTitle: 'Population not set: no water-reserve figure',
+  StringKey.issueDailyDemandUnsetMessage:
+      'No population is entered on the Building page, so there is no daily water demand and no water-reserve (days) figure. Enter the population (persons).',
+  StringKey.reserveHeadlineLabel: 'Water reserve',
+  StringKey.reserveHeadlineValue: '{days} ({stored} m3 stored / {daily} m3 per day)',
+  StringKey.reserveExcluded: 'Reserve excludes {n} tank(s) with no capacity set',
   StringKey.issueMainsPressureTitle: 'Mains pressure too low to fill the tank',
   StringKey.issueMainsPressureMessage:
       'Water meter {meter} has {avail} m of mains head but filling {tank} at {flow} L/s needs {req} m (lift {lift} m + feed friction {fric} m + inlet residual {res} m). Ask the utility for the pressure, enlarge the feed, or add a booster / break tank.',
@@ -4566,6 +4587,18 @@ const Map<StringKey, String> _id = {
   StringKey.buildingInputMainsHead: 'Tekanan PDAM di meter (m)',
   StringKey.buildingInputCaptionMainsHead:
       'Tinggi tekan PDAM yang tersedia di meter air. Diperiksa di setiap meter yang mengisi tangki bawah (angkat + gesekan + katup pelampung 5 m); tidak ada ukuran yang bergantung padanya. Bawaan 10 m - // VERIFY ke PDAM.',
+  StringKey.buildingInputPopulation: 'Jumlah penghuni (orang)',
+  StringKey.buildingInputDemandPerPerson: 'Kebutuhan harian per orang (L)',
+  StringKey.buildingInputCaptionDailyDemand:
+      'Kebutuhan air harian {m3} m3/hari (pemakaian rata-rata {lps} L/s). Angka per orang bawaan menurut okupansi - // VERIFY ke SNI 03-7065.',
+  StringKey.buildingInputCaptionDailyDemandUnset:
+      'Isi jumlah penghuni untuk menghitung kebutuhan air harian (tidak diturunkan dari gambar). Angka per orang bawaan menurut okupansi - // VERIFY ke SNI 03-7065.',
+  StringKey.issueDailyDemandUnsetTitle: 'Jumlah penghuni belum diisi: tanpa angka cadangan air',
+  StringKey.issueDailyDemandUnsetMessage:
+      'Jumlah penghuni belum diisi di halaman Bangunan, sehingga tidak ada kebutuhan air harian dan tidak ada angka cadangan air (hari). Isi jumlah penghuni (orang).',
+  StringKey.reserveHeadlineLabel: 'Cadangan air',
+  StringKey.reserveHeadlineValue: '{days} ({stored} m3 tersimpan / {daily} m3 per hari)',
+  StringKey.reserveExcluded: 'Cadangan tidak menghitung {n} tangki tanpa kapasitas',
   StringKey.issueMainsPressureTitle: 'Tekanan PDAM terlalu rendah untuk mengisi tangki',
   StringKey.issueMainsPressureMessage:
       'Meter air {meter} memiliki tinggi tekan PDAM {avail} m, tetapi mengisi {tank} pada {flow} L/s membutuhkan {req} m (angkat {lift} m + gesekan pipa {fric} m + sisa tekanan inlet {res} m). Tanyakan tekanan ke PDAM, perbesar pipa, atau tambah pompa / tangki antara.',

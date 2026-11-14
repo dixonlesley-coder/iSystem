@@ -292,4 +292,6 @@ ReferenceBuilding buildHouse() => ReferenceBuilding(
       network: buildHouseNetwork(),
       electrical: buildHouseElectrical(),
       occupancy: Occupancy.private,
+      // Backlog W-4 — one household of 5 persons (a 2-storey house).
+      population: 5,
     );

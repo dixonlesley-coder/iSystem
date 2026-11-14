@@ -23,7 +23,7 @@ import '../sizing/hot_water.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
-import '../sizing/tank_fill.dart' show MainsPressureCheck;
+import '../sizing/tank_fill.dart' show MainsPressureCheck, WaterReserve;
 import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
@@ -227,6 +227,15 @@ class CalcReportData {
   final List<({String meterTag, String tankTag, MainsPressureCheck check})>
       mainsChecks;
 
+  /// Backlog W-4 — the daily water demand (null when the population is
+  /// unknown: nothing printed) and the domestic water reserve (the SAME
+  /// `WaterReserve` the inspector / Building page read), with the plan tag of
+  /// each of its tanks. Null ⇒ unchanged.
+  final ({int population, double litresPerPerson, double litresPerDay})?
+      dailyDemand;
+  final WaterReserve? waterReserve;
+  final Map<String, String> reserveTankTags;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -364,6 +373,9 @@ class CalcReportData {
     this.waterHeaters = const [],
     this.tankFills = const [],
     this.mainsChecks = const [],
+    this.dailyDemand,
+    this.waterReserve,
+    this.reserveTankTags = const {},
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
@@ -851,6 +863,57 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       'ph': h.phases == 3
           ? strings(RptStringKey.sysThreePhase)
           : strings(RptStringKey.sysSinglePhase),
+    }));
+  }
+  // Backlog W-4 — the daily demand (only with a known population).
+  final dd = d.dailyDemand;
+  if (dd != null) {
+    String n1(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    ws.writeln(strings.format(RptStringKey.wsDailyDemand, {
+      'pop': '${dd.population}',
+      'lpd': n1(dd.litresPerPerson),
+      'm3': (dd.litresPerDay / 1000).toStringAsFixed(2),
+      'lps': (dd.litresPerDay / 86400).toStringAsFixed(4),
+    }));
+  }
+  // The domestic water reserve: each counted tank, the excluded ones, the
+  // total and the days (report only — no threshold).
+  final wr = d.waterReserve;
+  if (wr != null && wr.storedLitres != null) {
+    for (final t in wr.counted) {
+      ws.writeln(strings.format(RptStringKey.wsReserveTank, {
+        'tag': d.reserveTankTags[t.tankId] ?? t.tankId,
+        'kind': strings(
+            t.roof ? RptStringKey.wsTankKindRoof : RptStringKey.wsTankKindGround),
+        'cap': t.capacityLitres!.toStringAsFixed(0),
+        'fire': t.fireReserveLitres > 0
+            ? strings.format(RptStringKey.wsReserveFireShare,
+                {'fire': t.fireReserveLitres.toStringAsFixed(0)})
+            : '',
+        'dom': WaterReserve.domesticLitres(t).toStringAsFixed(0),
+      }));
+    }
+    final days = wr.days;
+    ws.writeln(strings.format(RptStringKey.wsReserveTotal, {
+      'm3': (wr.storedLitres! / 1000).toStringAsFixed(2),
+      'days': days == null
+          ? strings(RptStringKey.wsReserveNoDemand)
+          : days < 1
+              ? strings.format(RptStringKey.wsReserveDaysHours, {
+                  'd': days.toStringAsFixed(1),
+                  'h': (days * 24).toStringAsFixed(0),
+                })
+              : strings.format(
+                  RptStringKey.wsReserveDays, {'d': days.toStringAsFixed(1)}),
+    }));
+  }
+  if (wr != null && wr.excludedTankIds.isNotEmpty) {
+    ws.writeln(strings.format(RptStringKey.wsReserveExcluded, {
+      'n': '${wr.excludedTankIds.length}',
+      'tags': [
+        for (final id in wr.excludedTankIds) d.reserveTankTags[id] ?? id,
+      ].join(', '),
     }));
   }
   // Backlog W-1 — one line per tank: capacity, refill time, fill flow.

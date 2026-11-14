@@ -9,10 +9,11 @@ import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/sizing/tank_fill.dart';
 import 'package:mechx_engine/units.dart';
 
-import 'app_state.dart' show mainsHeadProvider;
+import 'app_state.dart' show dailyDemandLitresProvider, mainsHeadProvider;
 import 'network_store.dart' show sizingNetworkProvider;
 import 'project_store.dart' show projectControllerProvider;
 import 'sizing_store.dart' show sizingProvider;
+import 'fire_store.dart' show fireTankReservesProvider;
 
 /// One cold-water storage tank and its fill.
 class TankFill {
@@ -127,4 +128,50 @@ final mainsPressureChecksProvider = Provider<List<MainsPressureCheck>>((ref) {
             nodeElevation(n, project.building, project.mounting).meters,
       ),
   ];
+});
+
+/// Backlog W-4 (2026-11-14) — THE domestic water reserve (the one source
+/// the inspector headline, the Building page and the calc report read):
+/// every storage tank with a cold-water pipe; a tank also on a fire service
+/// counts its capacity less the fire reserve the app computes for it
+/// ([fireTankReservesProvider]) and, with no computed reserve, is excluded
+/// (named) rather than guessed; a tank with no capacity is excluded and
+/// named. Days = stored / [dailyDemandLitresProvider]. Report only — the
+/// owner's decision: the fill rate is outside the designer's control and is
+/// not judged.
+final waterReserveProvider = Provider<WaterReserve>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final cold = <String>{};
+  final fire = <String>{};
+  for (final e in net.edges) {
+    final set = e.service == ServiceType.coldWater
+        ? cold
+        : (e.service == ServiceType.fireHydrant ||
+                e.service == ServiceType.fireSprinkler)
+            ? fire
+            : null;
+    set?..add(e.fromId)..add(e.toId);
+  }
+  final fireReserve = {
+    for (final r in ref.watch(fireTankReservesProvider))
+      r.tankId: r.requiredLitres,
+  };
+  final tanks = <ReserveTank>[
+    for (final n in [
+      for (final n in net.nodes)
+        if (isStorageTankNode(n) && cold.contains(n.id)) n,
+    ]..sort((a, b) => a.id.compareTo(b.id)))
+      (
+        tankId: n.id,
+        roof: n.component == NodeComponent.roofTank,
+        // A shared domestic + fire tank with no computed fire reserve has
+        // no clean domestic share: excluded (as "no capacity").
+        capacityLitres: fire.contains(n.id) && !fireReserve.containsKey(n.id)
+            ? null
+            : n.tankCapacityLitres,
+        fireReserveLitres: fire.contains(n.id) ? (fireReserve[n.id] ?? 0) : 0,
+      ),
+  ];
+  return WaterReserve(
+      tanks: tanks, dailyLitres: ref.watch(dailyDemandLitresProvider));
 });

@@ -38,6 +38,11 @@ class ReferenceBuilding {
   /// the UBAP column).
   final Occupancy occupancy;
 
+  /// Backlog W-4 (2026-11-14) — the building population (persons) the daily
+  /// water demand is computed on (the app's Building-page input). Each
+  /// fixture states its basis.
+  final int? population;
+
   const ReferenceBuilding({
     required this.name,
     required this.building,
@@ -47,5 +52,6 @@ class ReferenceBuilding {
     required this.network,
     required this.electrical,
     required this.occupancy,
+    this.population,
   });
 }

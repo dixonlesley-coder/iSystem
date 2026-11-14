@@ -42,6 +42,7 @@ ProviderContainer _load(ReferenceBuilding shop, Network net,
   }
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(shop.occupancy);
+  c.read(populationProvider.notifier).set(shop.population);
   c.read(networkControllerProvider.notifier).loadNetwork(net);
   if (room) {
     final rooms = c.read(roomAreasProvider.notifier);

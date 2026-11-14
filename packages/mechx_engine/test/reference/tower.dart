@@ -849,4 +849,6 @@ ReferenceBuilding buildTower({List<int> prvFloors = kTowerPrvFloors}) =>
       network: buildTowerNetwork(prvFloors: prvFloors),
       electrical: buildTowerElectrical(),
       occupancy: Occupancy.public,
+      // Backlog W-4 — 100 staff per floor x 30 floors = 3000.
+      population: 3000,
     );

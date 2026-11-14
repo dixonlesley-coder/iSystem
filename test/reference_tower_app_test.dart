@@ -46,6 +46,7 @@ import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/room_air_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx/store/tank_fill_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show
         gensetPlantVa,
@@ -62,6 +63,7 @@ import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/network/hot_water_pressure.dart'
     show hotWaterHeaters;
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
 import 'package:mechx_engine/network/zoning.dart' show defaultPrvSetpoint;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
@@ -114,6 +116,7 @@ Future<ProviderContainer> _loadTower(ReferenceBuilding b) async {
   }
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
+  c.read(populationProvider.notifier).set(b.population);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(ductSettingsProvider.notifier)
     ..setShape(kTowerDuctShape)
@@ -2104,6 +2107,24 @@ void main() {
     final c = await _loadTower(buildTower());
     // ignore: avoid_print
     print('COPPER tower ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
+  });
+
+  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 100 staff x 30 floors = 3000 x 50 L/person/day (public / office) = 150 000 L = 150.00 m3/day; stored GT 60 000 + RT 30 000 = 90 000 L; reserve 90 000 / 150 000 = 0.6 days = 14.4 h.
+  test('backlog W-4: daily demand 150.00 m3/day, reserve 0.6 days (14 h)', () async {
+    final c = await _loadTower(buildTower());
+    expect(c.read(populationProvider), 3000);
+    expect(c.read(demandPerPersonProvider), 50.0);
+    expect(c.read(dailyDemandLitresProvider), closeTo(150000.0, 1e-9));
+    final r = c.read(waterReserveProvider);
+    // GT + RT counted (the fire tank FT is fire-only, not domestic).
+    expect([for (final t in r.counted) t.tankId], ['GT', 'RT']);
+    expect(r.excludedTankIds, isEmpty);
+    expect(r.storedLitres, closeTo(90000.0, 1e-9));
+    expect(r.days, closeTo(0.6, 5e-5));
+    expect(formatReserveDays(r.days!), '0.6 days (14 h)');
+    final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+    expect(kinds, isNot(contains('daily-demand-unset')));
     c.dispose();
   });
 }

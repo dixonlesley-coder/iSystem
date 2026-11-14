@@ -194,6 +194,7 @@ Future<void> loadRefDrawingSpec(ProviderContainer c, RefDrawingSpec spec) async 
   }
   c.read(feedStrategyProvider.notifier).set(spec.feed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
+  c.read(populationProvider.notifier).set(b.population);
   if (spec.fireLightHazard) {
     c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   }

@@ -53,7 +53,7 @@ import 'annotation_store.dart'
         roomUnitOwnerId;
 import 'app_state.dart';
 import 'tank_fill_store.dart'
-    show mainsPressureChecksProvider, tankFillsProvider;
+    show mainsPressureChecksProvider, tankFillsProvider, waterReserveProvider;
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
@@ -1595,6 +1595,22 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             : 1),
       }),
       locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+    ));
+  }
+
+  // ── 5a-bis-5. Daily demand unknown (backlog W-4) ─────────────────────
+  // With no population there is no daily demand and so no water-reserve
+  // figure: one info saying why, only when some domestic tank has a
+  // capacity (otherwise there is nothing to report either way). The
+  // reserve itself is informational (owner: the fill rate is outside the
+  // designer's control, so nothing is judged).
+  final reserveNow = ref.watch(waterReserveProvider);
+  if (reserveNow.dailyLitres == null && reserveNow.storedLitres != null) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'daily-demand-unset',
+      title: str(StringKey.issueDailyDemandUnsetTitle),
+      message: str(StringKey.issueDailyDemandUnsetMessage),
     ));
   }
 

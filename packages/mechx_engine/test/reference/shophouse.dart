@@ -398,4 +398,6 @@ ReferenceBuilding buildShophouse() => ReferenceBuilding(
       network: buildShophouseNetwork(),
       electrical: buildShophouseElectrical(),
       occupancy: Occupancy.private,
+      // Backlog W-4 — 5 persons per unit x 3 units = 15.
+      population: 15,
     );
