@@ -18,6 +18,7 @@ import 'dart:math' as math;
 
 import '../geometry/building.dart' show BuildingLevels;
 import '../network/network.dart';
+import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/pipe_products.dart' show PipeProduct;
 import '../standards/sni.dart' show PlumbingFixture;
@@ -338,6 +339,7 @@ SldSheet buildMechanicalRiserSld({
   MechRiserExtras extras = MechRiserExtras.auto,
   int? columnPart,
   MechRiserPlant plant = MechRiserPlant.auto,
+  Set<String> fireBreakTankIds = const {},
 }) {
   // Drawing review S2 — a LONE floor page whose key circles still overprint
   // gets a taller band (1.5x, then 2x): the page is width-bound, so the
@@ -362,6 +364,7 @@ SldSheet buildMechanicalRiserSld({
         hotWaterRecirc: hotWaterRecirc,
         nodeTags: nodeTags,
         transferPumpNodeIds: transferPumpNodeIds,
+        fireBreakTankIds: fireBreakTankIds,
         floorRange: floorRange,
         extras: extras,
         columnPart: columnPart,
@@ -751,6 +754,7 @@ SldSheet _buildMechanicalRiserSld({
   bool hotWaterRecirc = false,
   Map<String, String> nodeTags = const {},
   Set<String> transferPumpNodeIds = const {},
+  Set<String> fireBreakTankIds = const {},
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
   int? columnPart,
@@ -903,7 +907,9 @@ SldSheet _buildMechanicalRiserSld({
   // duty suffix), the one string the node loop below places.
   String? nodeLabelText(NetNode n) {
     final tagged = nodeTags[n.id];
-    final word = _nodeLabel(n);
+    // Backlog Z-4 — a fire zone break tank is named so, never 'Roof tank'.
+    final word =
+        fireBreakTankIds.contains(n.id) ? kFireBreakTankLabel : _nodeLabel(n);
     final base = (tagged != null && tagged.isNotEmpty)
         ? (word == null ? tagged : '$tagged $word')
         : word;

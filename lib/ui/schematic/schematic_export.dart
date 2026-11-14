@@ -32,6 +32,7 @@ import 'package:mechx_engine/units.dart' show Length;
 
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
+import '../../store/fire_store.dart' show fireBreakTankIdsProvider;
 import '../../store/electrical_feed.dart'
     show issuedRiserEquipmentDetailsProvider;
 import '../../store/project_store.dart';
@@ -213,6 +214,8 @@ SldSheet buildLiveRiserSheet(
     nodeTags: equipmentNodeTags(network),
     // Round 17 — the transfer pump is captioned TRANSFER PUMP on the sheet.
     transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
+    // Backlog Z-4 — fire zone break tanks are named so on the riser.
+    fireBreakTankIds: ref.read(fireBreakTankIdsProvider),
     // Round 21 (riser-drafting-2-1) — the HWR recirculation return leg the
     // canvas draws rides the issued sheet too (issued >= preview).
     hotWaterRecirc: ref.read(hotWaterAssumedReturnProvider),

@@ -372,6 +372,7 @@ enum RptStringKey {
   esCapBankRecommendedService,
   esRoofTankService,
   esGroundTankService,
+  esFireBreakTankService,
   esTankCapacityUnset,
   esTankCapacityUnsetNote,
   earthNoteTnCs,
@@ -940,6 +941,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'PF-correction bank (APFC, recommended)',
   RptStringKey.esRoofTankService: 'Roof tank (water storage)',
   RptStringKey.esGroundTankService: 'Ground tank (water storage)',
+  RptStringKey.esFireBreakTankService: 'Fire break tank (fire zone relay)',
   RptStringKey.esTankCapacityUnset: 'capacity not set',
   RptStringKey.esTankCapacityUnsetNote:
       '(*) Tank capacity not set: enter the tank volume to state its duty.',
@@ -1546,6 +1548,8 @@ const Map<RptStringKey, String> kReportStringsId = {
       'Bank kapasitor APFC (rekomendasi)',
   RptStringKey.esRoofTankService: 'Tangki atap (penampungan air)',
   RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
+  RptStringKey.esFireBreakTankService:
+      'Tangki antara kebakaran (relai zona kebakaran)',
   RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
   RptStringKey.esTankCapacityUnsetNote:
       '(*) Kapasitas tangki belum diisi: masukkan volume tangki untuk menyatakan kapasitasnya.',

@@ -1961,6 +1961,12 @@ final fireZoneChainProvider = Provider<List<FireZone>>((ref) {
           nodeElevation(n, project.building, project.mounting).meters);
 });
 
+/// Backlog Z-4 — the zone BREAK tanks ([fireZoneBreakTankIds] of the
+/// chain): every surface that prints a tank's kind names them 'Fire break
+/// tank', and the roof-tank-below-top info skips them.
+final fireBreakTankIdsProvider = Provider<Set<String>>(
+    (ref) => fireZoneBreakTankIds(ref.watch(fireZoneChainProvider)));
+
 /// Backlog Z-2 — one fire zone's break tank: the tank the zone draws from,
 /// filled by the zone below ([FireZone.upstream]). [requirement] is the
 /// zone pump's rated flow x [kFireBreakTankDurationMin] (refilled at least

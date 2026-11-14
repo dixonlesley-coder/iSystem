@@ -60,6 +60,7 @@ import 'electrical_store.dart';
 import 'fire_store.dart'
     show
         fireBreakTankChecksProvider,
+        fireBreakTankIdsProvider,
         fireOverPressureProvider,
         firePumpDutyProvider,
         fireZoneLinesProvider,
@@ -335,8 +336,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // elevation / mount height is the engineer's datum and is not flagged).
   if (levelCount > 1) {
     final top = levelCount - 1;
+    // Backlog Z-4 — a fire zone break tank is meant to sit mid-height.
+    final breakTanks = ref.watch(fireBreakTankIdsProvider);
     for (final n in net.nodes) {
       if (n.component != NodeComponent.roofTank) continue;
+      if (breakTanks.contains(n.id)) continue;
       if (n.elevation != null || n.mountHeight != null) continue;
       if (n.floorIndex < 0 || n.floorIndex >= top) continue;
       final elev = nodeElevation(n, project.building).meters;

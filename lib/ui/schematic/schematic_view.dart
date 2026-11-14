@@ -33,12 +33,14 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
     show flowFromBySizing, kPumpSetValveTrain, plantMoverCaptions;
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../../store/app_state.dart';
 import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
+import '../../store/fire_store.dart' show fireBreakTankIdsProvider;
 import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
 import '../../store/layer_store.dart'
     show DisciplineLayer, DisciplineLayerInfo, servicesFor;
@@ -1052,6 +1054,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     required Map<String, String> riserTagsById,
     required Map<String, String> detailByNode,
     required Set<String> transferPumpNodeIds,
+    required Set<String> fireBreakTankIds,
     required bool hotWaterRecirc,
     required double rightOverlayWidth,
     required double labelZoom,
@@ -1067,6 +1070,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       riserTagsById,
       detailByNode,
       transferPumpNodeIds,
+      fireBreakTankIds,
       widget.showDetails,
       hotWaterRecirc,
       rightOverlayWidth,
@@ -1086,6 +1090,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       riserTagsById: riserTagsById,
       detailByNode: detailByNode,
       transferPumpNodeIds: transferPumpNodeIds,
+      fireBreakTankIds: fireBreakTankIds,
       showDetails: widget.showDetails,
       hotWaterRecirc: hotWaterRecirc,
       rightOverlayWidth: rightOverlayWidth,
@@ -1148,6 +1153,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     // riser + the panel feed read), never one system duty on every unit.
     final detailByNode = ref.watch(riserEquipmentDetailsProvider);
     final transferPumps = ref.watch(transferPumpNodeIdsProvider);
+    final fireBreakTanks = ref.watch(fireBreakTankIdsProvider);
     // G2: the hot-water recirculation loop exists when the engine sizes one
     // (the provider is non-null) — draw the HWR return.
     final hotWaterRecirc = ref.watch(hotWaterAssumedReturnProvider);
@@ -1174,6 +1180,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
               riserTagsById: tags,
               detailByNode: detailByNode,
               transferPumpNodeIds: transferPumps,
+              fireBreakTankIds: fireBreakTanks,
               hotWaterRecirc: hotWaterRecirc,
               // Round 26 — the bottom-right notes / title block are kept clear
               // of the band diagram.
@@ -3036,6 +3043,7 @@ class _AutoSchematicPainter extends CustomPainter {
     this.riserTagsById = const {},
     this.detailByNode = const {},
     this.transferPumpNodeIds = const {},
+    this.fireBreakTankIds = const {},
     this.showDetails = true,
     this.hotWaterRecirc = false,
     this.rightOverlayWidth = 0,
@@ -3061,6 +3069,9 @@ class _AutoSchematicPainter extends CustomPainter {
   /// TRANSFER PUMP in the plant detail; every other mover reads BOOSTER PUMP.
   /// The kW comes from each node's own duty in [detailByNode].
   final Set<String> transferPumpNodeIds;
+
+  /// Backlog Z-4 — fire zone break tanks, labelled 'Fire break tank'.
+  final Set<String> fireBreakTankIds;
 
   /// G2: true when the engine's hot-water RECIRCULATION loop exists (the
   /// `hotWaterRecircProvider` result is non-null). When set — and the network
@@ -3442,6 +3453,7 @@ class _AutoSchematicPainter extends CustomPainter {
   /// A human label for [node] on the single-line — its equipment name
   /// ([NodeComponent.label]) or fixture type — or null for a plain junction.
   String? _nodeLabel(NetNode node) {
+    if (fireBreakTankIds.contains(node.id)) return kFireBreakTankLabel;
     final c = node.component;
     if (c != null) return c.label;
     final f = node.fixture;
@@ -4825,6 +4837,7 @@ class _AutoSchematicPainter extends CustomPainter {
       old.riserTagsById != riserTagsById ||
       old.detailByNode != detailByNode ||
       old.transferPumpNodeIds != transferPumpNodeIds ||
+      old.fireBreakTankIds != fireBreakTankIds ||
       old.showDetails != showDetails ||
       old.hotWaterRecirc != hotWaterRecirc ||
       old.rightOverlayWidth != rightOverlayWidth ||

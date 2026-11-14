@@ -290,3 +290,19 @@ class FireBreakTankRequirement {
   /// [kFireBreakTankDurationMin]).
   FlowRate get fillFlow => ratedFlow;
 }
+
+/// Backlog Z-4 — the printed name of a fire ZONE BREAK tank (whatever its
+/// drawn tank typing): it is not a roof / ground domestic tank.
+const String kFireBreakTankLabel = 'Fire break tank';
+
+/// Backlog Z-4 — the Indonesian name ([kFireBreakTankLabel]).
+const String kFireBreakTankLabelId = 'Tangki antara kebakaran';
+
+/// Backlog Z-4 — the zone BREAK tanks of [zones]: a tank one zone fills
+/// ([FireZone.fillTankId]) and another zone draws from
+/// ([FireZone.suctionTankId]). Empty unless [fireZoned].
+Set<String> fireZoneBreakTankIds(List<FireZone> zones) => {
+      for (final z in zones)
+        if (z.fillTankId case final t?)
+          if (zones.any((o) => o.suctionTankId == t)) t,
+    };

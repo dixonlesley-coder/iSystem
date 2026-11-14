@@ -48,6 +48,7 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
+import 'package:mechx_engine/sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'package:mechx_engine/sizing/tank_fill.dart'
     show formatReserveDays, tankFillFlow, tankRefillHoursOf;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
@@ -1551,6 +1552,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // plant out as scheduled equipment).
   final tanks = <TankScheduleItem>[];
   var tankOrdinal = 0;
+  final fireBreakTanks = ref.read(fireBreakTankIdsProvider);
   for (final n in net.nodes) {
     if (n.component != NodeComponent.roofTank &&
         n.component != NodeComponent.groundTank) {
@@ -1561,6 +1563,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       tag: nodeTags[n.id] ?? 'TK-${tankOrdinal.toString().padLeft(2, '0')}',
       roof: n.component == NodeComponent.roofTank,
       capacityLitres: n.tankCapacityLitres,
+      fireBreak: fireBreakTanks.contains(n.id),
     ));
   }
 
@@ -6389,7 +6392,10 @@ class _SelectionSection extends ConsumerWidget {
               const SizedBox(width: MechXSpacing.xs),
               Expanded(
                 child: Text(
-                  node.component!.label,
+                  // Backlog Z-4 — a fire zone break tank is named so.
+                  ref.watch(fireBreakTankIdsProvider).contains(node.id)
+                      ? kFireBreakTankLabel
+                      : node.component!.label,
                   style: context.type.body.copyWith(
                     color: context.colors.textPrimary,
                   ),

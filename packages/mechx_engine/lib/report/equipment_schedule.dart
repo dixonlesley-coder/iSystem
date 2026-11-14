@@ -239,12 +239,17 @@ class TankScheduleItem {
   final String? modelSpec;
   final int qty;
 
+  /// Backlog Z-4 — a fire ZONE BREAK tank (the zone chain's fill tank):
+  /// scheduled as 'Fire break tank', whatever its drawn tank typing.
+  final bool fireBreak;
+
   const TankScheduleItem({
     required this.tag,
     required this.roof,
     this.capacityLitres,
     this.modelSpec,
     this.qty = 1,
+    this.fireBreak = false,
   });
 }
 
@@ -449,9 +454,11 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     final cap = t.capacityLitres;
     rows.add(EquipmentScheduleRow(
       tag: t.tag,
-      service: strings(t.roof
-          ? RptStringKey.esRoofTankService
-          : RptStringKey.esGroundTankService),
+      service: strings(t.fireBreak
+          ? RptStringKey.esFireBreakTankService
+          : t.roof
+              ? RptStringKey.esRoofTankService
+              : RptStringKey.esGroundTankService),
       // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
       duty: cap != null && cap > 0
           ? '${_fmt(cap / 1000.0, dp: 1)} m3'

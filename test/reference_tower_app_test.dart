@@ -2100,8 +2100,10 @@ void main() {
       expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
       expect(ft.capacityLitres, 120000);
       expect(ft.verdict, FireTankVerdict.ok);
-      // The break tank drawn on Lantai 15 is read at that floor's surface.
-      expect(n('roof-tank-below-top:$kTowerBreakTank'), 1);
+      // The break tank drawn on Lantai 15 is read at that floor's surface;
+      // backlog Z-4 — as a fire zone break tank it raises no
+      // `roof-tank-below-top` (it is meant to sit mid-height).
+      expect(n('roof-tank-below-top:$kTowerBreakTank'), 0);
       // Backlog A-3 — hose valves above 1207 kPa static at churn are
       // designated pressure-regulating, per zone: zone 1 L1 9.81 x (199.551
       // − 1.2) = 1945.8 kPa (282.2 psi) .. L15 9.81 x (199.551 − 57.2) =
