@@ -827,6 +827,8 @@ enum StringKey {
   issueFireTankUnsetMessage,
   issueTankFillCapacityUnsetTitle,
   issueTankFillCapacityUnsetMessage,
+  issueRoofTankFillUndrawnTitle,
+  issueRoofTankFillUndrawnMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
   issueFireGravityHeadMessage, // {avail} {need}
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
@@ -2486,6 +2488,9 @@ const Map<StringKey, String> _en = {
       'Fire tank capacity not set',
   StringKey.issueFireTankUnsetMessage:
       'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
+  StringKey.issueRoofTankFillUndrawnTitle: 'Roof tank fill not drawn',
+  StringKey.issueRoofTankFillUndrawnMessage:
+      'Roof tank {tank} has no drawn pipe filling it (no transfer / fill line flows into it), so no fill pipework or transfer duty is sized for it. Draw its fill from the transfer main or the mains.',
   StringKey.issueTankFillCapacityUnsetTitle:
       'Tank capacity not set: fill sized on peak demand',
   StringKey.issueTankFillCapacityUnsetMessage:
@@ -4214,6 +4219,9 @@ const Map<StringKey, String> _id = {
       'Kapasitas tangki kebakaran belum diisi',
   StringKey.issueFireTankUnsetMessage:
       'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
+  StringKey.issueRoofTankFillUndrawnTitle: 'Pengisian tangki atap belum digambar',
+  StringKey.issueRoofTankFillUndrawnMessage:
+      'Tangki atap {tank} tidak memiliki pipa pengisi yang digambar (tidak ada pipa transfer / pengisi yang mengalir ke dalamnya), sehingga tidak ada pipa pengisi atau tugas pompa transfer yang diukur untuknya. Gambar pengisiannya dari pipa transfer atau PDAM.',
   StringKey.issueTankFillCapacityUnsetTitle:
       'Kapasitas tangki belum diisi: pengisian diukur dari kebutuhan puncak',
   StringKey.issueTankFillCapacityUnsetMessage:

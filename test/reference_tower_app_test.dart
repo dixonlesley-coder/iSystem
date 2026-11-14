@@ -1414,12 +1414,12 @@ void main() {
   // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
   // Backlog D-4 — the seven PRV stations placed ON the riser with the store
   // intent solve and zone exactly as the fixture's spliced stations; the
-  // only difference is the BOM: the splice's 0 m RUNs PRVk → GRk print three
-  // 0.000 m cold-water run lines (DN40 / DN65 / DN80, PPR) that the drawn
-  // stations (two riser segments, the lower one 0 m inside its riser line)
-  // do not. So the tower keeps its spliced fixture; this pins the difference.
+  // only difference is the BOM: the splice's 0 m RUNs PRVk → GRk print a
+  // 0.000 m cold-water run line (DN40, PPR; DN65 / DN80 too before backlog
+  // W-1 gave the fill line those bores) that the drawn stations (two riser
+  // segments, the lower one 0 m inside its riser line) do not. So the tower keeps its spliced fixture; this pins the difference.
   test('D-4: the PRVs placed with insertComponentOnRiser = the spliced '
-      'fixture except three 0 m run BOM lines', () async {
+      'fixture except one 0 m run BOM line', () async {
     final fixture = await _loadTower(buildTower());
     final drawn = await _loadTower(buildTower(prvFloors: const []));
     final ids = placePrvsByIntent(drawn, kTowerPrvFloors);
@@ -1433,10 +1433,12 @@ void main() {
         for (final l in {...b}.difference({...a})) '+ $l',
       ].join('\n'));
     }
+    // Backlog W-1 (2026-11-14): the meter feed is now DN65 and the fill
+    // line DN80, so the splice's 0 m DN65 / DN80 runs add 0 m to BOM lines
+    // that exist in both drawings; only the DN40 0 m line is still the
+    // splice's own.
     expect({...a}.difference({...b}), {
       'bom coldWater run 40 PPR 0.000000000 CW',
-      'bom coldWater run 65 PPR 0.000000000 CW',
-      'bom coldWater run 80 PPR 0.000000000 CW',
     });
     expect({...b}.difference({...a}), isEmpty);
     fixture.dispose();
@@ -1512,16 +1514,21 @@ void main() {
       expect(prv.fold<int>(0, (a, b) => a + b), 7);
     });
 
-    test('movers: TP 122.086 m / 18.5 kW (TPS standby DF 0), BS 21.526 m '
+    test('movers: TP 128.830 m (TPS standby DF 0), BS 21.526 m '
         '/ 1.1 kW; WCb26 the delivered critical', () {
       final duties = c.read(supplyMoverDutiesProvider);
-      // TP: lift 120.000 + 0.016819 x 124.0 m of DN100 = 2.086 ⇒ 122.086 m;
-      // 9810 x 0.01079267 x 122.086 = 12 925.9 W; / 0.70 = 18 465.6 W.
+      // Backlog W-1 / W-3 (2026-11-14) — TP: Q = RT's fill flow 30 000 L /
+      // 3600 s = 8.33333 L/s (was the 720-UBAP peak 10.79267); lift 120.000
+      // + 0.030888 m/m (DN80 at 8.33333, C150) x 124.0 m (GT → TP 1.0 + TP →
+      // U0 4.7 + 29 x 4.0 + U29 → RT 2.3) = 3.830 + the float-valve inlet
+      // residual 5.0 ⇒ 128.830 m (was 122.086 on DN100, 0 m inlet); 9810 x
+      // 8.33333e-3 x 128.830 = 10 531.9 W; / 0.70 = 15 045.5 W.
       final tp = duties['TP']!;
-      expect(tp.flow.inLitersPerSecond, closeTo(10.79267, 5e-5));
-      expect(tp.head.meters, closeTo(122.086, 5e-4));
-      expect(tp.hydraulicPower.watts, closeTo(12925.9, 0.05));
-      expect(tp.shaftPower.watts, closeTo(18465.6, 0.05));
+      expect(tp.flow.inLitersPerSecond, closeTo(8.33333, 5e-5));
+      expect(tp.head.meters, closeTo(128.830, 5e-4));
+      expect(tp.hydraulicPower.watts, closeTo(10531.9, 0.05));
+      expect(tp.shaftPower.watts, closeTo(15045.5, 0.05));
+      // 15 045.5 W > 15 kW ⇒ 18.5 kW (unchanged).
       expect(tp.selectedMotor.inKiloWatts, closeTo(18.5, 1e-9));
       final mep = c
           .read(electricalProjectProvider)

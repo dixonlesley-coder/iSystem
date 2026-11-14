@@ -1039,6 +1039,14 @@ void main() {
       // = 56 781 L is stated as an info, never a fabricated capacity.
       expect(count('fire-tank-capacity-unset:FT'), 1);
       expect(kinds.where((k) => k.startsWith('fire-tank-undersized')), isEmpty);
+      // Backlog W-1 — GT has no capacity: its meter feed keeps the peak
+      // basis (96 UBAP, 3.91733 L/s DN50) and an info says so.
+      expect(count('tank-fill-capacity-unset:GT'), 1);
+      // Backlog W-2 — WM: lift GT 0.0 − WM 0.5 = −0.5 + 3.5 m at 3.91733
+      // L/s on DN50 (hf = 10.67 x 3.5 x Q^1.852 / (150^1.852 x 0.05^4.8704)
+      // = 0.2636 m) + 5.0 inlet = 4.7636 m <= 10 m: no warning.
+      expect(kinds.where((k) => k.startsWith('mains-pressure-insufficient')),
+          isEmpty);
       // Backlog A-3 — every hose valve DESIGNATED pressure-regulating (info).
       expect(count('standpipe-prv-hose-valves:FP:0-3'), 1);
       expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),

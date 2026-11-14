@@ -1019,20 +1019,23 @@ void main() {
     });
 
     test(
-      'movers: TP transfer 43.194 m, BS booster 22.230 m on floors 10-11',
+      'movers: TP transfer 48.833 m, BS booster 22.230 m on floors 10-11',
       () {
         final duties = c.read(supplyMoverDutiesProvider);
         expect(c.read(transferPumpNodeIdsProvider), {'TP'});
-        // TP: Q = the 180-UBAP peak 4.39333 L/s; lift RT 42.0 − GT 0.0 =
-        // 42.000 + friction 0.025947 x 46.0 m of DN65 (6.2 + 1.0 + 4.2 + 11 x
-        // 3.5 + 2.3 … the GT → RT path) = 1.194 ⇒ 43.194 m; hydraulic 9810 x
-        // 4.39333e-3 x 43.194 = 1861.6 W; shaft / 0.70 = 2659.4 W ⇒ 3.0 kW.
+        // Backlog W-1 / W-3 (2026-11-14) — TP: Q = RT's fill flow 10 000 L
+        // / 3600 s = 2.77778 L/s (was the 180-UBAP peak 4.39333); lift RT
+        // 42.0 − GT 0.0 = 42.000 + friction 0.039839 m/m (DN50 at 2.77778,
+        // C150) x 46.0 m (GT → TP 1.0 + TP → U0 4.2 + 11 x 3.5 + U11 → RT
+        // 2.3) = 1.833 + the float-valve inlet residual 5.0 ⇒ 48.833 m (was
+        // 43.194 on DN65 at 4.39333, 0 m inlet); hydraulic 9810 x 2.77778e-3
+        // x 48.833 = 1330.7 W; shaft / 0.70 = 1901.0 W ⇒ 2.2 kW (was 3.0).
         final tp = duties['TP']!;
-        expect(tp.flow.inLitersPerSecond, closeTo(4.39333, 5e-5));
-        expect(tp.head.meters, closeTo(43.194, 5e-4));
-        expect(tp.hydraulicPower.watts, closeTo(1861.6, 0.05));
-        expect(tp.shaftPower.watts, closeTo(2659.4, 0.05));
-        expect(tp.selectedMotor.inKiloWatts, closeTo(3.0, 1e-9));
+        expect(tp.flow.inLitersPerSecond, closeTo(2.77778, 5e-5));
+        expect(tp.head.meters, closeTo(48.833, 5e-4));
+        expect(tp.hydraulicPower.watts, closeTo(1330.7, 0.05));
+        expect(tp.shaftPower.watts, closeTo(1901.0, 0.05));
+        expect(tp.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
         // BS: Q = A → BS 1.07333 L/s; H = (225 − 6.921) / 9.81 = 22.230 m;
         // hydraulic 9810 x 1.07333e-3 x 22.230 = 234.1 W ⇒ 0.37 kW.
         final bs = duties['BS']!;
@@ -1183,15 +1186,16 @@ void main() {
     });
     tearDownAll(() => c.dispose());
 
-    test('backlog E-4: genset step load 102.8 kW <= 0.6 x 240 = 144 kW, OK',
+    test('backlog E-4: genset step load 101.9 kW <= 0.6 x 240 = 144 kW, OK',
         () {
       // On ATS transfer the 300 kVA set picks up PP-E (lift, emergency
-      // lighting, the MEP board) in one step: 102 768 W = 102.8 kW (backup
-      // fraction 0). Allowable first step 0.6 x 300 kVA x 0.8 = 0.6 x 240 =
-      // 144 kW >= 102.8 => OK.
+      // lighting, the MEP board) in one step: 101 879 W = 101.9 kW (backup
+      // fraction 0; 102 768 before backlog W-1 / W-3 took TP 3.0 → 2.2 kW).
+      // Allowable first step 0.6 x 300 kVA x 0.8 = 0.6 x 240 = 144 kW >=
+      // 101.9 => OK.
       final st = c.read(electricalAdvancedProvider).powerOneLine!
           .gensetStepLoad!;
-      expect(st.stepKw, closeTo(102.768, 1e-9));
+      expect(st.stepKw, closeTo(101.879, 1e-9));
       expect(st.ratedKw, closeTo(240, 1e-9));
       expect(st.allowableKw, closeTo(144, 1e-9));
       expect(st.exceeded, isFalse);
@@ -1536,29 +1540,35 @@ void main() {
       expect(el.breaker.ratingA.amperes, 6);
       expect(el.breaker.curve.name, 'b');
       final pe = sys.panels[kAptEssentialPanelId]!;
-      // 89 668 + 12 500 + 600 = 102 768 W; 120 864 VA.
-      expect(pe.demandW, closeTo(102768, 0.5));
-      expect(pe.demandVa, closeTo(120864, 0.5));
-      expect(lines(kAptEssentialPanelId), [174.0, 174.6, 174.6]);
+      // Backlog W-1 / W-3 (2026-11-14): the transfer pump TP drops 3.0 →
+      // 2.2 kW (see the movers test), its way 3000 / 0.9 = 3333.3 → 2200 /
+      // 0.9 = 2444.4 W (−888.9 W, −888.9 / 0.85 = −1045.8 VA, −1.509 A on
+      // each line: 5.660 → 4.151 A). 88 779 + 12 500 + 600 = 101 879 W
+      // (was 102 768); 119 818 VA (was 120 864).
+      expect(pe.demandW, closeTo(101879, 0.5));
+      expect(pe.demandVa, closeTo(119818, 0.5));
+      expect(lines(kAptEssentialPanelId), [172.5, 173.1, 173.1]);
       expect(pe.incomer.breaker.ratingA.amperes, 200);
       expect(pe.incomer.breaker.deviceClass, BreakerClass.mccb);
       expect(pe.incomer.poles, 4);
-      // Its feeder on LVMDP: Ib 174.6, MCCB 200 C, FRC 4 x 70 + 35 (0.48 %).
+      // Its feeder on LVMDP: Ib 173.1 (was 174.6), MCCB 200 C, FRC 4 x 70 +
+      // 35 (0.47 %, was 0.48).
       // Bounded B-1 (2026-11-13): its 1.6 x 200 = 320 ⇒ 400 A rung would sit
       // above LVMDP's own 315 A incomer and need FRC 185 mm² (four sizes up
       // from 70), so the growth is refused: the cable and the device-only
       // floor (largest rung under Iz 222 = 200 A) stay, `non-selective` kept.
       final fpe = way(kAptMainPanelId, kAptEssentialFeederId);
-      expect(fpe.designCurrent.amperes, 174.6);
+      expect(fpe.designCurrent.amperes, 173.1);
       expect(fpe.breaker.ratingA.amperes, 200);
       expect(fpe.grounding.cableType, 'FRC');
       expect(fpe.cable.csaMm2, 70);
       expect(fpe.cableRaisedForSelectivity, isFalse);
-      expect(fpe.voltageDrop.dropPercent, closeTo(0.48, 1e-9));
+      expect(fpe.voltageDrop.dropPercent, closeTo(0.47, 1e-9));
 
       // MEP board. FLA = input / (√3 x 400 x 0.85).
       const mep = 'mep-equipment';
-      expect(way(mep, 'mep-node-TP').designCurrentExactA, closeTo(5.660, 5e-4));
+      // TP 2444.4 / (√3 x 400 x 0.85) = 4.151 A (was 3333.3 W, 5.660 A).
+      expect(way(mep, 'mep-node-TP').designCurrentExactA, closeTo(4.151, 5e-4));
       expect(way(mep, 'mep-node-BS').designCurrentExactA, closeTo(0.698, 5e-4));
       final fp = way(mep, 'mep-node-FP');
       expect(fp.loadW, closeTo(83333.3, 0.05));
@@ -1587,10 +1597,11 @@ void main() {
       }
       expect(ac[0].phase, isNot(ac[1].phase));
       final m = sys.panels[mep]!;
-      // 3333.3 + 411.1 + 83 333.3 + 1222.2 + 2 x 683.8 = 89 668 W.
-      expect(m.demandW, closeTo(89668, 0.5));
-      expect(m.demandVa, closeTo(105491, 0.5));
-      expect(lines(mep), [149.9, 153.4, 153.4]);
+      // 2444.4 + 411.1 + 83 333.3 + 1222.2 + 2 x 683.8 = 88 779 W (was
+      // 89 668 with TP 3333.3); 104 446 VA (was 105 491).
+      expect(m.demandW, closeTo(88779, 0.5));
+      expect(m.demandVa, closeTo(104446, 0.5));
+      expect(lines(mep), [148.4, 151.9, 151.9]);
       expect(m.incomer.breaker.ratingA.amperes, 160);
       expect(m.incomer.poles, 4);
       final mepFeeder = project.panels
@@ -1599,35 +1610,37 @@ void main() {
           .firstWhere((w) => w.feedsPanelId == mep);
       expect(mepFeeder.cableType, 'FRC');
 
-      // LVMDP: 102 768 + 12 x 4820 = 160 608 W; 186 401 VA; lines 174.6 +
-      // 4 x (8.4 + 8.3 + 7.0) = 269.4.
+      // LVMDP: 101 879 + 12 x 4820 = 159 719 W (was 160 608); 185 355 VA
+      // (was 186 401); lines 173.1 + 4 x (8.4 + 8.3 + 7.0) = 267.9 (was
+      // 269.4).
       final lv = sys.panels[kAptMainPanelId]!;
-      expect(lv.demandW, closeTo(160608, 0.5));
-      expect(lv.demandVa, closeTo(186401, 0.5));
-      expect(lines(kAptMainPanelId), [268.8, 269.4, 269.4]);
+      expect(lv.demandW, closeTo(159719, 0.5));
+      expect(lv.demandVa, closeTo(185355, 0.5));
+      expect(lines(kAptMainPanelId), [267.3, 267.9, 267.9]);
       // Service floor 197 000 / (√3 x 400) = 284.3 A ⇒ MCCB 315 A 4P.
       expect(lv.incomer.sizingCurrent!.amperes, closeTo(284.3, 1e-9));
       expect(lv.incomer.breaker.ratingA.amperes, 315);
       expect(lv.incomer.poles, 4);
       final adv = c.read(electricalAdvancedProvider);
-      // Basis √3 x 400 x 269.4 = 186.6 kVA ⇒ 197 000 VA, LV, no transformer.
+      // Basis √3 x 400 x 267.9 = 185.6 kVA ⇒ 197 000 VA (unchanged), LV, no
+      // transformer.
       expect(adv.recommendedDayaVa, 197000);
       expect(adv.recommendedDayaThreePhase, isTrue);
       expect(adv.supply.lvOrMv.name, 'lv');
       expect(adv.supply.transformerKva, isNull);
     });
 
-    test('genset: 128.46 kVA running, 286.83 kVA start floor ⇒ 300 kVA', () {
+    test('genset: 127.35 kVA running, 286.83 kVA start floor ⇒ 300 kVA', () {
       final sys = c.read(electricalResultProvider);
       final project = c.read(electricalSizingProjectProvider);
-      // Running: max(the per-phase 174.6 x √3 x 400 = 120 966, 102 768 /
-      // 0.8 = 128 460) = 128.46 kVA.
+      // Running: max(the per-phase 173.1 x √3 x 400 = 119 927, 101 879 /
+      // 0.8 = 127 348.75) = 127.35 kVA (128.46 before backlog W-1 / W-3).
       expect(
         requiredGeneratorKva(
           gensetBackupDemandVa(project, sys),
           backupPower: gensetBackupDemandW(project, sys),
         ),
-        closeTo(128.46, 5e-3),
+        closeTo(127.34875, 5e-3),
       );
       // FP start: 6.5 x 141.507 (→ 141.5) A x √3 x 400 = 637.39 kVA; x 0.15
       // x 75 / 25 = 286.83 kVA.

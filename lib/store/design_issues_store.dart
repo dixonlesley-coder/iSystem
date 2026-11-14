@@ -1556,6 +1556,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // peak it distributes); an info says so. Never a fabricated capacity.
   final sizingNow = ref.watch(sizingProvider);
   for (final t in ref.watch(tankFillsProvider)) {
+    // Backlog W-3 — a roof tank no drawn pipe fills is never given an
+    // invented fill: an info locating it.
+    if (t.roof && !t.fillDrawn) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'roof-tank-fill-undrawn:${t.tankId}',
+        title: str(StringKey.issueRoofTankFillUndrawnTitle),
+        message: str.format(StringKey.issueRoofTankFillUndrawnMessage,
+            {'tank': fireTankTags[t.tankId] ?? t.tankId}),
+        locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+      ));
+      continue;
+    }
     if (!t.fillDrawn || t.fillFlow != null) continue;
     double inflow = 0;
     for (final e in net.edges) {

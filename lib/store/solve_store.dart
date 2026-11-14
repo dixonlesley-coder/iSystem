@@ -1641,13 +1641,22 @@ Map<String, Head> seriesMoverHeads({
 }
 
 /// Round 16 (plumbing-plant-transfer-pump-no-duty) — the head a TRANSFER pump
-/// lifts at [flow]: the elevation from its source (the storage tank, else the
+/// lifts: the elevation from its source (the storage tank, else the
 /// component root, reached walking UP the solved flow from the pump) to the
-/// tank it fills, plus the Hazen–Williams friction of [flow] over every
-/// drawn pipe on that source → pump → tank path at its sized bore and its
-/// pipe product's C (the service default C otherwise). The tank inlet is a
-/// free discharge (0 m residual, `// VERIFY` — a float valve's inlet
-/// pressure is not modelled). Pure; null when no tank is reached.
+/// tank it fills, plus the Hazen–Williams friction over every drawn pipe on
+/// that source → pump → tank path at its sized bore and its pipe product's C
+/// (the service default C otherwise).
+///
+/// Backlog W-3 (2026-11-14) — a pump that fills SEVERAL tanks (one transfer
+/// main branching to several roof tanks) lifts to the WORST of them: every
+/// storage tank first reached along the solved flow from the pump (never
+/// through another tank) is a candidate, each path's friction read at each
+/// pipe's OWN sized flow (a shared main carries the sum of the fills beyond
+/// it, a branch its own tank's fill — backlog W-1), and each tank inlet is
+/// owed [kTankInletResidualHeadM] (a float valve's residual, `// VERIFY`;
+/// it was a 0 m free discharge). The flow is the pump's inlet flow, = the
+/// sum of the fills it serves. [flow] is the fallback for a pipe with no
+/// sized flow. Pure; null when no tank is reached.
 Head? transferPumpHead({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -1662,8 +1671,21 @@ Head? transferPumpHead({
         for (final e in net.edges)
           if (e.service == kSupplyService && (e.fromId == n || e.toId == n)) e,
       ];
-  final path = <NetEdge>[];
+  double friction(NetEdge e) {
+    final sz = sizing[e.id];
+    if (sz == null) return 0;
+    final q = sz.flow.cubicMetersPerSecond > 0 ? sz.flow : flow;
+    return headLossHazenWilliams(
+      flow: q,
+      length: Length(lengthOf(e)),
+      diameter: sz.diameter,
+      hazenWilliamsC:
+          e.pipeProduct != null ? hazenWilliamsCFor(e.pipeProduct!) : hwC,
+    ).meters;
+  }
+
   // Upstream: against the flow to the first storage tank (or the root).
+  var upstreamFriction = 0.0;
   var node = mover.nodeId;
   final seen = <String>{node};
   while (!_isStorageTank(net.nodeById(node)) || node == mover.nodeId) {
@@ -1678,35 +1700,11 @@ Head? transferPumpHead({
     if (inE == null) break;
     final up = other(inE, node);
     if (!seen.add(up)) break;
-    path.add(inE);
+    upstreamFriction += friction(inE);
     node = up;
   }
   final source = net.nodeById(node);
-  // Downstream: with the flow, along the branch that reaches the tank.
-  String? tank;
-  node = mover.nodeId;
-  final visited = <String>{node};
-  while (tank == null) {
-    NetEdge? next;
-    for (final e in supplyAt(node)) {
-      if (sizing[e.id]?.flowFromId != node) continue;
-      final far = other(e, node);
-      if (visited.contains(far)) continue;
-      if (_isStorageTank(net.nodeById(far)) ||
-          boosterServedNodes(net, far, e.id, sizing: sizing)
-              .any((n) => _isStorageTank(net.nodeById(n)))) {
-        next = e;
-        break;
-      }
-    }
-    if (next == null) return null;
-    path.add(next);
-    node = other(next, node);
-    visited.add(node);
-    if (_isStorageTank(net.nodeById(node))) tank = node;
-  }
-  final tankNode = net.nodeById(tank);
-  if (tankNode == null || source == null) return null;
+  if (source == null) return null;
   // Round 33 (hydraulics-3-3) — a MAINS-fed transfer (PDAM meter -> pompa
   // dorong -> roof tank): no storage upstream, so the pump lifts from its
   // own elevation (the mains pressure is unknown — `// VERIFY`, conservative)
@@ -1716,18 +1714,32 @@ Head? transferPumpHead({
   if (!_isStorageTank(source) && pumpNode != null) {
     base = math.min(base, elevationOf(pumpNode));
   }
-  var h = elevationOf(tankNode) - base;
-  for (final e in path) {
-    final sz = sizing[e.id];
-    if (sz == null) continue;
-    h += headLossHazenWilliams(
-      flow: flow,
-      length: Length(lengthOf(e)),
-      diameter: sz.diameter,
-      hazenWilliamsC: e.pipeProduct != null ? hazenWilliamsCFor(e.pipeProduct!) : hwC,
-    ).meters;
+  // Downstream: with the solved flow, every first-reached tank (W-3).
+  double? worst;
+  final visited = <String>{mover.nodeId};
+  final stack = <(String, double)>[(mover.nodeId, 0.0)];
+  while (stack.isNotEmpty) {
+    final (at, fr) = stack.removeLast();
+    final outs = [
+      for (final e in supplyAt(at))
+        if (sizing[e.id]?.flowFromId == at) e,
+    ]..sort((a, b) => a.id.compareTo(b.id));
+    for (final e in outs) {
+      final far = other(e, at);
+      if (!visited.add(far)) continue;
+      final f = fr + friction(e);
+      final farNode = net.nodeById(far);
+      if (_isStorageTank(farNode)) {
+        final h = elevationOf(farNode!) - base + upstreamFriction + f +
+            kTankInletResidualHeadM;
+        if (worst == null || h > worst) worst = h;
+        continue;
+      }
+      stack.add((far, f));
+    }
   }
-  return Head(math.max(0, h));
+  if (worst == null) return null;
+  return Head(math.max(0, worst));
 }
 
 /// Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — the solved duty

@@ -304,6 +304,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Mains pressure (backlog W-2, 2026-11-14)**: 'Mains pressure at meter (m)' on the Building page (`mainsHeadProvider`, default 10 m `// VERIFY`, `.mechx` `mainsHead_m`); each water meter feeding a ground tank is judged (`mainsPressureChecksProvider` → `mainsPressureCheck`: lift + feed friction at the sized flow + 5 m inlet residual) — warning `mains-pressure-insufficient` on the meter, a calc-report line per meter; never resizes.
 
+**Transfer to several roof tanks (backlog W-3, 2026-11-14)**: each roof tank on the transfer main gets its own fill flow on its branch, a shared pipe the sum; `transferPumpHead` lifts to the WORST tank (lift + friction at each pipe's sized flow + 5 m inlet residual `kTankInletResidualHeadM`); a roof tank no drawn pipe fills raises the info `roof-tank-fill-undrawn`.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

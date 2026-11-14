@@ -32,6 +32,7 @@ Shared value class: `packages/mechx_engine/test/reference/reference_building.dar
 - **Needs a booster.** The roof tank alone leaves every fixture below the SNI 49 kPa faucet floor. The critical node is WC1 at 14.74 kPa, and a booster of about +21.43 m is needed. This raises the Review WARNING `downfeed-below-target`. No pump is drawn, so no pump duty is derived.
 - **Demand above the declared daya.** The diversified demand is 32.5 A (7.1 kVA), above the 4400 VA (20 A) connection. This raises `service-capacity-below-demand`; the recommended daya is 7700 VA, single-phase.
 - **KS0 trap arm.** The DN40 kitchen-sink trap arm is 2.0 m, above the 1.8 m limit. This raises the advisory `drainage-length`.
+- **Roof-tank fill not drawn** (backlog W-3): the info `roof-tank-fill-undrawn:RT`.
 - Also expected: 5 × `drainage-laid-steeper` (the DN40 / DN50 runs are laid at 1:50 against the 1:100 project fall), 1 × `drainage-cleanout` at the stack base D0, and 5 `// VERIFY` advisories.
 
 **Fixed by its review (2026-11-13).**
@@ -42,6 +43,10 @@ Shared value class: `packages/mechx_engine/test/reference/reference_building.dar
 ### Backlog (outside scope, not fixed)
 
 _(empty)_
+
+### Backlog closed (2026-11-14)
+
+- **Undrawn roof-tank fill — backlog W-3.** RT is the system's root and no drawn pipe fills it: the Review raises the deliberate info `roof-tank-fill-undrawn:RT` (no fill pipework or transfer duty is invented). No figure moved.
 
 ## 2. Shophouse row (ruko 3 lantai, 3 units)
 
@@ -59,7 +64,7 @@ _(empty)_
 - Regression tests for its review fixes: `packages/mechx_engine/test/reference_shophouse_regression_test.dart` (F2, F3) and `test/reference_shophouse_regression_test.dart` (F1, F4).
 - Run either reference test with `REF_DUMP=1` to print every solved figure.
 
-**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 5 `// VERIFY` advisories. Expected absent: `non-selective` (B-1: the unit feeders grow to 10 mm² / 40 A and the MEP feeder to 5 × 6 / 32 A for the 1.6 × floor), `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
+**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 6 × `tank-fill-capacity-unset` (no tank capacity entered, backlog W-1), 5 `// VERIFY` advisories. Expected absent: `non-selective` (B-1: the unit feeders grow to 10 mm² / 40 A and the MEP feeder to 5 × 6 / 32 A for the 1.6 × floor), `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
 
 **Fixed by its review (2026-11-13).**
 - **F1:** units B and C were solved as upfeed "extra supply components" from their ground tanks (no gravity field, RT at −146 kPa, booster sized 36.998 m). Every roof-tank component of a downfeed project is now its own downfeed system (`extraDownfeedTanksProvider`); B = C = A.
@@ -69,8 +74,11 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
+
+### Backlog closed (2026-11-14)
+
+- **(c) Fill line sized on peak demand — backlog W-1 / W-3.** A tank now fills at capacity / refill time (`tankFillFlow`; ground 4 h, roof 1 h, `// VERIFY`). No shophouse tank has a capacity, so every meter feed and fill line keeps the peak basis (12.5 UBAP, 0.56389 L/s, DN20) and the Review raises 6 deliberate infos `tank-fill-capacity-unset:GT_A..C / RT_A..C`. The transfer pump head now owes each roof tank's float valve `kTankInletResidualHeadM` 5.0 m (W-3): TP_A/B/C 14.884 → 19.884 m (12.000 lift + 0.18026 x 16.0 = 2.884 friction + 5.0), P_h 82.3 → 110.0 W, shaft 117.6 → 157.1 W, motor 0.37 kW and the 411.1 W MEP way unchanged. Each unit has one roof tank on its own transfer pump, so W-3's sum / worst rule is the single tank. Mains (W-2): each meter −0.5 + 3.5 m at 0.56389 L/s DN20 (0.63093 m) + 5.0 = 5.131 m <= 10 m, no warning.
 
 ### Backlog closed (2026-11-13)
 
@@ -118,7 +126,11 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
+- **(d) Mains pressure — the delivered field.** The upfeed delivered field still reads GT 0 kPa and WM negative (W-2 adds a judge, it does not change the field).
+
+### Backlog closed (2026-11-14)
+
+- **(d) Mains pressure — backlog W-2.** The mains head at the meter is a Building-page input (default 10 m, `// VERIFY`). WM → GT is judged: lift GT 0.0 − WM 0.5 = −0.5 m + 3.5 m at 3.91733 L/s on DN50 (Hazen–Williams C150: 0.2636 m) + 5.0 m inlet residual = 4.764 m <= 10 m, no `mains-pressure-insufficient`. GT has no capacity, so the meter feed keeps the peak basis (96 UBAP, 3.91733 L/s DN50) and the deliberate info `tank-fill-capacity-unset:GT` is raised (W-1). No pin moved.
 
 ### Backlog closed (2026-11-13)
 
@@ -167,7 +179,10 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Jockey flow basis:** resolved by A1 (both 0.3155 L/s).
-- **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
+
+### Backlog closed (2026-11-14)
+
+- **(h) Fill line sized on peak demand — backlog W-1 / W-3.** GT 20 000 L, RT 10 000 L (defaults 4 h / 1 h). Meter feed WM → GT: 20 000 / 14 400 s = 1.38889 L/s, DN32 v 1.727 (was 4.39333 L/s DN65). Fill line GT → TP → U0..U11 → RT: 10 000 / 3600 = 2.77778 L/s, DN50 v 1.415 (was DN65). TP: 2.77778 L/s @ 42.000 + 0.039839 x 46.0 = 1.833 + 5.0 inlet = 48.833 m (was 4.39333 L/s @ 43.194 m), P_h 1330.7 W, shaft 1901.0 W ⇒ 2.2 kW (was 3.0). Electrical: TP way 3333.3 → 2444.4 W (5.660 → 4.151 A); MEP 89 668 → 88 779 W, 105 491 → 104 446 VA, lines [149.9, 153.4, 153.4] → [148.4, 151.9, 151.9] A; PP-E 102 768 → 101 879 W, 120 864 → 119 818 VA, lines → [172.5, 173.1, 173.1]; its feeder Ib 174.6 → 173.1 A, VD 0.48 → 0.47 % (MCCB 200, FRC 70 unchanged); LVMDP 160 608 → 159 719 W, 186 401 → 185 355 VA, lines → [267.3, 267.9, 267.9] (daya 197 000 VA unchanged); genset running 128.46 → 127.35 kVA (300 kVA unchanged), step load 102.8 → 101.9 kW. Mains (W-2): −0.5 + 3.5 m at 1.38889 L/s DN32 (0.3395 m) + 5.0 = 4.840 m <= 10 m, no warning. One roof tank: W-3 adds no branch.
 
 ### Backlog closed (2026-11-13)
 
@@ -217,6 +232,10 @@ _(empty)_
 
 - **(b) Recirculation pump way only with the duty-feed opt-in — partly closed by backlog G-3.** A circulator pump DRAWN on the loop was already a placed machine (minted by default); since G-3 a system whose return is DRAWN also mints its solved recirculation way in the default sync even with no pump symbol drawn. The tower draws no return (the app ASSUMES it), so its HW recirc way stays behind the "Feed solved MEP duties" opt-in (on in this fixture): no tower figure moves.
 - **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
+
+### Backlog closed (2026-11-14)
+
+- **Fill line on the tank fill rate — backlog W-1 / W-3.** GT 60 000 L, RT 30 000 L. Meter feed WM → GT: 60 000 / 14 400 = 4.16667 L/s, DN65 v 1.256 (was 10.79267 L/s DN100). Fill line GT → TP / TPS → U0..U29 → RT: 30 000 / 3600 = 8.33333 L/s, DN80 v 1.658 (was DN100; the standby leg mirrors the duty leg). TP: 8.33333 L/s @ 120.000 + 0.030888 x 124.0 = 3.830 + 5.0 inlet = 128.830 m (was 10.79267 L/s @ 122.086 m), P_h 10 531.9 W, shaft 15 045.5 W ⇒ 18.5 kW unchanged, so no electrical figure moved. BOM: the D-4 drawn-vs-spliced difference is now only the DN40 0 m run line (the splice's DN65 / DN80 0 m runs add to lines the fill now has). Mains (W-2): −0.5 + 3.5 m at 4.16667 L/s DN65 (0.0823 m) + 5.0 = 4.582 m <= 10 m, no warning. One roof tank: W-3 adds no branch.
 
 ### Backlog closed (2026-11-13)
 

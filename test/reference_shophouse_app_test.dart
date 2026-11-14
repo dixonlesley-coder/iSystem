@@ -703,16 +703,20 @@ void main() {
           .meters;
       for (final u in kShopUnits) {
         // TP: lift RT 12.0 − GT 0.0 = 12.000; friction 0.18026 × (1.0 + 4.7
-        // + 4.0 + 4.0 + 2.3 = 16.0) = 2.884; H = 14.884 m. P_h = 9810 ×
-        // 0.56389e-3 × 14.884 = 82.3 W; shaft / 0.70 = 117.6 W ⇒ 0.37 kW;
-        // fed input 370 / 0.90 = 411.1 W.
+        // + 4.0 + 4.0 + 2.3 = 16.0) = 2.884; + the float-valve inlet
+        // residual 5.0 (backlog W-3, `kTankInletResidualHeadM`; it was a 0 m
+        // free discharge) ⇒ H = 19.884 m (was 14.884). The flow stays the
+        // 12.5-UBAP peak 0.56389 L/s: RT has no capacity, so W-1 keeps the
+        // peak basis (info `tank-fill-capacity-unset`). P_h = 9810 ×
+        // 0.56389e-3 × 19.884 = 110.0 W (was 82.3); shaft / 0.70 = 157.1 W
+        // (was 117.6) ⇒ 0.37 kW unchanged; fed input 370 / 0.90 = 411.1 W.
         final tp = duties[shopId('TP', u)]!;
         expect(transfers, contains(shopId('TP', u)));
         expect(z(shopId('RT', u)) - z(shopId('GT', u)), closeTo(12.0, 1e-9));
         expect(tp.flow.inLitersPerSecond, closeTo(0.5639, 5e-5));
-        expect(tp.head.meters, closeTo(14.884, 5e-4));
-        expect(tp.hydraulicPower.watts, closeTo(82.3, 0.05));
-        expect(tp.shaftPower.watts, closeTo(117.6, 0.05));
+        expect(tp.head.meters, closeTo(19.884, 5e-4));
+        expect(tp.hydraulicPower.watts, closeTo(110.0, 0.05));
+        expect(tp.shaftPower.watts, closeTo(157.1, 0.05));
         expect(tp.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
         expect(fed[shopId('TP', u)]!.input, closeTo(411.1, 0.05));
         // BS: H = (225 − 8.064) / 9.81 = 22.114 m; P_h = 122.3 W, shaft
@@ -752,6 +756,16 @@ void main() {
       expect(kinds.where((k) => k.startsWith('unconnected-orphan')), isEmpty);
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('downfeed-below-target')));
+      // Backlog W-1 — no tank has a capacity: each GT / RT keeps the peak
+      // fill basis and says so (6 infos); every roof tank's fill is drawn
+      // (no `roof-tank-fill-undrawn`); each meter: −0.5 + 0.63093 + 5.0 =
+      // 5.131 m <= 10 m (no `mains-pressure-insufficient`, backlog W-2).
+      expect(kinds.where((k) => k.startsWith('tank-fill-capacity-unset')),
+          hasLength(6));
+      expect(kinds.where((k) => k.startsWith('roof-tank-fill-undrawn')),
+          isEmpty);
+      expect(kinds.where((k) => k.startsWith('mains-pressure-insufficient')),
+          isEmpty);
       // Backlog A-4 — two 2.5 PK cassettes = 48 000 >= 44 400 BTU/h.
       expect(kinds.where((k) => k.startsWith('room-cooling-undersized')),
           isEmpty);

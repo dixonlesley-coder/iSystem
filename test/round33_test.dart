@@ -308,9 +308,10 @@ void main() {
       expect(c.read(pumpDutyProvider), isNull);
       final duty = c.read(supplyMoverDutiesProvider)['P']!;
       // Lift: P on the L0 surface (0 m) to the roof tank at the roof
-      // (10.5 m), plus the fill-line friction (> 0).
-      expect(duty.head.meters, greaterThan(10.5));
-      expect(duty.head.meters, lessThan(10.5 + 5));
+      // (10.5 m), plus the fill-line friction (> 0), plus the float-valve
+      // inlet residual 5.0 m (backlog W-3, `kTankInletResidualHeadM`).
+      expect(duty.head.meters, greaterThan(10.5 + 5.0));
+      expect(duty.head.meters, lessThan(10.5 + 5.0 + 5));
     });
   });
 

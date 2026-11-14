@@ -355,8 +355,8 @@ void main() {
     });
 
     test('issues: the downfeed WARNING, the service-capacity warning, 5 laid-'
-        'steeper + 1 trap-arm (KS0 2.0 m > 1.8 m) + 1 cleanout advisory, and '
-        '5 // VERIFY', () {
+        'steeper + 1 trap-arm (KS0 2.0 m > 1.8 m) + 1 cleanout advisory, the '
+        'undrawn roof-tank fill, and 5 // VERIFY', () {
       final issues = c.read(designIssuesProvider);
       final open = [for (final i in issues) if (!i.isVerify) i];
       final kinds = [for (final i in open) i.kind]..sort();
@@ -368,6 +368,9 @@ void main() {
         'drainage-laid-steeper',
         'drainage-length',
         'electrical:service-capacity-below-demand',
+        // Backlog W-3 (2026-11-14) — the roof tank RT is the system's root:
+        // no drawn pipe fills it, so no fill is invented, an info says so.
+        'roof-tank-fill-undrawn:RT',
       ]);
       // Every delivery node is below its SNI floor ⇒ a WARNING, not info.
       expect(open.firstWhere((i) => i.kind == 'downfeed-below-target').severity,
