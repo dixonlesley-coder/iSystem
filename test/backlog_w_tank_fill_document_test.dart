@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart' show kDefaultMainsHeadM;
 import 'package:mechx_engine/units.dart';
 
 NetNode _tank(String id, {double? l, double? h}) => NetNode(
@@ -49,5 +50,17 @@ void main() {
     expect(bad, isNot(text));
     expect(ProjectDocument.decode(bad).network.nodes.single.tankRefillHours,
         isNull);
+  });
+
+  test('W-2: the mains head round-trips; the default writes no key', () {
+    const set = DesignSettings(mainsHeadM: 18.5);
+    expect(DesignSettings.fromJson(set.toJson()).mainsHeadM, 18.5);
+    const def = DesignSettings();
+    expect(def.toJson().containsKey('mainsHead_m'), isFalse);
+    // An old file (no key) and an out-of-band value load the default /
+    // the clamped band.
+    expect(DesignSettings.fromJson(const {}).mainsHeadM, kDefaultMainsHeadM);
+    expect(DesignSettings.fromJson(const {'mainsHead_m': 500}).mainsHeadM,
+        100.0);
   });
 }

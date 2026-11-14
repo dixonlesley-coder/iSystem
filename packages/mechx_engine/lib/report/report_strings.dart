@@ -116,6 +116,9 @@ enum RptStringKey {
   wsTankFillUnset, // {tag} {kind} {h}
   wsTankKindGround,
   wsTankKindRoof,
+  // Backlog W-2 — {meter} {tank} {avail} {req} {lift} {fric} {res} {lps} {verdict}
+  wsMainsPressure,
+  wsMainsShort,
   wsLegionella, // {c}
 
   // Pressure-zone table.
@@ -605,6 +608,11 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'sized on the peak demand it distributes',
   RptStringKey.wsTankKindGround: 'ground tank',
   RptStringKey.wsTankKindRoof: 'roof tank',
+  RptStringKey.wsMainsPressure:
+      '- Mains at meter {meter} -> {tank}: available **{avail} m**, required '
+          '**{req} m** (lift {lift} + feed friction {fric} at {lps} L/s + '
+          'inlet residual {res}) · {verdict} _(// VERIFY mains pressure)_',
+  RptStringKey.wsMainsShort: 'INSUFFICIENT',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -1176,6 +1184,11 @@ const Map<RptStringKey, String> kReportStringsId = {
           'pipa pengisi diukur dari kebutuhan puncak yang dibagikannya',
   RptStringKey.wsTankKindGround: 'tangki bawah',
   RptStringKey.wsTankKindRoof: 'tangki atap',
+  RptStringKey.wsMainsPressure:
+      '- PDAM di meter {meter} -> {tank}: tersedia **{avail} m**, dibutuhkan '
+          '**{req} m** (angkat {lift} + gesekan pipa {fric} pada {lps} L/s + '
+          'sisa tekanan inlet {res}) · {verdict} _(// VERIFY tekanan PDAM)_',
+  RptStringKey.wsMainsShort: 'TIDAK CUKUP',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '

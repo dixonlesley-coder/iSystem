@@ -79,7 +79,8 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
-import '../../store/tank_fill_store.dart' show tankFillsProvider;
+import '../../store/tank_fill_store.dart'
+    show mainsPressureChecksProvider, tankFillsProvider;
 import '../widgets/locale_number.dart' show parseLocaleNumber;
 import '../../store/inspector_store.dart';
 import '../../store/assemblies_store.dart';
@@ -370,6 +371,15 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
           capacityLitres: t.capacityLitres,
           refillHours: t.refillHours,
           fillFlow: t.fillFlow,
+        ),
+    ],
+    // Backlog W-2 — the mains-pressure verdict at each meter feed.
+    mainsChecks: [
+      for (final c in ref.read(mainsPressureChecksProvider))
+        (
+          meterTag: nodeTagMap[c.meterId] ?? c.meterId,
+          tankTag: nodeTagMap[c.tankId] ?? c.tankId,
+          check: c,
         ),
     ],
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,

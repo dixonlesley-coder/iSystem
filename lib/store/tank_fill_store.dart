@@ -9,7 +9,9 @@ import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/sizing/tank_fill.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'app_state.dart' show mainsHeadProvider;
 import 'network_store.dart' show sizingNetworkProvider;
+import 'project_store.dart' show projectControllerProvider;
 import 'sizing_store.dart' show sizingProvider;
 
 /// One cold-water storage tank and its fill.
@@ -93,3 +95,36 @@ List<TankFill> tankFillsOf(Network net, Map<String, EdgeSizing> sizing) {
 /// Backlog W-1 — every cold-water storage tank with its fill.
 final tankFillsProvider = Provider<List<TankFill>>((ref) => tankFillsOf(
     ref.watch(sizingNetworkProvider), ref.watch(sizingProvider)));
+
+/// Backlog W-2 — the mains-pressure verdict of every water meter feeding a
+/// ground tank (`meterFeedsToGroundTanks`), judged against the project's
+/// available mains head ([mainsHeadProvider]) at the feed's SIZED flow and
+/// bores (the one solve). Judge-only; sorted by meter id.
+final mainsPressureChecksProvider = Provider<List<MainsPressureCheck>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final feeds = meterFeedsToGroundTanks(net);
+  if (feeds.isEmpty) return const [];
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final available = Head(ref.watch(mainsHeadProvider));
+  final sized = {
+    for (final e in sizing.entries)
+      e.key: (flow: e.value.flow, diameter: e.value.diameter),
+  };
+  return [
+    for (final f in feeds)
+      ?mainsPressureCheck(
+        net: net,
+        feed: f,
+        sized: sized,
+        available: available,
+        lengthOf: (e) => edgeLength(e, net,
+                calibrationBySheet: project.calibrations,
+                building: project.building,
+                mounting: project.mounting)
+            .meters,
+        elevationOf: (n) =>
+            nodeElevation(n, project.building, project.mounting).meters,
+      ),
+  ];
+});

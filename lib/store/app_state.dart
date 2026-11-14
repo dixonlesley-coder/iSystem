@@ -85,6 +85,20 @@ class RainfallController extends Notifier<double> {
   void nudge(double delta) => set(state + delta);
 }
 
+/// Backlog W-2 (2026-11-14) — the AVAILABLE MAINS (PDAM) pressure at the
+/// water meter, as head (m). Default [kDefaultMainsHeadM] (10 m, `// VERIFY`,
+/// deliberately low). Judge-only input: the mains-pressure check at each
+/// meter feeding a ground tank reads it; no size depends on it.
+final mainsHeadProvider =
+    NotifierProvider<MainsHeadController, double>(MainsHeadController.new);
+
+class MainsHeadController extends Notifier<double> {
+  @override
+  double build() => kDefaultMainsHeadM; // VERIFY — PDAM service pressure
+
+  void set(double v) => state = v.clamp(0.0, 100.0).toDouble();
+}
+
 /// Design storm runoff coefficient C (dimensionless, 0–1) — the fraction of
 /// design rainfall that becomes runoff at the outlet (rational method). Pairs
 /// with [rainfallIntensityProvider]; both feed `rainwaterDesignFlow`. Defaults to

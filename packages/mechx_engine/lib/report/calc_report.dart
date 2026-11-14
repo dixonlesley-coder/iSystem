@@ -23,6 +23,7 @@ import '../sizing/hot_water.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
+import '../sizing/tank_fill.dart' show MainsPressureCheck;
 import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
@@ -220,6 +221,12 @@ class CalcReportData {
         FlowRate? fillFlow,
       })> tankFills;
 
+  /// Backlog W-2 — the mains-pressure verdict at each water meter feeding a
+  /// ground tank (the SAME result the Review warning reads). Empty ⇒
+  /// unchanged.
+  final List<({String meterTag, String tankTag, MainsPressureCheck check})>
+      mainsChecks;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -356,6 +363,7 @@ class CalcReportData {
     this.additionalHotWaterRecirc = const [],
     this.waterHeaters = const [],
     this.tankFills = const [],
+    this.mainsChecks = const [],
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
@@ -863,6 +871,23 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             'h': num(t.refillHours),
             'lps': q.inLitersPerSecond.toStringAsFixed(3),
           }));
+  }
+  // Backlog W-2 — the mains head at each meter vs the fill requirement.
+  for (final m in d.mainsChecks) {
+    final c = m.check;
+    ws.writeln(strings.format(RptStringKey.wsMainsPressure, {
+      'meter': m.meterTag,
+      'tank': m.tankTag,
+      'avail': c.available.meters.toStringAsFixed(1),
+      'req': c.required.meters.toStringAsFixed(2),
+      'lift': c.liftM.toStringAsFixed(2),
+      'fric': c.frictionM.toStringAsFixed(2),
+      'res': c.inletResidualM.toStringAsFixed(1),
+      'lps': c.flow.inLitersPerSecond.toStringAsFixed(3),
+      'verdict': c.ok
+          ? strings(RptStringKey.verdictOk)
+          : strings(RptStringKey.wsMainsShort),
+    }));
   }
   ws.writeln(); // closes the cluster (one blank line, zones or not).
   blocks.add(RptMarkdown(ws.toString()));

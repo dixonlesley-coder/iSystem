@@ -208,6 +208,11 @@ class DesignSettings {
   /// file sizes byte-identically.
   final double drainageSlope;
 
+  /// Backlog W-2 — the available mains head at the water meter (m). Additive
+  /// — absent ⇒ `kDefaultMainsHeadM` (10 m, `// VERIFY`); written only when
+  /// it differs from the default, so an untouched project is byte-identical.
+  final double mainsHeadM;
+
   /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
   /// allowable recirculation loop DROP ΔT (K). They set the recirc flow AND the
   /// modelled return temperature the anti-Legionella check judges. Additive —
@@ -297,6 +302,7 @@ class DesignSettings {
     this.fixtureLibrary = const [],
     this.coolingLoadMethod = 'simple',
     this.drainageSlope = 0.01,
+    this.mainsHeadM = kDefaultMainsHeadM,
     this.hotWaterFlowTempC = 60.0,
     this.hotWaterDeltaTK = 5.0,
     this.anthropicApiKey = '',
@@ -339,6 +345,7 @@ class DesignSettings {
         // M13/M14 design inputs (additive; absent → the engine defaults, so an
         // untouched project sizes exactly as before).
         'drainageSlope': drainageSlope,
+        if (mainsHeadM != kDefaultMainsHeadM) 'mainsHead_m': mainsHeadM,
         'hotWaterFlowTempC': hotWaterFlowTempC,
         'hotWaterDeltaTK': hotWaterDeltaTK,
         // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
@@ -421,6 +428,8 @@ class DesignSettings {
         // hand-edited file can never feed the sizer a nonsense gradient / ΔT.
         drainageSlope:
             _clampOr(json['drainageSlope'], 0.001, 0.1, 0.01),
+        mainsHeadM:
+            _clampOr(json['mainsHead_m'], 0.0, 100.0, kDefaultMainsHeadM),
         hotWaterFlowTempC:
             _clampOr(json['hotWaterFlowTempC'], 40.0, 90.0, 60.0),
         hotWaterDeltaTK: _clampOr(json['hotWaterDeltaTK'], 1.0, 20.0, 5.0),

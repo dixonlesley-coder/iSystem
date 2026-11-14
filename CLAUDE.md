@@ -302,6 +302,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Tank fill rate (backlog W-1, 2026-11-14)**: each storage tank node has an editable refill time (`NetNode.tankRefillHours`, `.mechx` `tank_refill_h`; default ground 4 h / roof 1 h, `// VERIFY` `SniProfile.tankFillBasis`); fill flow = capacity / refill time (`sizing/tank_fill.dart` `tankFillFlow`) sizes a ground tank's meter feed and the transfer pipework into a roof tank (sizer UBAP pass); no capacity keeps the peak basis + the info `tank-fill-capacity-unset`. Inspector: 'Refill time' on the tank node (with its fill flow); calc report: one line per tank (`tankFillsProvider`, `store/tank_fill_store.dart`). The owner's `tank-fill-below-demand` judge is NOT built: the app has no daily water-demand figure.
 
+**Mains pressure (backlog W-2, 2026-11-14)**: 'Mains pressure at meter (m)' on the Building page (`mainsHeadProvider`, default 10 m `// VERIFY`, `.mechx` `mainsHead_m`); each water meter feeding a ground tank is judged (`mainsPressureChecksProvider` → `mainsPressureCheck`: lift + feed friction at the sized flow + 5 m inlet residual) — warning `mains-pressure-insufficient` on the meter, a calc-report line per meter; never resizes.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

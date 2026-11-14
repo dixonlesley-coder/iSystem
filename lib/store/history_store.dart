@@ -624,6 +624,14 @@ void setRunoffCoefficientUndoable(ProviderReader read, double next) =>
         next: next,
         label: StringKey.undoLabelRunoff);
 
+/// Backlog W-2 — undoable available mains head change (m, clamped).
+void setMainsHeadUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(mainsHeadProvider),
+        apply: (v) => read(mainsHeadProvider.notifier).set(v),
+        next: next,
+        label: StringKey.buildingInputMainsHead);
+
 /// Undoable laid drainage slope change (m/m, clamped by the store).
 void setDrainageSlopeUndoable(ProviderReader read, double next) =>
     setSettingUndoable<double>(read,

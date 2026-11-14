@@ -1160,6 +1160,10 @@ enum StringKey {
   buildingInputCaptionOccupancy,
   buildingInputCaptionRainfall,
   buildingInputCaptionRunoff,
+  buildingInputMainsHead,
+  buildingInputCaptionMainsHead,
+  issueMainsPressureTitle,
+  issueMainsPressureMessage,
   buildingInputCaptionSlope,
   buildingSlopeDirectionHint,
   buildingInputCaptionHotWaterFlow,
@@ -2817,6 +2821,12 @@ const Map<StringKey, String> _en = {
       'Drives rainwater outlet, gutter and storm-stack sizing',
   StringKey.buildingInputCaptionRunoff:
       'Share of rainfall that reaches the outlet (rational method)',
+  StringKey.buildingInputMainsHead: 'Mains pressure at meter (m)',
+  StringKey.buildingInputCaptionMainsHead:
+      'Available PDAM head at the water meter. Judged at each meter feeding a ground tank (lift + friction + float valve 5 m); no size depends on it. Default 10 m - // VERIFY with the utility.',
+  StringKey.issueMainsPressureTitle: 'Mains pressure too low to fill the tank',
+  StringKey.issueMainsPressureMessage:
+      'Water meter {meter} has {avail} m of mains head but filling {tank} at {flow} L/s needs {req} m (lift {lift} m + feed friction {fric} m + inlet residual {res} m). Ask the utility for the pressure, enlarge the feed, or add a booster / break tank.',
   StringKey.buildingInputCaptionSlope:
       'Drives gravity sizing and the self-cleansing check',
   StringKey.buildingSlopeDirectionHint:
@@ -4545,6 +4555,12 @@ const Map<StringKey, String> _id = {
       'Menentukan ukuran talang, roof drain dan pipa tegak air hujan',
   StringKey.buildingInputCaptionRunoff:
       'Bagian curah hujan yang sampai ke outlet (metode rasional)',
+  StringKey.buildingInputMainsHead: 'Tekanan PDAM di meter (m)',
+  StringKey.buildingInputCaptionMainsHead:
+      'Tinggi tekan PDAM yang tersedia di meter air. Diperiksa di setiap meter yang mengisi tangki bawah (angkat + gesekan + katup pelampung 5 m); tidak ada ukuran yang bergantung padanya. Bawaan 10 m - // VERIFY ke PDAM.',
+  StringKey.issueMainsPressureTitle: 'Tekanan PDAM terlalu rendah untuk mengisi tangki',
+  StringKey.issueMainsPressureMessage:
+      'Meter air {meter} memiliki tinggi tekan PDAM {avail} m, tetapi mengisi {tank} pada {flow} L/s membutuhkan {req} m (angkat {lift} m + gesekan pipa {fric} m + sisa tekanan inlet {res} m). Tanyakan tekanan ke PDAM, perbesar pipa, atau tambah pompa / tangki antara.',
   StringKey.buildingInputCaptionSlope:
       'Menentukan ukuran gravitasi dan pemeriksaan pembersihan sendiri',
   StringKey.buildingSlopeDirectionHint:

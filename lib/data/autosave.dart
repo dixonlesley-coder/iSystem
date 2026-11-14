@@ -190,6 +190,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       // (1:100 / 60 °C / 5 K / simple) ⇒ an untouched project encodes
       // byte-identically.
       drainageSlope: read(drainageSlopeProvider),
+      // Backlog W-2 — the available mains head (default ⇒ omitted).
+      mainsHeadM: read(mainsHeadProvider),
       hotWaterFlowTempC: read(hotWaterFlowTempProvider),
       hotWaterDeltaTK: read(hotWaterDeltaTProvider),
       coolingLoadMethod: read(coolingLoadMethodProvider).code,
@@ -349,6 +351,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // The four M13/M14/M15 design inputs (absent on an older file ⇒ the document
   // decoder's engine-matching defaults, so an old project restores unchanged).
   read(drainageSlopeProvider.notifier).set(s.drainageSlope);
+  read(mainsHeadProvider.notifier).set(s.mainsHeadM);
   read(hotWaterFlowTempProvider.notifier).set(s.hotWaterFlowTempC);
   read(hotWaterDeltaTProvider.notifier).set(s.hotWaterDeltaTK);
   read(coolingLoadMethodProvider.notifier)

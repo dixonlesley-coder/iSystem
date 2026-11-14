@@ -20,6 +20,7 @@ import '../../store/app_state.dart'
         occupancyProvider,
         rainfallIntensityProvider,
         runoffCoefficientProvider,
+        mainsHeadProvider,
         statusMessageProvider;
 import '../../store/floor_remap.dart'
     show FloorPlacedWorkCount, floorPlacedWorkCount;
@@ -648,6 +649,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     final occ = ref.watch(occupancyProvider);
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
+    final mainsHead = ref.watch(mainsHeadProvider);
     final slope = ref.watch(drainageSlopeProvider);
     final hwFlow = ref.watch(hotWaterFlowTempProvider);
     final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
@@ -867,6 +869,35 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             ],
           ),
           caption(context.strings(StringKey.buildingInputCaptionRunoff)),
+          // Backlog W-2 — the available mains (PDAM) head at the meter: a
+          // judge-only input beside the other water design inputs.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(
+                      context.strings(StringKey.buildingInputMainsHead))),
+              SteppedValueField(
+                display: '${mainsHead.toStringAsFixed(1)} m',
+                editSeed: mainsHead.toStringAsFixed(1),
+                label: context.strings(StringKey.buildingInputMainsHead),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0,
+                max: 100,
+                onDecrement: () =>
+                    setMainsHeadUndoable(ref.read, mainsHead - 1.0),
+                onIncrement: () =>
+                    setMainsHeadUndoable(ref.read, mainsHead + 1.0),
+                onSubmit: (v) {
+                  if (v != null) setMainsHeadUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionMainsHead)),
           // M13 — the laid drainage gradient. Typed and displayed as the
           // drafting fraction (1:100), which is how a plumber reads a fall;
           // stored as m/m. Steps of 10 in N (1:100 → 1:90 → 1:80).

@@ -52,7 +52,8 @@ import 'annotation_store.dart'
         roomTerminalOwnerOf,
         roomUnitOwnerId;
 import 'app_state.dart';
-import 'tank_fill_store.dart' show tankFillsProvider;
+import 'tank_fill_store.dart'
+    show mainsPressureChecksProvider, tankFillsProvider;
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
@@ -1581,6 +1582,32 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             : 1),
       }),
       locate: IssueLocation(t.sheetId, nodeId: t.tankId),
+    ));
+  }
+
+  // ── 5a-bis-4. Mains pressure at each meter feeding a ground tank (W-2) ──
+  // Judge-only, located on the meter: the available mains head (project
+  // input) below lift + feed friction at the sized flow + the float-valve
+  // residual. Never resizes, never assumes mains-fed fixtures.
+  for (final c in ref.watch(mainsPressureChecksProvider)) {
+    if (c.ok) continue;
+    final meter = net.nodeById(c.meterId);
+    if (meter == null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'mains-pressure-insufficient:${c.meterId}',
+      title: str(StringKey.issueMainsPressureTitle),
+      message: str.format(StringKey.issueMainsPressureMessage, {
+        'meter': fireTankTags[c.meterId] ?? c.meterId,
+        'tank': fireTankTags[c.tankId] ?? c.tankId,
+        'avail': c.available.meters.toStringAsFixed(1),
+        'flow': c.flow.inLitersPerSecond.toStringAsFixed(2),
+        'req': c.required.meters.toStringAsFixed(2),
+        'lift': c.liftM.toStringAsFixed(2),
+        'fric': c.frictionM.toStringAsFixed(2),
+        'res': c.inletResidualM.toStringAsFixed(1),
+      }),
+      locate: IssueLocation(meter.sheetId, nodeId: c.meterId),
     ));
   }
 
