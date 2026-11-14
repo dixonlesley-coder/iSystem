@@ -10,9 +10,16 @@
 // heater WH fed from BR29, a hot riser HW29 → HW27 to both lavatories of
 // each of those floors. Drainage: one 30-storey soil stack to an outfall, one
 // stack vent. Rainwater: four 200 m² roof drains, one downpipe. A separate
-// FIRE network: fire tank → duty / standby / jockey pumps in parallel (as the
-// apartment) → a header feeding TWO Class I hydrant risers (a box on every
-// floor of each) and a sprinkler riser with six heads on the top floor. HVAC
+// FIRE network in TWO designed zones (backlog Z-3): zone 1 — fire tank →
+// duty / standby / jockey pumps in parallel (as the apartment) → a header
+// feeding TWO Class I hydrant risers with a box on Lantai 1..15; riser a's
+// top fills the break tank BT on Lantai 15 (index 14, a roof-typed tank
+// below the top storey, read at its floor surface). Zone 2 — the relay room
+// on Lantai 15 (FP2 / FP2S / FJ2 from BT, the ground room translated 2.4 m
+// north) → header FH2 → two hydrant risers with a box on Lantai 16..30 and
+// the sprinkler riser with six heads on the top floor. `fireBreakFloor:
+// null` draws the pre-Z single-zone network (kept for the T1 / T2
+// regressions). HVAC
 // on floor index 15 ("Lantai 16"): an AHU office room (rectangular,
 // equal-friction ducts) with eight supply diffusers and its return grilles,
 // and an exhausted toilet with an exhaust fan and two exhaust grilles.
@@ -156,7 +163,13 @@ const String kTowerBreakTank = 'BT';
 const String kTowerRelayPump = 'FP2';
 const String kTowerRelayStandbyPump = 'FP2S';
 const String kTowerRelayJockeyPump = 'FJ2';
-const double kTowerBreakTankL = 60000;
+const double kTowerBreakTankL = 90000;
+
+/// The plant floor of the fire zone break (index 14, "Lantai 15"): zone 1
+/// is the ground pump room serving the hydrant boxes of Lantai 1..15 and
+/// refilling BT; zone 2 is the relay room on Lantai 15 serving Lantai
+/// 16..30 (hydrant boxes + the top-floor sprinklers).
+const int kTowerFireBreakFloor = 14;
 
 /// The hand-picked bore of the jockey legs (mm), as in the apartment.
 const double kTowerJockeyLegMm = 25;
@@ -447,12 +460,16 @@ final (double, double) _efStep = (150 * 4 / _diag, 150 * 6 / _diag);
 /// station on the gravity riser at each floor index k (between GR(k+1) and
 /// GRk); empty draws none.
 Network buildTowerNetwork(
-    {List<int> prvFloors = const [], int? fireBreakFloor}) {
+    {List<int> prvFloors = const [],
+    int? fireBreakFloor = kTowerFireBreakFloor}) {
   final brk = fireBreakFloor;
-  // Upper-zone hydrant riser nodes sit 0.5 m (25 px) north of the lower
-  // zone's (a second riser in the same shaft).
+  // The upper zone (its relay room, risers, boxes, sprinkler riser and
+  // heads) is the ground layout translated 2.4 m (120 px) north, so every
+  // upper run keeps the ground room's plan length and the fill Ha<brk> ->
+  // BT is (150, 80) px = 170 px = 3.4 m.
   (double, double) up((double, double) p, int f) =>
-      brk != null && f > brk ? (p.$1, p.$2 - 25) : p;
+      brk != null && f > brk ? (p.$1, p.$2 - 120) : p;
+  (double, double) room((double, double) p) => (p.$1, p.$2 - 120);
   NetNode node(
     String id,
     (double, double) at, {
@@ -548,29 +565,30 @@ Network buildTowerNetwork(
         node('HYD$r$f', up(_hyd[r]!, f),
             floor: f, component: NodeComponent.hydrantBox),
       ],
-      if (brk == null || f >= brk) node('S$f', _s, floor: f),
+      if (brk == null || f >= brk)
+        node('S$f', brk == null ? _s : room(_s), floor: f),
     ],
     if (brk != null) ...[
       // The break: tank BT filled from riser a's top (Ha<brk>), relay duty /
       // standby / jockey pumps from BT, header FH2, upper riser bases.
-      node(kTowerBreakTank, _ft,
+      node(kTowerBreakTank, room(_ft),
           floor: brk,
           component: NodeComponent.roofTank,
           tankL: kTowerBreakTankL),
-      node(kTowerRelayPump, (1300, 1200),
+      node(kTowerRelayPump, room((1300, 1200)),
           floor: brk, component: NodeComponent.pump),
       node(kTowerRelayStandbyPump,
-          (1300 + math.sqrt(150 * 150 - 100 * 100), 1200),
+          room((1300 + math.sqrt(150 * 150 - 100 * 100), 1200)),
           floor: brk, component: NodeComponent.pump),
       node(kTowerRelayJockeyPump,
-          (1300 - math.sqrt(150 * 150 - 100 * 100), 1200),
+          room((1300 - math.sqrt(150 * 150 - 100 * 100), 1200)),
           floor: brk, component: NodeComponent.pump),
-      node('FH2', _fh, floor: brk),
+      node('FH2', room(_fh), floor: brk),
       for (final r in kTowerHydrantRisers)
         node('H2$r', up(_hRiser[r]!, brk + 1), floor: brk),
     ],
     for (var i = 1; i <= 6; i++)
-      node('SP$i', (_s.$1 + 150.0 * i, _s.$2),
+      node('SP$i', (_s.$1 + 150.0 * i, brk == null ? _s.$2 : room(_s).$2),
           floor: top, component: NodeComponent.sprinklerHead),
     // ── HVAC (floor 15) ──────────────────────────────────────────────────
     node(kTowerAhuId, _ahu, floor: hv, component: NodeComponent.ahu),
@@ -668,7 +686,7 @@ Network buildTowerNetwork(
       for (var f = 0; f <= top; f++) _edge(fh, 'H$r$f', 'HYD$r$f'), // 2.0 m
     ],
     if (brk != null) ...[
-      // Fill: riser a's top → BT (250 px = 5.0 m + the vertical leg).
+      // Fill: riser a's top → BT ((150, 80) px = 3.4 m + the vertical leg).
       _edge(fh, 'Ha$brk', kTowerBreakTank),
       // Relay pump room (as the ground room).
       _edge(fh, kTowerBreakTank, kTowerRelayPump),
@@ -679,8 +697,8 @@ Network buildTowerNetwork(
           sizeOverride: Diameter.mm(kTowerJockeyLegMm)),
       _edge(fh, kTowerRelayJockeyPump, 'FH2',
           sizeOverride: Diameter.mm(kTowerJockeyLegMm)),
-      _edge(fh, 'FH2', 'H2a'), // 150 / 25 px
-      _edge(fh, 'FH2', 'H2b'),
+      _edge(fh, 'FH2', 'H2a'), // 150 px = 3.0 m
+      _edge(fh, 'FH2', 'H2b'), // 300 px = 6.0 m
     ],
     // Sprinkler riser + six heads on the top floor.
     if (brk == null) _edge(sp, 'FH', 'S0') else _edge(sp, 'FH2', 'S$brk'),
@@ -883,7 +901,8 @@ const List<int> kTowerPrvFloors = [19, 16, 13, 10, 7, 4, 1];
 
 /// Reference building 5 — the office tower.
 ReferenceBuilding buildTower(
-        {List<int> prvFloors = kTowerPrvFloors, int? fireBreakFloor}) =>
+        {List<int> prvFloors = kTowerPrvFloors,
+        int? fireBreakFloor = kTowerFireBreakFloor}) =>
     ReferenceBuilding(
       name: 'Reference 5 - Tower',
       building: BuildingLevels([

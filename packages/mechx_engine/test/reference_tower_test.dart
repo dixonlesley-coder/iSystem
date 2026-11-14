@@ -207,7 +207,19 @@ void main() {
       'e_fh_FJ_FH': 3.0,
       'e_fh_FH_Ha0': 3.0,
       'e_fh_FH_Hb0': 6.0,
-      'e_sp_FH_S0': 4.0,
+      // Backlog Z-3 — the relay room on Lantai 15 (the ground room
+      // translated 2.4 m north): the same legs, header trunks and sprinkler
+      // feed; the fill Ha14 -> BT is (150, 80) px = 170 px = 3.4 m.
+      'e_fh_Ha${kTowerFireBreakFloor}_BT': 3.4,
+      'e_fh_BT_FP2': 2.0,
+      'e_fh_FP2_FH2': 2.0,
+      'e_fh_BT_FP2S': 3.0,
+      'e_fh_FP2S_FH2': 3.0,
+      'e_fh_BT_FJ2': 3.0,
+      'e_fh_FJ2_FH2': 3.0,
+      'e_fh_FH2_H2a': 3.0,
+      'e_fh_FH2_H2b': 6.0,
+      'e_sp_FH2_S$kTowerFireBreakFloor': 4.0,
       'e_sp_S29_SP1': 3.0,
       for (var i = 2; i <= 6; i++) 'e_sp_SP${i - 1}_SP$i': 3.0,
       'e_sa_AHU1_SD1': 3.0,

@@ -1613,75 +1613,126 @@ void main() {
           isTrue);
     });
 
-    test('fire: 750 gpm at the standpipe head 210.681 m, 200 kW; DN100 '
-        'trunks; DN40 feed main', () {
+    // Backlog Z-3 (2026-11-14) — the fire zone break (BT + the relay room
+    // on Lantai 15, index 14). Each zone is its own rating system (a storage
+    // tank is a hydraulic break, Round 51). Hand figures, NFPA 14 / 20
+    // (`// VERIFY`): two stacks per zone = 500 + 250 gpm = 47.3176 L/s;
+    // residual 690 kPa / 9.81 = 70.336 m; friction = max(15 m allowance, the
+    // sized index path); HW C 120, hf = 10.67 L Q^1.852 / (C^1.852 D^4.8704).
+    test('fire zones: zone 1 FP 47.3176 L/s @ 142.536 m / 110 kW (own zone '
+        'governs the relay), zone 2 FP2 @ 146.536 m / 132 kW; BT 90 000 L >= '
+        '85 172 L', () {
       final sz = c.read(sizingProvider);
-      for (final id in ['e_fh_FH_Ha0', 'e_fh_FH_Hb0']) {
-        expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
-        expect(sz[id]!.diameter.inMillimeters, 100);
+      // Zone 1 trunks: riser a also carries the BT fill (backlog Z-1), so its
+      // trunk is NFPA 20 discharge pipe at the full 47.3176 L/s (DN150) and
+      // the riser DN125 (v 3.856); riser b keeps its 500 gpm on DN100.
+      expect(sz['e_fh_FH_Ha0']!.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(sz['e_fh_FH_Ha0']!.diameter.inMillimeters, 150);
+      for (var f = 1; f <= kTowerFireBreakFloor; f++) {
+        final id = 'e_fh_Ha${f - 1}_Ha$f';
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(47.3176, 5e-4),
+            reason: id);
+        expect(sz[id]!.diameter.inMillimeters, 125, reason: id);
       }
+      final fill = sz['e_fh_Ha${kTowerFireBreakFloor}_BT']!;
+      expect(fill.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(fill.diameter.inMillimeters, 125);
+      expect(fill.velocity.metersPerSecond, closeTo(3.856, 5e-4));
+      for (final id in ['e_fh_FH_Hb0', 'e_fh_FH2_H2a', 'e_fh_FH2_H2b']) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4),
+            reason: id);
+        expect(sz[id]!.diameter.inMillimeters, 100, reason: id);
+      }
+      // Zone 2 sprinkler feed main (T2): DN40 from FH2 up S14..S29.
       final feed = {
-        'e_sp_FH_S0',
-        for (var f = 1; f < kTowerFloors; f++) 'e_sp_S${f - 1}_S$f',
+        'e_sp_FH2_S$kTowerFireBreakFloor',
+        for (var f = kTowerFireBreakFloor + 1; f < kTowerFloors; f++)
+          'e_sp_S${f - 1}_S$f',
       };
       for (final id in feed) {
         expect(sz[id]!.flow.inLitersPerSecond, closeTo(4.7140, 5e-4));
         expect(sz[id]!.diameter.inMillimeters, 40, reason: id);
       }
       expect(c.read(sprinklerFeedEnlargedProvider), feed);
-      final b = c.read(fireSystemBasesProvider).single;
-      // 500 + 250 gpm = 47.3176 L/s; 117.2 + 23.145 + 690 / 9.81 = 210.681.
-      // Backlog D-1: each hydrant box sits at its 1.2 m hose-outlet height,
-      // so the index box leg is 0.1 m shorter (2.6 → 2.5 m drop from the
-      // ceiling main) on its DN65 @ 5 L/s: friction 23.150 → 23.145 m. Above
-      // the 15 m allowance the friction is in the head: 210.686 → 210.681 m
-      // (the lift 117.2 m already used the 1.2 m outlet height).
-      expect(
-        b.standpipe!.requiredFlow.inLitersPerSecond,
-        closeTo(47.3176, 5e-4),
-      );
-      expect(b.indexFrictionM, closeTo(23.145, 5e-4));
-      expect(b.head.meters, closeTo(210.681, 5e-4));
-      expect(b.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
-      expect(b.sprinklerGovernsCombined, isFalse);
-      // Hydraulic 9810 x 0.0473176 x 210.681 = 97 795.4 W; / 0.70 =
-      // 139 707.7 W; overload 0.975 x 97 795.4 / 0.595 = 160 253.0 W ⇒ 200 kW.
+      final zones = c.read(fireZoneLinesProvider);
+      expect([for (final z in zones) z.zone.number], [1, 2]);
+      expect([for (final z in zones) (z.lowFloor, z.highFloor)],
+          [(0, 14), (15, 29)]);
+      expect(zones[0].zone.pumpIds, ['FJ', 'FP', 'FPS']);
+      expect(zones[0].zone.fillTankId, kTowerBreakTank);
+      expect(zones[1].zone.pumpIds, ['FJ2', 'FP2', 'FP2S']);
+      expect(zones[1].zone.suctionTankId, kTowerBreakTank);
+      // Lowest / highest terminal: L1 box 1.2 m .. L15 box 57.2 m; L16 box
+      // 60 + 1.2 = 61.2 m .. L30 sprinkler at its ceiling 116 + 3.7 = 119.7 m.
+      expect(zones[0].lowTerminalZ, closeTo(1.2, 1e-9));
+      expect(zones[0].highTerminalZ, closeTo(57.2, 1e-9));
+      expect(zones[1].lowTerminalZ, closeTo(61.2, 1e-9));
+      expect(zones[1].highTerminalZ, closeTo(119.7, 1e-9));
+      final b1 = c.read(firePumpBasisByNodeProvider)[kTowerDutyFirePump]!;
+      final b2 = c.read(firePumpBasisByNodeProvider)[kTowerRelayPump]!;
+      // Zone 1 own: lift 14 x 4.0 + 1.2 = 57.2 m; friction 12.025 m (HYDb14
+      // on riser b) < 15 ⇒ 15; 57.2 + 15 + 70.336 = 142.536 m.
+      expect(b1.staticLiftM, closeTo(57.2, 1e-9));
+      expect(b1.indexFrictionM, closeTo(12.025, 5e-4));
+      expect(b1.ownFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.ownHead!.meters, closeTo(142.536, 5e-4));
+      // Relay fill: zone 2's 47.3176 L/s (a tie — the own flow stands);
+      // head = BT 56.0 m (L15 surface) − FP 0.0 + the fill friction at
+      // 47.3176 L/s (FP→FH 5.7 m + FH→Ha0 3.0 m DN150 at 0.054504 m/m =
+      // 0.4742; Ha0→Ha14 56.0 m + Ha14→BT 7.1 m DN125 at 0.132456 m/m =
+      // 8.3580; Σ 8.8322 m) + 5.0 inlet = 69.832 m < 142.536 ⇒ the own zone
+      // sets both terms.
+      expect(b1.fillTankId, kTowerBreakTank);
+      expect(b1.fillFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.fillHeadM, closeTo(56.0 + 8.8322 + 5.0, 5e-4));
+      expect(b1.fillGovernsFlow, isFalse);
+      expect(b1.fillGovernsHead, isFalse);
+      expect(b1.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b1.head.meters, closeTo(142.536, 5e-4));
+      // Hydraulic 9810 x 0.0473176 x 142.536 = 66 163.4 W; / 0.70 =
+      // 94 519.2 W; overload 0.975 x 66 163.4 / 0.595 = 108 419.0 W ⇒ 110 kW.
+      expect(b1.duty!.hydraulicPower.watts, closeTo(66163.4, 0.05));
+      expect(b1.duty!.shaftPower.watts, closeTo(94519.2, 0.05));
+      expect(b1.rating.overload.shaftPower.watts, closeTo(108419.0, 0.05));
+      expect(b1.rating.selectedMotor.inKiloWatts, closeTo(110, 1e-9));
+      // Jockey 1 % = 0.4732 L/s @ 1.4 x 142.536 + 5 = 204.551 m, 1.5 kW.
+      expect(b1.jockey!.head.meters, closeTo(204.551, 5e-4));
+      expect(b1.jockey!.selectedMotor.inKiloWatts, closeTo(1.5, 1e-9));
+      // Zone 2: datum = FP2 on L15 (56.0 m) → HYDb29 117.2 m: lift 61.2 m;
+      // friction 12.767 < 15 ⇒ 15; 61.2 + 15 + 70.336 = 146.536 m.
+      expect(b2.fillTankId, isNull);
+      expect(b2.staticLiftM, closeTo(61.2, 1e-9));
+      expect(b2.indexFrictionM, closeTo(12.767, 5e-4));
+      expect(b2.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b2.head.meters, closeTo(146.536, 5e-4));
+      // 9810 x 0.0473176 x 146.536 = 68 020.2 W; / 0.70 = 97 171.7 W;
+      // overload 0.975 x 68 020.2 / 0.595 = 111 461.6 W > 110 ⇒ 132 kW.
+      expect(b2.duty!.hydraulicPower.watts, closeTo(68020.2, 0.05));
+      expect(b2.duty!.shaftPower.watts, closeTo(97171.7, 0.05));
+      expect(b2.rating.overload.shaftPower.watts, closeTo(111461.6, 0.05));
+      expect(b2.rating.selectedMotor.inKiloWatts, closeTo(132, 1e-9));
+      expect(b2.jockey!.head.meters, closeTo(210.151, 5e-4));
+      expect(b2.jockey!.selectedMotor.inKiloWatts, closeTo(1.5, 1e-9));
+      // Sprinkler point (zone 2, lift 63.7 m to the L30 ceiling) 119.556 m
+      // <= 146.536 on the enlarged DN40 main: the standpipe governs.
+      expect(b2.sprinklerPointHeadM, closeTo(119.556, 5e-4));
+      expect(b2.sprinklerGovernsCombined, isFalse);
+      // The governing project fire pump is the larger: FP2.
       final d = c.read(firePumpDutyProvider)!;
-      expect(d.hydraulicPower.watts, closeTo(97795.4, 0.05));
-      expect(d.shaftPower.watts, closeTo(139707.7, 0.05));
-      expect(b.rating.overload.shaftPower.watts, closeTo(160253.0, 0.05));
-      expect(b.rating.selectedMotor.inKiloWatts, closeTo(200, 1e-9));
-      expect(
-        c.read(nodeFedLoadsProvider)['FP']!.input,
-        closeTo(222222.2, 0.05),
-      );
-      // Jockey 1 % = 0.4732 L/s @ 1.4 x 210.681 + 5 = 299.954 m, 2.2 kW.
-      final j = c.read(fireJockeyDutyProvider)!;
-      expect(j.flow.inLitersPerSecond, closeTo(0.47318, 5e-5));
-      expect(j.head.meters, closeTo(299.954, 5e-4));
-      expect(j.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
-      // Sprinkler point on the enlarged main: 202.185 m <= 210.681.
-      final net = c.read(sizingNetworkProvider);
-      final project = c.read(projectControllerProvider);
-      final fs = fireIndexPathFrictionM(
-        net: net,
-        system: b.system,
-        pumpId: 'FP',
-        sizing: sz,
-        lengthOf: (e) => _len(c, e),
-        terminals: FireTerminalKind.sprinkler,
-      )!;
-      expect(fs, closeTo(77.389, 5e-4));
-      final sp = sprinklerPumpRatedPoint(
-        remote: c.read(sprinklerRemoteAreaProvider),
-        staticLiftM: b.system.staticLiftM(
-          net,
-          project.building,
-          FireTerminalKind.sprinkler,
-        ),
-        indexPathFriction: Head(fs),
-      );
-      expect(sp.head.meters, closeTo(202.185, 5e-4));
+      expect(d.head.meters, closeTo(146.536, 5e-4));
+      expect(d.selectedMotor.inKiloWatts, closeTo(132, 1e-9));
+      final fed = c.read(nodeFedLoadsProvider);
+      expect(fed['FP']!.input, closeTo(110000 / 0.9, 0.05)); // 122 222.2
+      expect(fed['FP2']!.input, closeTo(132000 / 0.9, 0.05)); // 146 666.7
+      // Break tank: 47.3176 L/s x 30 min = 85 171.8 L; BT 90 000 L ⇒ OK.
+      final bt = c.read(fireBreakTankChecksProvider).single;
+      expect(bt.tankId, kTowerBreakTank);
+      expect(bt.zoneNumber, 2);
+      expect(bt.requiredLitres, closeTo(85171.77, 0.01));
+      expect(bt.capacityLitres, kTowerBreakTankL);
+      expect(bt.verdict, FireTankVerdict.ok);
+      expect(bt.fillFlow!.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(bt.fillEdgeId, 'e_fh_Ha${kTowerFireBreakFloor}_BT');
     });
 
     test('air: 3.7 m3/s office, rectangular ducts on the 5 m/s cap, AHU '
@@ -1923,78 +1974,83 @@ void main() {
       expect(lift.cable.csaMm2, 16);
       expect(lift.cableRaisedForAds, isTrue);
       final sys = c.read(electricalResultProvider);
-      // PP-E: 251 711 + 3 x 17 045.5 + 2000 = 304 847 W, 358 160 VA
-      // (backlog G-2: + the 2000 W / 2000 VA water heater way; was 302 847
-      // W, 356 160 VA). Its heaviest line stays L1 520.5 A (the heater
-      // lands on L2: 510.9 + 8.658 = 519.5 A).
+      // Backlog Z-3 — the fire zones replace the 200 kW FP (+ 2.2 kW jockey)
+      // with FP 110 kW + FJ 1.5 kW (zone 1) and FP2 132 kW + FJ2 1.5 kW
+      // (zone 2); FPS / FP2S are standbys (DF 0). Fire inputs 110 / 0.9 +
+      // 1.5 / 0.9 + 132 / 0.9 + 1.5 / 0.9 = 272 222.2 W (was 222 222.2 +
+      // 2444.4 = 224 666.7): + 47 555.6 W on the MEP board.
+      // PP-E: 299 267 + 3 x 17 045.5 + 2000 = 352 403 W, 414 108 VA (was
+      // 304 847 W, 358 160 VA); heaviest line 601.3 A, incomer 630.
       final ppe = sys.panels[kTowerEssentialPanelId]!;
-      expect(ppe.demandW, 304847);
-      expect(ppe.demandVa, 358160);
-      expect(sorted3(ppe.phaseBalance), [510.8, 519.5, 520.5]);
+      expect(ppe.demandW, 352403);
+      expect(ppe.demandVa, 414108);
+      expect(sorted3(ppe.phaseBalance), [591.6, 600.2, 601.3]);
       expect(ppe.incomer.breaker.ratingA.amperes, 630);
-      // MEP: TP 20 555.6 W ⇒ 34.905 A; FP 222 222.2 W ⇒ 377.353 A, MCCB
-      // 400, FRC 3x240 + 120; Σ 251 711 W, 295 778 VA (backlog G-2: + the
-      // 2000 W water heater, cos φ 1; was 249 711 W, 293 778 VA); heaviest
-      // line 424.0 + 8.658 = 432.7 A (L2); incomer MCCB 500.
+      // MEP: TP 20 555.6 W ⇒ 34.905 A; FP 122 222.2 W ⇒ 207.544 A, MCCB 250,
+      // FRC 3x95 + 50; FP2 146 666.7 W ⇒ 249.053 A, MCCB 250, FRC 3x120 +
+      // 70; Σ 251 711 − 224 666.7 + 272 222.2 = 299 267 W, 351 725 VA;
+      // heaviest line 513.4 A; incomer MCCB 630 (was 500).
       final tp = way(c, _mepBoard, 'mep-node-TP');
       expect(tp.designCurrentExactA, closeTo(34.905, 5e-4));
       final fp = way(c, _mepBoard, 'mep-node-FP');
-      expect(fp.designCurrentExactA, closeTo(377.353, 5e-4));
-      expect(fp.breaker.ratingA.amperes, 400);
-      expect(fp.cable.csaMm2, 240);
-      expect(fp.grounding.peCsaMm2, 120);
+      expect(fp.designCurrentExactA, closeTo(207.544, 5e-4));
+      expect(fp.breaker.ratingA.amperes, 250);
+      expect(fp.cable.csaMm2, 95);
+      expect(fp.grounding.peCsaMm2, 50);
+      final fp2 = way(c, _mepBoard, 'mep-node-$kTowerRelayPump');
+      expect(fp2.designCurrentExactA, closeTo(249.053, 5e-4));
+      expect(fp2.breaker.ratingA.amperes, 250);
+      expect(fp2.cable.csaMm2, 120);
+      expect(fp2.grounding.peCsaMm2, 70);
       final mep = sys.panels[_mepBoard]!;
-      expect(mep.demandW, 251711);
-      expect(mep.demandVa, 295778);
-      expect(mep.demandCurrent.amperes, closeTo(432.7, 1e-9)); // 1 dp
-      expect(mep.incomer.breaker.ratingA.amperes, 500);
-      // LVMDP: 30 x 18 750 + 304 847 = 867 347 W, 1 000 807 VA (backlog
-      // G-2: was 865 347 W, 998 807 VA); L2 1438.5 + 8.66 = 1447.1 A, the
-      // heaviest line L1 1448.1 A unchanged (incomer unchanged).
+      expect(mep.demandW, 299267);
+      expect(mep.demandVa, 351725);
+      expect(mep.demandCurrent.amperes, closeTo(513.4, 1e-9)); // 1 dp
+      expect(mep.incomer.breaker.ratingA.amperes, 630);
+      // LVMDP: 30 x 18 750 + 352 403 = 914 903 W, 1 056 755 VA (was
+      // 867 347 W, 1 000 807 VA); lines [1519.2, 1527.8, 1528.9] A.
       final lv = sys.panels[kTowerMainPanelId]!;
-      expect(lv.demandW, 867347);
-      expect(lv.demandVa, 1000807);
-      expect(sorted3(lv.phaseBalance), [1438.4, 1447.1, 1448.1]);
+      expect(lv.demandW, 914903);
+      expect(lv.demandVa, 1056755);
+      expect(sorted3(lv.phaseBalance), [1519.2, 1527.8, 1528.9]);
       expect(lv.incomer.breaker.ratingA.amperes, 1600);
       expect(lv.incomer.poles, 4);
-      // Transformer 1600 kVA: 1000.8 / 1600 = 62.55 % (backlog G-2: was
-      // 998.8 / 1600 = 62.4 %); LV fault 1 600 000 / (√3 x 400 x 0.04) =
-      // 57 735 A.
+      // Transformer 1600 kVA: 1056.8 / 1600 = 66.05 % (was 62.55 %); LV
+      // fault 1 600 000 / (√3 x 400 x 0.04) = 57 735 A.
       final adv = c.read(electricalAdvancedProvider);
       expect(adv.supply.transformerKva, 1600);
-      expect(adv.supply.demandKva, closeTo(1000.8, 1e-9)); // 1 dp
-      expect(adv.supply.demandKva / 1600 * 100, closeTo(62.55, 0.005));
+      expect(adv.supply.demandKva, closeTo(1056.8, 1e-9)); // 1 dp
+      expect(adv.supply.demandKva / 1600 * 100, closeTo(66.05, 0.005));
       final project = c.read(electricalSizingProjectProvider);
       expect(
         effectiveOriginFaultLevel(project, result: sys).amperes,
         closeTo(57735.0, 0.05),
       );
-      // Genset 800 kVA, start floor 764.77 kVA (FP 1699.49 kVA x 0.45).
+      // Genset 800 kVA (declared, kept); start floor now 504.75 kVA (FP2
+      // 1121.68 kVA x 0.45; was FP 1699.49 x 0.45 = 764.77).
       expect(project.sources!.generator!.kva!.inKilovoltAmperes, 800);
       expect(
         gensetStartFloorFor(project, sys).inKilovoltAmperes,
-        closeTo(764.77, 5e-3),
+        closeTo(504.75, 5e-3),
       );
-      // 250 kvar installed ⇒ PF 0.961 (backlog G-2: the heater adds 2.0 kW
-      // at cos φ 1 — 873.0 kW / 500.0 kvar, uncorrected 0.868, was 871.0
-      // kW, 0.867).
+      // 250 kvar installed ⇒ PF 0.957 (921.7 kW / 530.2 kvar, uncorrected
+      // 0.867; was 0.961 on 873.0 kW).
       expect(adv.powerFactor.installedKvar, 250);
-      expect(adv.powerFactor.existingPf, closeTo(0.961, 5e-4));
-      // Genset backup: 304 847 W = 304.8 kW (was 302.8); 800 kVA unchanged.
-      expect(gensetBackupDemandW(project, sys).watts, closeTo(304847, 0.5));
+      expect(adv.powerFactor.existingPf, closeTo(0.957, 5e-4));
+      // Genset backup: 352 403 W = 352.4 kW (was 304.8).
+      expect(gensetBackupDemandW(project, sys).watts, closeTo(352403, 0.5));
     });
 
-    test('backlog E-4: genset step load 304.8 kW <= 0.6 x 640 = 384 kW, OK',
+    test('backlog E-4: genset step load 352.4 kW <= 0.6 x 640 = 384 kW, OK',
         () {
       // On ATS transfer the 800 kVA set picks up PP-E (lifts, emergency
-      // lighting, the MEP board) in one step: 304 847 W = 304.8 kW (backlog
-      // G-2: + the 2 kW water heater on the MEP board; was 302.8) (the
-      // `gensetBackupDemandW` basis, backup fraction 0). Allowable first
-      // step 0.6 x 800 kVA x 0.8 = 0.6 x 640 = 384 kW >= 304.8 => OK, no
-      // staged pick-up.
+      // lighting, the MEP board) in one step: 352 403 W = 352.4 kW (backlog
+      // Z-3: the two fire zones' pumps; was 304.8) (the `gensetBackupDemandW`
+      // basis, backup fraction 0). Allowable first step 0.6 x 800 kVA x 0.8
+      // = 0.6 x 640 = 384 kW >= 352.4 => OK, no staged pick-up.
       final st = c.read(electricalAdvancedProvider).powerOneLine!
           .gensetStepLoad!;
-      expect(st.stepKw, closeTo(304.847, 1e-9));
+      expect(st.stepKw, closeTo(352.403, 1e-9));
       expect(st.ratedKw, closeTo(640, 1e-9));
       expect(st.allowableKw, closeTo(384, 1e-9));
       expect(st.exceeded, isFalse);
@@ -2020,44 +2076,53 @@ void main() {
       expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
-      // Backlog A-3 — churn 1.4 x 210.681 = 294.954 m x 9.81 = 2893.5 kPa
-      // (backlog D-1: 294.961 / 2893.6 before the 0.1 m shorter box leg)
-      // > 2413: no class permits one zone, the zone-split WARNING stays.
-      expect(n('fire-system-over-pressure:FP'), 1);
-      final cls = c.read(firePressureClassesProvider).single;
-      expect(cls.churnKpa, closeTo(294.954 * 9.81, 0.05));
-      expect(cls.pressureClass, FirePressureClass.zoneRequired);
-      final zw = c
-          .read(designIssuesProvider)
-          .singleWhere((i) => i.kind == 'fire-system-over-pressure:FP');
-      expect(zw.message, contains('vertical pressure zones'));
-      // Backlog A-2 — FT 120 000 L >= 47.3176 L/s x 1800 s = 85 172 L.
+      // Backlog Z-3 — each zone's own churn is below the 350 psi single-zone
+      // maximum, so the tower no longer warns `fire-system-over-pressure`
+      // (was churn 1.4 x 210.681 = 294.954 m = 2893.5 kPa > 2413). Zone 1:
+      // 1.4 x 142.536 = 199.551 m x 9.81 = 1957.6 kPa (283.9 psi); zone 2:
+      // 1.4 x 146.536 = 205.151 m x 9.81 = 2012.5 kPa (291.9 psi); both
+      // > 1600 ⇒ PN25.
+      expect(kinds.where((k) => k.contains('system-over-pressure')), isEmpty);
+      final cls = c.read(firePressureClassesProvider);
+      expect([for (final l in cls) l.pumpId], ['FP', kTowerRelayPump]);
+      expect(cls[0].churnKpa, closeTo(199.551 * 9.81, 0.05));
+      expect(cls[1].churnKpa, closeTo(205.151 * 9.81, 0.05));
+      for (final l in cls) {
+        expect(l.pressureClass, FirePressureClass.pn25);
+      }
+      // Backlog A-2 — FT 120 000 L >= 47.3176 L/s x 1800 s = 85 172 L; the
+      // roof-typed break tank is judged by backlog Z-2 only (BT 90 000 L >=
+      // 85 172 L ⇒ no `fire-break-tank-*`).
       expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
+      expect(kinds.where((k) => k.startsWith('fire-break-tank-')), isEmpty);
       final ft = c.read(fireTankReservesProvider).single;
       expect(ft.tankId, 'FT');
       expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
       expect(ft.capacityLitres, 120000);
       expect(ft.verdict, FireTankVerdict.ok);
-      // Backlog A-3 — static 9.81 x (294.954 - (4 f + 1.2)) > 1207 for
-      // f <= 42: all 60 hose valves designated pressure-regulating (info)
-      // beside the zone warning. z = the box node's own datum 4 f + 1.2
-      // (backlog D-1: the same 1.2 m the node, its leg and the lift read):
-      // L1 9.81 x 293.754 = 2881.727 kPa, L30 9.81 x (294.954 - 117.2) =
-      // 9.81 x 177.754 = 1743.767 kPa (both 0.07 kPa below the 294.961 m
-      // churn's 2881.796 / 1743.836).
-      expect(n('standpipe-prv-hose-valves:FP:0-29'), 1);
+      // The break tank drawn on Lantai 15 is read at that floor's surface.
+      expect(n('roof-tank-below-top:$kTowerBreakTank'), 1);
+      // Backlog A-3 — hose valves above 1207 kPa static at churn are
+      // designated pressure-regulating, per zone: zone 1 L1 9.81 x (199.551
+      // − 1.2) = 1945.8 kPa (282.2 psi) .. L15 9.81 x (199.551 − 57.2) =
+      // 1396.5 kPa; zone 2 (datum 56.0 m) L16 9.81 x (205.151 − 5.2) =
+      // 1961.5 kPa (284.5 psi) .. L30 9.81 x (205.151 − 61.2) = 1412.2 kPa.
+      expect(n('standpipe-prv-hose-valves:FP:0-14'), 1);
+      expect(n('standpipe-prv-hose-valves:$kTowerRelayPump:15-29'), 1);
       expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
           isEmpty);
-      final r = c.read(standpipeOutletOverPressureProvider).single;
-      expect(r.maxKpa, closeTo(9.81 * (294.954 - 1.2), 0.1));
-      expect(r.minKpa, closeTo(9.81 * (294.954 - 4 * 29 - 1.2), 0.1));
-      expect(r.maxKpa, closeTo(2881.727, 2e-3));
-      expect(r.minKpa, closeTo(1743.767, 2e-3));
+      final r = c.read(standpipeOutletOverPressureProvider);
+      expect(r, hasLength(2));
+      expect(r[0].maxKpa, closeTo(9.81 * (199.551 - 1.2), 0.1));
+      expect(r[0].minKpa, closeTo(9.81 * (199.551 - 57.2), 0.1));
+      expect(r[1].maxKpa, closeTo(9.81 * (205.151 - 5.2), 0.1));
+      expect(r[1].minKpa, closeTo(9.81 * (205.151 - 61.2), 0.1));
       expect(c.read(prvHoseValvesProvider), hasLength(60));
       // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
       // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
       expect(n('electrical:cable-raised-for-ads'), 6);
-      expect(n('electrical:fire-pump-protection'), 3);
+      // Backlog Z-3 — six fire pump ways (FP / FPS / FJ, FP2 / FP2S / FJ2).
+      expect(n('electrical:fire-pump-protection'), 6);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
       expect(n('downfeed-below-target'), 1);
       // Backlog F-4 — every duct is auto-sized within its limits: no

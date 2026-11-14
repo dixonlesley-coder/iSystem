@@ -110,8 +110,12 @@ Map<String, EdgeSizing> _size(ReferenceBuilding b, [Network? drawn]) {
 }
 
 void main() {
+  // Backlog Z-3 — T1 / T2 were found on the SINGLE-zone tower drawing (one
+  // ground pump room serving all 30 floors); they stay pinned on it
+  // (`fireBreakFloor: null`). The zoned fixture is pinned in
+  // reference_tower_test.dart / reference_tower_app_test.dart.
   group('T1 — the discharge raise ends at the header', () {
-    final sz = _size(buildTower());
+    final sz = _size(buildTower(fireBreakFloor: null));
     double q(String id) => sz[id]!.flow.inLitersPerSecond;
     double dn(String id) => sz[id]!.diameter.inMillimeters;
 
@@ -144,7 +148,7 @@ void main() {
   });
 
   group('T2 — the combined system enlarges its sprinkler feed main', () {
-    final tower = buildTower();
+    final tower = buildTower(fireBreakFloor: null);
     final remote = remoteAreaHydraulics(
         design: designSprinklerSystem(hazard: FireHazardClass.lightHazard));
     SprinklerFeedEnlargement run(Network net) =>
