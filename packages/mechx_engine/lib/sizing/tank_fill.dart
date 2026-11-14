@@ -24,7 +24,11 @@ export '../standards/sni.dart'
         kGroundTankRefillHoursDefault,
         kRoofTankRefillHoursDefault,
         kTankInletResidualHeadM,
-        kDefaultMainsHeadM;
+        kDefaultMainsHeadM,
+        kGroundStorageDaysDefault,
+        kRoofStorageFractionDefault,
+        kTankSizeLadderLitres,
+        standardTankLitres;
 
 /// True for a ground or roof storage tank node.
 bool isStorageTankNode(NetNode? n) =>
@@ -262,4 +266,129 @@ String formatReserveDays(double days) {
   final h = days * 24;
   return '${days.toStringAsFixed(1)} days '
       '(${h < 10 ? h.toStringAsFixed(1) : h.toStringAsFixed(0)} h)';
+}
+
+/// Backlog W-5 (2026-11-14) — one auto-sized tank capacity and its
+/// arithmetic.
+class AutoTankCapacity {
+  final String tankId;
+
+  /// True when sized on the roof fraction, false on the ground days.
+  final bool roofTarget;
+
+  /// The tank's share of the daily demand (0..1) among tanks of its role.
+  final double share;
+
+  /// The target: ground days, or the roof fraction.
+  final double target;
+
+  /// share x daily demand x target (litres), before the ladder.
+  final double rawLitres;
+
+  /// [rawLitres] rounded up to [kTankSizeLadderLitres].
+  final double litres;
+
+  const AutoTankCapacity({
+    required this.tankId,
+    required this.roofTarget,
+    required this.share,
+    required this.target,
+    required this.rawLitres,
+    required this.litres,
+  });
+}
+
+/// Backlog W-5 — the auto capacity of every DOMESTIC storage tank (a cold-
+/// water pipe, no fire pipe) with no entered capacity. Role: a roof tank in
+/// a cold-water system that also holds a ground tank takes [roofFraction];
+/// every other tank (a ground tank, a system's only tank, a mains-fed roof
+/// tank beside another roof tank) takes [groundDays]. Share: the units on
+/// the tank's cold-water edges whose solved flow LEAVES it ([flowFromOf];
+/// mirrored standby legs [excludeEdgeIds] skipped) over the sum for every
+/// domestic tank of the same role (entered-capacity tanks included). An
+/// entered capacity always wins (the tank is not returned); a fire tank is
+/// never auto-sized. Empty without a daily demand. Order-independent (sums
+/// over sorted ids).
+Map<String, AutoTankCapacity> autoTankCapacities({
+  required Network net,
+  required Map<String, double> edgeUnits,
+  required String? Function(String edgeId) flowFromOf,
+  required double? dailyLitres,
+  double groundDays = kGroundStorageDaysDefault,
+  double roofFraction = kRoofStorageFractionDefault,
+  Set<String> excludeEdgeIds = const {},
+}) {
+  if (dailyLitres == null || dailyLitres <= 0) return const {};
+  final cold = <String, List<NetEdge>>{};
+  final fire = <String>{};
+  for (final e in net.edges) {
+    if (e.service == ServiceType.fireHydrant ||
+        e.service == ServiceType.fireSprinkler) {
+      fire
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+    if (e.service != ServiceType.coldWater) continue;
+    (cold[e.fromId] ??= []).add(e);
+    (cold[e.toId] ??= []).add(e);
+  }
+  final tanks = [
+    for (final n in net.nodes)
+      if (isStorageTankNode(n) && cold.containsKey(n.id) && !fire.contains(n.id))
+        n,
+  ]..sort((a, b) => a.id.compareTo(b.id));
+  if (!tanks.any((t) => (t.tankCapacityLitres ?? 0) <= 0)) return const {};
+  // The cold-water system (component) of each tank.
+  final compOf = <String, int>{};
+  var next = 0;
+  for (final t in tanks) {
+    if (compOf.containsKey(t.id)) continue;
+    final id = next++;
+    final stack = [t.id];
+    final seen = <String>{t.id};
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      if (net.nodeById(n) case final nn? when isStorageTankNode(nn)) {
+        compOf[n] = id;
+      }
+      for (final e in cold[n] ?? const <NetEdge>[]) {
+        final o = e.fromId == n ? e.toId : e.fromId;
+        if (seen.add(o)) stack.add(o);
+      }
+    }
+  }
+  final hasGround = <int>{
+    for (final t in tanks)
+      if (t.component == NodeComponent.groundTank) compOf[t.id]!,
+  };
+  bool roofRole(NetNode t) =>
+      t.component == NodeComponent.roofTank && hasGround.contains(compOf[t.id]);
+  double unitsOf(NetNode t) => cold[t.id]!
+      .where((e) => flowFromOf(e.id) == t.id && !excludeEdgeIds.contains(e.id))
+      .fold<double>(0, (a, e) => a + (edgeUnits[e.id] ?? 0.0));
+  final roofSum =
+      tanks.where(roofRole).fold<double>(0, (a, t) => a + unitsOf(t));
+  final groundSum = tanks
+      .where((t) => !roofRole(t))
+      .fold<double>(0, (a, t) => a + unitsOf(t));
+  final out = <String, AutoTankCapacity>{};
+  for (final t in tanks) {
+    if ((t.tankCapacityLitres ?? 0) > 0) continue;
+    final roof = roofRole(t);
+    final sum = roof ? roofSum : groundSum;
+    if (sum <= 0) continue;
+    final share = unitsOf(t) / sum;
+    if (share <= 0) continue;
+    final target = roof ? roofFraction : groundDays;
+    final raw = share * dailyLitres * target;
+    out[t.id] = AutoTankCapacity(
+      tankId: t.id,
+      roofTarget: roof,
+      share: share,
+      target: target,
+      rawLitres: raw,
+      litres: standardTankLitres(raw),
+    );
+  }
+  return out;
 }

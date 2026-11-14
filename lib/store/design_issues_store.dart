@@ -1550,11 +1550,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
-  // ── 5a-bis-3. Cold-water tank fill basis (backlog W-1) ──────────────────
-  // Judge-only, located on the tank: a tank whose fill pipe is DRAWN but
-  // whose capacity is not entered keeps the demand basis (the diversified
-  // peak it distributes); an info says so. Never a fabricated capacity.
-  final sizingNow = ref.watch(sizingProvider);
+  // ── 5a-bis-3. Cold-water tank capacity / fill (backlog W-3, W-5) ────────
+  // Judge-only, located on the tank.
+  final dailyForAuto = ref.watch(dailyDemandLitresProvider);
   for (final t in ref.watch(tankFillsProvider)) {
     // Backlog W-3 — a roof tank no drawn pipe fills is never given an
     // invented fill: an info locating it.
@@ -1569,31 +1567,16 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       ));
       continue;
     }
-    if (!t.fillDrawn || t.fillFlow != null) continue;
-    double inflow = 0;
-    for (final e in net.edges) {
-      if (e.service != ServiceType.coldWater) continue;
-      if (e.fromId != t.tankId && e.toId != t.tankId) continue;
-      final sz = sizingNow[e.id];
-      if (sz == null || sz.flowFromId == null || sz.flowFromId == t.tankId) {
-        continue;
-      }
-      if (sz.flow.cubicMetersPerSecond > inflow) {
-        inflow = sz.flow.cubicMetersPerSecond;
-      }
-    }
-    infos.add(DesignIssue(
-      severity: IssueSeverity.info,
-      kind: 'tank-fill-capacity-unset:${t.tankId}',
-      title: str(StringKey.issueTankFillCapacityUnsetTitle),
-      message: str.format(StringKey.issueTankFillCapacityUnsetMessage, {
-        'tank': fireTankTags[t.tankId] ?? t.tankId,
-        'flow': FlowRate(inflow).inLitersPerSecond.toStringAsFixed(2),
-        'hours': t.refillHours.toStringAsFixed(t.refillHours ==
-                t.refillHours.roundToDouble()
-            ? 0
-            : 1),
-      }),
+    // Backlog W-5 — a domestic tank with no capacity entered is auto-sized
+    // from the daily demand; with no population it cannot be: a WARNING on
+    // the tank (sizing keeps the peak-demand fallback, nothing fabricated).
+    if (t.capacityLitres != null || dailyForAuto != null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'tank-capacity-unset:${t.tankId}',
+      title: str(StringKey.issueTankCapacityUnsetTitle),
+      message: str.format(StringKey.issueTankCapacityUnsetMessage,
+          {'tank': fireTankTags[t.tankId] ?? t.tankId}),
       locate: IssueLocation(t.sheetId, nodeId: t.tankId),
     ));
   }

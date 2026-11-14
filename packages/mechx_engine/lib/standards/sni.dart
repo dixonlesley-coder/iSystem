@@ -140,6 +140,35 @@ const double kTankInletResidualHeadM = 5.0;
 /// varies by city and hour; NOT an SNI clause.
 const double kDefaultMainsHeadM = 10.0;
 
+/// Backlog W-5 (2026-11-14) — the default GROUND storage target: days of
+/// the daily demand an auto-sized ground tank (or a system's only tank)
+/// holds. // VERIFY — design policy, NOT an SNI clause; surfaced via
+/// [SniProfile.tankStorageTargets].
+const double kGroundStorageDaysDefault = 1.0;
+
+/// Backlog W-5 — the default ROOF tank target: the fraction of the daily
+/// demand an auto-sized roof tank fed from a ground tank holds. // VERIFY.
+const double kRoofStorageFractionDefault = 0.20;
+
+/// Backlog W-5 — the standard tank sizes an auto capacity rounds UP to
+/// (litres); above the last entry: 5 m3 steps to 100 m3, then 10 m3 steps
+/// ([standardTankLitres]). // VERIFY — common Indonesian fibreglass / HDPE /
+/// panel tank sizes.
+const List<double> kTankSizeLadderLitres = [
+  250, 500, 650, 1000, 1200, 2000, 3000, 5000, 8000, 10000,
+];
+
+/// Backlog W-5 — [rawLitres] rounded UP to the standard ladder.
+double standardTankLitres(double rawLitres) {
+  for (final l in kTankSizeLadderLitres) {
+    if (rawLitres <= l + 1e-9) return l;
+  }
+  if (rawLitres <= 100000 + 1e-9) {
+    return (rawLitres / 5000 - 1e-12).ceil() * 5000.0;
+  }
+  return (rawLitres / 10000 - 1e-12).ceil() * 10000.0;
+}
+
 /// Backlog W-4 (2026-11-14) — the default DAILY WATER DEMAND per person
 /// (litres / person / day) per occupancy class, the SNI 03-7065 "pemakaian
 /// air rata-rata per orang per hari" method: private (rumah tinggal) 120,
@@ -529,6 +558,26 @@ class SniProfile implements StandardsProfile {
             'Confirm against the project brief and the PDAM.',
       );
 
+  /// Backlog W-5 (2026-11-14) — the auto tank capacity basis: storage
+  /// targets and the standard size ladder. `notAnSniClause` like
+  /// [tankFillBasis].
+  StandardValue<Object?> get tankStorageTargets => const StandardValue<Object?>(
+        'auto tank capacity: ground $kGroundStorageDaysDefault day(s) of the '
+        'daily demand, roof tank ${kRoofStorageFractionDefault * 100} % of it '
+        '(a system\'s only tank: the ground target); rounded up to 250 / 500 '
+        '/ 650 / 1000 / 1200 / 2000 / 3000 / 5000 / 8000 / 10 000 L, then 5 m3 '
+        'to 100 m3, then 10 m3 steps',
+        unit: 'table',
+        citation: 'storage targets and standard tank sizes (design policy, NOT '
+            'SNI figures)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A domestic tank with no capacity entered is sized from its '
+            'share of the daily demand (fixture units it serves among tanks '
+            'of its role) x its target, rounded up to the ladder; an entered '
+            'capacity always wins. Both targets are editable on the Building '
+            'page. Confirm against the project brief.',
+      );
+
   /// Backlog W-4 (2026-11-14) — the per-person daily water demand table
   /// ([dailyDemandPerPersonDefault]) behind the daily demand and the
   /// domestic water reserve in days (`WaterReserve`).
@@ -624,6 +673,8 @@ class SniProfile implements StandardsProfile {
         tankFillBasis,
         // Backlog W-4 — the per-person daily demand table.
         dailyDemandPerPersonTable,
+        // Backlog W-5 — the auto tank capacity basis.
+        tankStorageTargets,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(

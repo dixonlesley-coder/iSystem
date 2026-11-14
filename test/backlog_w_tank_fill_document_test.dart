@@ -6,7 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/standards/sni.dart' show kDefaultMainsHeadM;
+import 'package:mechx_engine/standards/sni.dart'
+    show
+        kDefaultMainsHeadM,
+        kGroundStorageDaysDefault,
+        kRoofStorageFractionDefault;
 import 'package:mechx_engine/units.dart';
 
 NetNode _tank(String id, {double? l, double? h}) => NetNode(
@@ -62,5 +66,18 @@ void main() {
     expect(DesignSettings.fromJson(const {}).mainsHeadM, kDefaultMainsHeadM);
     expect(DesignSettings.fromJson(const {'mainsHead_m': 500}).mainsHeadM,
         100.0);
+  });
+
+  test('W-5: the storage targets round-trip; defaults write no key', () {
+    const set = DesignSettings(groundStorageDays: 1.5, roofStorageFraction: 0.3);
+    final back = DesignSettings.fromJson(set.toJson());
+    expect(back.groundStorageDays, 1.5);
+    expect(back.roofStorageFraction, 0.3);
+    final def = const DesignSettings().toJson();
+    expect(def.containsKey('ground_storage_days'), isFalse);
+    expect(def.containsKey('roof_storage_frac'), isFalse);
+    final old = DesignSettings.fromJson(const {});
+    expect(old.groundStorageDays, kGroundStorageDaysDefault);
+    expect(old.roofStorageFraction, kRoofStorageFractionDefault);
   });
 }

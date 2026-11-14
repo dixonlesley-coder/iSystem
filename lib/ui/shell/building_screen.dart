@@ -26,6 +26,8 @@ import '../../store/app_state.dart'
         demandPerPersonProvider,
         demandPerPersonOverrideProvider,
         dailyDemandLitresProvider,
+        groundStorageDaysProvider,
+        roofStorageFractionProvider,
         statusMessageProvider;
 import '../../store/floor_remap.dart'
     show FloorPlacedWorkCount, floorPlacedWorkCount;
@@ -661,6 +663,8 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     final perPersonOverride = ref.watch(demandPerPersonOverrideProvider);
     final daily = ref.watch(dailyDemandLitresProvider);
     final reserve = ref.watch(waterReserveProvider);
+    final groundDays = ref.watch(groundStorageDaysProvider);
+    final roofFraction = ref.watch(roofStorageFractionProvider);
     final slope = ref.watch(drainageSlopeProvider);
     final hwFlow = ref.watch(hotWaterFlowTempProvider);
     final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
@@ -965,6 +969,62 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
               ),
             ],
           ),
+          // Backlog W-5 — the auto tank capacity targets.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputGroundStorageDays))),
+              SteppedValueField(
+                display: '${groundDays.toStringAsFixed(2)} d',
+                editSeed: groundDays.toStringAsFixed(2),
+                label: context
+                    .strings(StringKey.buildingInputGroundStorageDays),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.1,
+                max: 30,
+                onDecrement: () =>
+                    setGroundStorageDaysUndoable(ref.read, groundDays - 0.25),
+                onIncrement: () =>
+                    setGroundStorageDaysUndoable(ref.read, groundDays + 0.25),
+                onSubmit: (v) {
+                  if (v != null) setGroundStorageDaysUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingInputRoofStorageFraction))),
+              SteppedValueField(
+                display: roofFraction.toStringAsFixed(2),
+                editSeed: roofFraction.toStringAsFixed(2),
+                label: context
+                    .strings(StringKey.buildingInputRoofStorageFraction),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.05,
+                max: 5,
+                onDecrement: () => setRoofStorageFractionUndoable(
+                    ref.read, roofFraction - 0.05),
+                onIncrement: () => setRoofStorageFractionUndoable(
+                    ref.read, roofFraction + 0.05),
+                onSubmit: (v) {
+                  if (v != null) setRoofStorageFractionUndoable(ref.read, v);
+                },
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionStorageTargets)),
           caption(daily == null
               ? context.strings(StringKey.buildingInputCaptionDailyDemandUnset)
               : context.strings.format(StringKey.buildingInputCaptionDailyDemand,

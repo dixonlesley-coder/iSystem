@@ -64,7 +64,7 @@ _(empty)_
 - Regression tests for its review fixes: `packages/mechx_engine/test/reference_shophouse_regression_test.dart` (F2, F3) and `test/reference_shophouse_regression_test.dart` (F1, F4).
 - Run either reference test with `REF_DUMP=1` to print every solved figure.
 
-**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 6 × `tank-fill-capacity-unset` (no tank capacity entered, backlog W-1), 5 `// VERIFY` advisories. Expected absent: `non-selective` (B-1: the unit feeders grow to 10 mm² / 40 A and the MEP feeder to 5 × 6 / 32 A for the 1.6 × floor), `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
+**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 5 `// VERIFY` advisories (the 6 W-1 `tank-fill-capacity-unset` infos are gone since W-5 auto-sizes every tank). Expected absent: `non-selective` (B-1: the unit feeders grow to 10 mm² / 40 A and the MEP feeder to 5 × 6 / 32 A for the 1.6 × floor), `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
 
 **Fixed by its review (2026-11-13).**
 - **F1:** units B and C were solved as upfeed "extra supply components" from their ground tanks (no gravity field, RT at −146 kPa, booster sized 36.998 m). Every roof-tank component of a downfeed project is now its own downfeed system (`extraDownfeedTanksProvider`); B = C = A.
@@ -78,7 +78,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-14)
 
-- **(c) Fill line sized on peak demand — backlog W-1 / W-3.** A tank now fills at capacity / refill time (`tankFillFlow`; ground 4 h, roof 1 h, `// VERIFY`). No shophouse tank has a capacity, so every meter feed and fill line keeps the peak basis (12.5 UBAP, 0.56389 L/s, DN20) and the Review raises 6 deliberate infos `tank-fill-capacity-unset:GT_A..C / RT_A..C`. The transfer pump head now owes each roof tank's float valve `kTankInletResidualHeadM` 5.0 m (W-3): TP_A/B/C 14.884 → 19.884 m (12.000 lift + 0.18026 x 16.0 = 2.884 friction + 5.0), P_h 82.3 → 110.0 W, shaft 117.6 → 157.1 W, motor 0.37 kW and the 411.1 W MEP way unchanged. Each unit has one roof tank on its own transfer pump, so W-3's sum / worst rule is the single tank. Mains (W-2): each meter −0.5 + 3.5 m at 0.56389 L/s DN20 (0.63093 m) + 5.0 = 5.131 m <= 10 m, no warning.
+- **(c) Fill line sized on peak demand — backlog W-1 / W-3.** A tank now fills at capacity / refill time (`tankFillFlow`; ground 4 h, roof 1 h, `// VERIFY`). No shophouse tank has a capacity, so every meter feed and fill line keeps the peak basis (12.5 UBAP, 0.56389 L/s, DN20) and the Review raises 6 deliberate infos `tank-fill-capacity-unset:GT_A..C / RT_A..C`. The transfer pump head now owes each roof tank's float valve `kTankInletResidualHeadM` 5.0 m (W-3): TP_A/B/C 14.884 → 19.884 m (12.000 lift + 0.18026 x 16.0 = 2.884 friction + 5.0), P_h 82.3 → 110.0 W, shaft 117.6 → 157.1 W, motor 0.37 kW and the 411.1 W MEP way unchanged. Each unit has one roof tank on its own transfer pump, so W-3's sum / worst rule is the single tank. Mains (W-2): each meter −0.5 + 3.5 m at 0.56389 L/s DN20 (0.63093 m) + 5.0 = 5.131 m <= 10 m, no warning. (Superseded by W-5: the tanks are now auto-sized — see 'Daily water demand and water reserve'.)
 
 ### Backlog closed (2026-11-13)
 
@@ -130,7 +130,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-14)
 
-- **(d) Mains pressure — backlog W-2.** The mains head at the meter is a Building-page input (default 10 m, `// VERIFY`). WM → GT is judged: lift GT 0.0 − WM 0.5 = −0.5 m + 3.5 m at 3.91733 L/s on DN50 (Hazen–Williams C150: 0.2636 m) + 5.0 m inlet residual = 4.764 m <= 10 m, no `mains-pressure-insufficient`. GT has no capacity, so the meter feed keeps the peak basis (96 UBAP, 3.91733 L/s DN50) and the deliberate info `tank-fill-capacity-unset:GT` is raised (W-1). No pin moved.
+- **(d) Mains pressure — backlog W-2.** The mains head at the meter is a Building-page input (default 10 m, `// VERIFY`). WM → GT is judged: lift GT 0.0 − WM 0.5 = −0.5 m + 3.5 m at 3.91733 L/s on DN50 (Hazen–Williams C150: 0.2636 m) + 5.0 m inlet residual = 4.764 m <= 10 m, no `mains-pressure-insufficient`. GT has no capacity, so the meter feed keeps the peak basis (96 UBAP, 3.91733 L/s DN50) and the deliberate info `tank-fill-capacity-unset:GT` is raised (W-1). No pin moved. (Superseded by W-5: GT is auto-sized to 10 000 L.)
 
 ### Backlog closed (2026-11-13)
 
@@ -253,7 +253,8 @@ _(empty)_
 ## Daily water demand and water reserve (backlog W-4, 2026-11-14)
 
 Each fixture carries a population (`ReferenceBuilding.population`, set by the
-app tests on the Building-page input). Daily demand = population x the
+app tests on the Building-page input); a tank without an entered capacity is
+auto-sized (backlog W-5). Daily demand = population x the
 occupancy's per-person figure (private 120, public 50 L/person/day, `// VERIFY`
 SNI 03-7065 style). Water reserve = Σ domestic tank capacity / daily demand
 (`waterReserveProvider`; fire-only tanks FT are not domestic). Informational:
@@ -262,11 +263,23 @@ judged.
 
 | Building | Population (basis) | L/person/day | Daily m3 | Domestic storage | Reserve |
 |---|---|---|---|---|---|
-| House | 5 (one household) | 120 | 0.60 | RT no capacity: excluded | no figure |
-| Shophouse | 15 (5 per unit x 3) | 120 | 1.80 | GT_A..C, RT_A..C no capacity: all 6 excluded | no figure |
-| Office | 200 (50 staff x 4 floors) | 50 | 10.00 | GT no capacity: excluded | no figure |
-| Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 | 30 000 / 11 520 = 2.6 days |
-| Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 60 000 + RT 30 000 = 90.0 m3 | 90 000 / 150 000 = 0.6 days (14 h) |
+| House | 5 (one household) | 120 | 0.60 | RT auto 650 L (only tank: 600 x 1.0 → 650) | 650 / 600 = 1.08 days |
+| Shophouse | 15 (5 per unit x 3) | 120 | 1.80 | GT auto 650 L (1/3 x 1800 x 1.0 = 600 → 650), RT auto 250 L (1/3 x 1800 x 0.20 = 120 → 250), per unit: 2.7 m3 | 2700 / 1800 = 1.5 days |
+| Office | 200 (50 staff x 4 floors) | 50 | 10.00 | GT auto 10 000 L (only domestic tank: 10 000 x 1.0) | 1.0 day |
+| Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 (entered) | 30 000 / 11 520 = 2.6 days |
+| Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 60 000 + RT 30 000 = 90.0 m3 (entered) | 90 000 / 150 000 = 0.6 days (14 h) |
+
+**Auto capacities (backlog W-5, 2026-11-14).** House / shophouse / office enter no
+capacity, so their tanks are auto-sized from their populations. Moved: shophouse
+meter feed WM → GT 0.56389 → 0.045139 L/s (650 / 14 400), DN20 → DN15 (v 0.255);
+fill line 0.56389 → 0.069444 L/s (250 / 3600), DN20 → DN15 (v 0.393); TP 0.56389 L/s
+@ 19.884 m → 0.069444 L/s @ 17.242 m (12.0 + 0.015133 x 16.0 + 5.0), P_h 110.0 →
+11.7 W, 0.37 kW / 411.1 W way unchanged; W-2 meter 5.131 → 4.524 m. Office meter
+feed 3.91733 L/s DN50 → 0.69444 L/s DN25 (v 1.415); WM upfeed residual −19.431 →
+−13.979 kPa; DN50 run BOM 10.2 → 6.7 m; W-2 4.764 → 4.813 m; P1 unchanged. House:
+no fill drawn, only the capacity / reserve. The 6 shophouse and 1 office
+`tank-fill-capacity-unset` infos are gone (no `tank-capacity-unset`: each has a
+population). Apartment / tower unchanged (entered capacities).
 
 None raises `daily-demand-unset` (each has a population).
 

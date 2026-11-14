@@ -825,8 +825,6 @@ enum StringKey {
   issueFireTankUndersizedMessage,
   issueFireTankUnsetTitle,
   issueFireTankUnsetMessage,
-  issueTankFillCapacityUnsetTitle,
-  issueTankFillCapacityUnsetMessage,
   issueRoofTankFillUndrawnTitle,
   issueRoofTankFillUndrawnMessage,
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
@@ -1173,6 +1171,11 @@ enum StringKey {
   reserveHeadlineLabel,
   reserveHeadlineValue, // {days} {stored} {daily}
   reserveExcluded, // {n}
+  buildingInputGroundStorageDays,
+  buildingInputRoofStorageFraction,
+  buildingInputCaptionStorageTargets,
+  issueTankCapacityUnsetTitle,
+  issueTankCapacityUnsetMessage, // {tank}
   issueMainsPressureTitle,
   issueMainsPressureMessage,
   buildingInputCaptionSlope,
@@ -2500,10 +2503,6 @@ const Map<StringKey, String> _en = {
   StringKey.issueRoofTankFillUndrawnTitle: 'Roof tank fill not drawn',
   StringKey.issueRoofTankFillUndrawnMessage:
       'Roof tank {tank} has no drawn pipe filling it (no transfer / fill line flows into it), so no fill pipework or transfer duty is sized for it. Draw its fill from the transfer main or the mains.',
-  StringKey.issueTankFillCapacityUnsetTitle:
-      'Tank capacity not set: fill sized on peak demand',
-  StringKey.issueTankFillCapacityUnsetMessage:
-      'Tank {tank} has no capacity entered, so its fill pipe is sized on the diversified peak demand it distributes ({flow} L/s), not on a fill rate. Enter the capacity: the fill flow is then capacity / refill time ({hours} h).',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
       'reaches {churn} kPa, above the {limit} kPa (350 psi) maximum of a '
@@ -2847,6 +2846,13 @@ const Map<StringKey, String> _en = {
   StringKey.issueDailyDemandUnsetTitle: 'Population not set: no water-reserve figure',
   StringKey.issueDailyDemandUnsetMessage:
       'No population is entered on the Building page, so there is no daily water demand and no water-reserve (days) figure. Enter the population (persons).',
+  StringKey.buildingInputGroundStorageDays: 'Ground storage (days of demand)',
+  StringKey.buildingInputRoofStorageFraction: 'Roof tank (fraction of demand)',
+  StringKey.buildingInputCaptionStorageTargets:
+      'A tank with no capacity entered is auto-sized: its share of the daily demand x the target, rounded up to a standard size. An entered capacity always wins. // VERIFY.',
+  StringKey.issueTankCapacityUnsetTitle: 'Tank capacity unknown',
+  StringKey.issueTankCapacityUnsetMessage:
+      'Tank {tank} has no capacity entered and none can be auto-sized: the population is not set, so there is no daily demand. Its fill pipe stays on the peak-demand basis. Enter the population (Building page) or the tank capacity.',
   StringKey.reserveHeadlineLabel: 'Water reserve',
   StringKey.reserveHeadlineValue: '{days} ({stored} m3 stored / {daily} m3 per day)',
   StringKey.reserveExcluded: 'Reserve excludes {n} tank(s) with no capacity set',
@@ -4243,10 +4249,6 @@ const Map<StringKey, String> _id = {
   StringKey.issueRoofTankFillUndrawnTitle: 'Pengisian tangki atap belum digambar',
   StringKey.issueRoofTankFillUndrawnMessage:
       'Tangki atap {tank} tidak memiliki pipa pengisi yang digambar (tidak ada pipa transfer / pengisi yang mengalir ke dalamnya), sehingga tidak ada pipa pengisi atau tugas pompa transfer yang diukur untuknya. Gambar pengisiannya dari pipa transfer atau PDAM.',
-  StringKey.issueTankFillCapacityUnsetTitle:
-      'Kapasitas tangki belum diisi: pengisian diukur dari kebutuhan puncak',
-  StringKey.issueTankFillCapacityUnsetMessage:
-      'Tangki {tank} belum diisi kapasitasnya, sehingga pipa pengisinya diukur dari kebutuhan puncak yang dibagikannya ({flow} L/s), bukan dari laju pengisian. Isi kapasitasnya: debit pengisian = kapasitas / waktu pengisian ({hours} jam).',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
       'rating) mencapai {churn} kPa, di atas maksimum satu zona {limit} kPa '
@@ -4596,6 +4598,13 @@ const Map<StringKey, String> _id = {
   StringKey.issueDailyDemandUnsetTitle: 'Jumlah penghuni belum diisi: tanpa angka cadangan air',
   StringKey.issueDailyDemandUnsetMessage:
       'Jumlah penghuni belum diisi di halaman Bangunan, sehingga tidak ada kebutuhan air harian dan tidak ada angka cadangan air (hari). Isi jumlah penghuni (orang).',
+  StringKey.buildingInputGroundStorageDays: 'Tampungan bawah (hari kebutuhan)',
+  StringKey.buildingInputRoofStorageFraction: 'Tangki atap (fraksi kebutuhan)',
+  StringKey.buildingInputCaptionStorageTargets:
+      'Tangki tanpa kapasitas diukur otomatis: bagian kebutuhan hariannya x target, dibulatkan ke atas ke ukuran standar. Kapasitas yang diisi selalu berlaku. // VERIFY.',
+  StringKey.issueTankCapacityUnsetTitle: 'Kapasitas tangki tidak diketahui',
+  StringKey.issueTankCapacityUnsetMessage:
+      'Tangki {tank} belum diisi kapasitasnya dan tidak dapat diukur otomatis: jumlah penghuni belum diisi, sehingga tidak ada kebutuhan harian. Pipa pengisinya tetap pada dasar kebutuhan puncak. Isi jumlah penghuni (halaman Bangunan) atau kapasitas tangki.',
   StringKey.reserveHeadlineLabel: 'Cadangan air',
   StringKey.reserveHeadlineValue: '{days} ({stored} m3 tersimpan / {daily} m3 per hari)',
   StringKey.reserveExcluded: 'Cadangan tidak menghitung {n} tangki tanpa kapasitas',

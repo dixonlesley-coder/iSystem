@@ -30,6 +30,7 @@ import 'schematic_layout_store.dart';
 import 'selection_store.dart';
 import 'sheets_store.dart';
 import 'smart_input_store.dart' show canvasAutoPanProbeProvider;
+import 'tank_fill_store.dart' show autoTankCapacitiesProvider;
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
@@ -4277,7 +4278,7 @@ class DragSessionController extends Notifier<DragSession> {
 /// network only when the throttle advances (or the session opens/closes), so the
 /// per-frame position updates that keep the canvas paint live do NOT re-run the
 /// whole pipeline every frame (K1).
-final sizingNetworkProvider = Provider<Network>((ref) {
+final drawnSizingNetworkProvider = Provider<Network>((ref) {
   final drag = ref.watch(dragSessionProvider);
   if (!drag.active || drag.frozen == null) {
     // At rest: watch the live network so any edit recomputes immediately.
@@ -4289,6 +4290,26 @@ final sizingNetworkProvider = Provider<Network>((ref) {
   // ends — while the canvas paint path, which watches networkControllerProvider
   // directly, stays per-frame live.
   return drag.frozen!;
+});
+
+/// Backlog W-5 (2026-11-14) — THE network every sizing / solve / schedule /
+/// report consumer reads: the drawn network ([drawnSizingNetworkProvider])
+/// with each domestic tank that has no entered capacity given its AUTO
+/// capacity (`autoTankCapacitiesProvider`) — the ONE effective-capacity
+/// source. The auto value is derived, never persisted (the live network
+/// keeps the tank's capacity unset). No auto tank ⇒ the drawn network itself
+/// (the same instance).
+final sizingNetworkProvider = Provider<Network>((ref) {
+  final net = ref.watch(drawnSizingNetworkProvider);
+  final auto = ref.watch(autoTankCapacitiesProvider);
+  if (auto.isEmpty) return net;
+  return Network(nodes: [
+    for (final n in net.nodes)
+      if (auto[n.id] case final a?)
+        n.copyWith(tankCapacityLitres: a.litres)
+      else
+        n,
+  ], edges: net.edges);
 });
 
 /// Whether run drawing snaps to the nearest 45° (ortho). Default on.

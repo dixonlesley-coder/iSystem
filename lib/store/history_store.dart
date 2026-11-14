@@ -648,6 +648,22 @@ void setDemandPerPersonUndoable(ProviderReader read, double? next) =>
         next: next,
         label: StringKey.buildingInputDemandPerPerson);
 
+/// Backlog W-5 — undoable ground storage target (days).
+void setGroundStorageDaysUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(groundStorageDaysProvider),
+        apply: (v) => read(groundStorageDaysProvider.notifier).set(v),
+        next: next,
+        label: StringKey.buildingInputGroundStorageDays);
+
+/// Backlog W-5 — undoable roof tank target (fraction of daily demand).
+void setRoofStorageFractionUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(roofStorageFractionProvider),
+        apply: (v) => read(roofStorageFractionProvider.notifier).set(v),
+        next: next,
+        label: StringKey.buildingInputRoofStorageFraction);
+
 /// Undoable laid drainage slope change (m/m, clamped by the store).
 void setDrainageSlopeUndoable(ProviderReader read, double next) =>
     setSettingUndoable<double>(read,

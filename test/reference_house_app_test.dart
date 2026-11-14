@@ -459,20 +459,28 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 (2026-11-14) — daily demand and water reserve: one household of 5 x 120 L/person/day (private, `// VERIFY`) = 600 L = 0.60 m3/day; RT has no capacity.
-  test('backlog W-4: daily demand 0.60 m3/day, no reserve figure (no tank capacity)', () async {
+  // Backlog W-4 / W-5 (2026-11-14) — one household of 5 x 120 L/person/day
+  // (private, `// VERIFY`) = 600 L = 0.60 m3/day. RT has no capacity
+  // entered and is the system's ONLY storage: the ground target, share 1 ⇒
+  // 600 L x 1.0 day = 600 → the 650 L standard size (auto). No fill is
+  // drawn, so no pipe or duty moves. Reserve 650 / 600 = 1.0833 days.
+  test('backlog W-4/W-5: RT auto 650 L, reserve 1.1 days', () async {
     final c = await _loadHouse(buildHouse());
     expect(c.read(populationProvider), 5);
     expect(c.read(demandPerPersonProvider), 120.0);
-    expect(c.read(dailyDemandLitresProvider), closeTo(600.0, 1e-9));
+    expect(c.read(dailyDemandLitresProvider), closeTo(600, 1e-9));
+    final a = c.read(autoTankCapacitiesProvider)['RT']!;
+    expect(a.roofTarget, isFalse);
+    expect(a.share, closeTo(1.0, 1e-12));
+    expect(a.rawLitres, closeTo(600, 1e-9));
+    expect(a.litres, 650);
     final r = c.read(waterReserveProvider);
-    // No domestic tank has a capacity: every one is excluded and named, no
-    // stored volume and no days figure (never 0).
-    expect(r.excludedTankIds, ['RT']);
-    expect(r.storedLitres, isNull);
-    expect(r.days, isNull);
+    expect(r.excludedTankIds, isEmpty);
+    expect(r.storedLitres, closeTo(650, 1e-9));
+    expect(r.days, closeTo(1.083333, 5e-7));
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds, isNot(contains('daily-demand-unset')));
+    expect(kinds.where((k) => k.startsWith('tank-capacity-unset')), isEmpty);
     c.dispose();
   });
 }

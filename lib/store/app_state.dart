@@ -113,6 +113,32 @@ class PopulationController extends Notifier<int?> {
   void set(int? v) => state = (v == null || v <= 0) ? null : v;
 }
 
+/// Backlog W-5 (2026-11-14) — the ground storage target (days of the daily
+/// demand) an auto-sized ground tank holds; default 1.0 (`// VERIFY`).
+final groundStorageDaysProvider =
+    NotifierProvider<GroundStorageDaysController, double>(
+        GroundStorageDaysController.new);
+
+class GroundStorageDaysController extends Notifier<double> {
+  @override
+  double build() => kGroundStorageDaysDefault;
+
+  void set(double v) => state = v.clamp(0.1, 30.0).toDouble();
+}
+
+/// Backlog W-5 — the roof tank target (fraction of the daily demand) an
+/// auto-sized roof tank fed from a ground tank holds; default 0.20.
+final roofStorageFractionProvider =
+    NotifierProvider<RoofStorageFractionController, double>(
+        RoofStorageFractionController.new);
+
+class RoofStorageFractionController extends Notifier<double> {
+  @override
+  double build() => kRoofStorageFractionDefault;
+
+  void set(double v) => state = v.clamp(0.05, 5.0).toDouble();
+}
+
 /// Backlog W-4 — the per-project OVERRIDE of the daily demand per person
 /// (L/person/day); null ⇒ the occupancy default
 /// (`dailyDemandPerPersonDefault`, `// VERIFY`).

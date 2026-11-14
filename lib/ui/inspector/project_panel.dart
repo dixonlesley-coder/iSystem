@@ -83,6 +83,7 @@ import '../../store/app_state.dart';
 import '../../store/tank_fill_store.dart'
     show
         mainsPressureChecksProvider,
+        autoTankCapacitiesProvider,
         tankFillsProvider,
         waterReserveProvider;
 import '../widgets/locale_number.dart' show parseLocaleNumber;
@@ -370,7 +371,9 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     tankFills: [
       for (final t in ref.read(tankFillsProvider))
         (
-          tag: nodeTagMap[t.tankId] ?? t.tankId,
+          // Backlog W-5 — an auto capacity is marked '(auto)'.
+          tag: '${nodeTagMap[t.tankId] ?? t.tankId}'
+              '${ref.read(autoTankCapacitiesProvider).containsKey(t.tankId) ? ' (auto)' : ''}',
           roof: t.roof,
           capacityLitres: t.capacityLitres,
           refillHours: t.refillHours,
@@ -393,7 +396,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     waterReserve: ref.read(waterReserveProvider),
     reserveTankTags: {
       for (final t in ref.read(waterReserveProvider).tanks)
-        t.tankId: nodeTagMap[t.tankId] ?? t.tankId,
+        t.tankId: '${nodeTagMap[t.tankId] ?? t.tankId}'
+            '${ref.read(autoTankCapacitiesProvider).containsKey(t.tankId) ? ' (auto)' : ''}',
     },
     // Backlog W-2 — the mains-pressure verdict at each meter feed.
     mainsChecks: [
@@ -6345,7 +6349,10 @@ class _SelectionSection extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.xxs),
             SteppedValueField(
               display: node.tankCapacityLitres == null
-                  ? '—'
+                  ? switch (ref.watch(autoTankCapacitiesProvider)[node.id]) {
+                      final a? => '${a.litres.round()} L (auto)',
+                      null => '—',
+                    }
                   : '${node.tankCapacityLitres!.round()} L',
               label: 'Tank capacity',
               editSeed: node.tankCapacityLitres == null
@@ -6366,6 +6373,19 @@ class _SelectionSection extends ConsumerWidget {
                 (v == null || v <= 0) ? null : v,
               ),
             ),
+            // Backlog W-5 — the auto capacity's arithmetic (entered wins).
+            if (node.tankCapacityLitres == null)
+              if (ref.watch(autoTankCapacitiesProvider)[node.id] case final a?)
+                Text(
+                  'auto: ${(a.share * 100).toStringAsFixed(1)} % of '
+                  '${((ref.watch(dailyDemandLitresProvider) ?? 0) / 1000).toStringAsFixed(2)} m3/day x '
+                  '${a.roofTarget ? a.target.toStringAsFixed(2) : '${a.target.toStringAsFixed(1)} day'} = '
+                  '${a.rawLitres.toStringAsFixed(0)} L -> ${a.litres.round()} L '
+                  '(standard size)',
+                  style: context.type.caption.copyWith(
+                    color: context.colors.textMuted,
+                  ),
+                ),
             // Backlog W-1 — the refill time this tank fills in, and the fill
             // flow its feed (meter feed / transfer pipework) is sized on:
             // capacity / refill time. No capacity ⇒ no fill flow is printed
@@ -6380,7 +6400,12 @@ class _SelectionSection extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.xxs),
             Builder(builder: (context) {
               final hours = tankRefillHoursOf(node);
-              final fill = tankFillFlow(node);
+              // The effective capacity (entered, else auto — W-5).
+              final auto = ref.watch(autoTankCapacitiesProvider)[node.id];
+              final fill = tankFillFlow(node.tankCapacityLitres == null &&
+                      auto != null
+                  ? node.copyWith(tankCapacityLitres: auto.litres)
+                  : node);
               final hTxt = hours == hours.roundToDouble()
                   ? hours.toStringAsFixed(0)
                   : hours.toStringAsFixed(1);

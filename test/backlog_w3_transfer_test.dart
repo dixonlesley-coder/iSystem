@@ -168,20 +168,24 @@ void main() {
     expect(issue.locate?.nodeId, 'RT2_A');
   });
 
-  test('W-1 info: a drawn fill without a capacity keeps the peak basis', () {
+  test('W-5 warning: no capacity and no population ⇒ tank-capacity-unset, '
+      'the peak basis kept', () {
     final c = _load(shop, shop.network);
     addTearDown(c.dispose);
     final kinds = {
       for (final i in c.read(designIssuesProvider))
-        if (i.kind.startsWith('tank-fill-capacity-unset')) i.kind,
+        if (i.kind.startsWith('tank-capacity-unset')) i.kind,
     };
     expect(kinds, {
       for (final u in kShopUnits) ...{
-        'tank-fill-capacity-unset:GT_$u',
-        'tank-fill-capacity-unset:RT_$u',
+        'tank-capacity-unset:GT_$u',
+        'tank-capacity-unset:RT_$u',
       },
     });
     expect(c.read(tankFillsProvider).every((t) => t.fillFlow == null), isTrue);
+    // Nothing fabricated: the fill line keeps the 12.5-UBAP peak.
+    expect(c.read(sizingProvider)['e_cw_U2_A_RT_A']!.flow.inLitersPerSecond,
+        closeTo(0.56389, 5e-5));
   });
 
   test('W-2 end to end: the meter warns only when the mains is short', () {

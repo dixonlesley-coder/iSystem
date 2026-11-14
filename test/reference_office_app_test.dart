@@ -767,16 +767,18 @@ void main() {
       expect(up.criticalNodeId, 'WCb3');
       // Backlog D-3 — the meter WM (not a delivery node) sits at its floor
       // + 0.5 m, upstream of GT (the pump suction, 0 kPa): static
-      // −0.5 x 9.81 = −4.905 kPa (was −3.7 x 9.81 = −36.297 at the ceiling);
-      // residual −4.905 − the solved 3.5 m stub loss 14.526 kPa (4.150 kPa/m
-      // on DN50 @ 3.91733 L/s) = −19.431 kPa (was −36.297 − 4.150 x 6.7 =
-      // −64.1). Mains pressure is not modelled (office backlog d).
+      // −0.5 x 9.81 = −4.905 kPa (was −3.7 x 9.81 = −36.297 at the ceiling).
+      // Backlog W-5 — GT is auto-sized (10 000 L, see the W-4/W-5 test), so
+      // the stub carries its fill 0.69444 L/s on DN25: residual −4.905 − the
+      // solved 3.5 m stub loss 9.074 kPa (2.593 kPa/m) = −13.979 kPa (was
+      // −19.431 with 14.526 kPa on DN50 at the 3.91733 L/s peak).
       expect(up.noFlowStaticPressure['WM']!.inKiloPascals,
           closeTo(-4.905, 1e-6));
-      expect(up.residualPressure['WM']!.inKiloPascals, closeTo(-19.431, 2e-3));
+      expect(up.residualPressure['WM']!.inKiloPascals, closeTo(-13.979, 2e-3));
       expect(up.residualPressure['GT']!.inKiloPascals, closeTo(0.0, 1e-9));
-      // BOM: the DN50 cold-water runs WM→GT 3.5 + GT→P1 1.0 + P1→R0 5.7 =
-      // 10.2 m (was 13.4 with the 6.7 m stub); the DN50 riser R0→R1 4.0 m.
+      // BOM: the DN50 cold-water runs GT→P1 1.0 + P1→R0 5.7 = 6.7 m (backlog
+      // W-5: WM→GT 3.5 m is now DN25; 10.2 m before); the DN50 riser R0→R1
+      // 4.0 m.
       double cw50(EdgeKind k) => c
           .read(bomProvider)
           .where((l) =>
@@ -784,7 +786,7 @@ void main() {
               l.diameterMm == 50 &&
               l.kind == k)
           .fold<double>(0, (a, l) => a + l.totalLength.meters);
-      expect(cw50(EdgeKind.run), closeTo(10.2, 1e-9));
+      expect(cw50(EdgeKind.run), closeTo(6.7, 1e-9));
       expect(cw50(EdgeKind.riser), closeTo(4.0, 1e-9));
       expect(up.residualPressure['WCb3']!.inKiloPascals, closeTo(225.0, 2e-3));
       // Hydraulic 9810 x 3.91733e-3 x 38.539 = 1481.0 W; shaft / 0.70 =
@@ -1041,12 +1043,11 @@ void main() {
       // = 56 781 L is stated as an info, never a fabricated capacity.
       expect(count('fire-tank-capacity-unset:FT'), 1);
       expect(kinds.where((k) => k.startsWith('fire-tank-undersized')), isEmpty);
-      // Backlog W-1 — GT has no capacity: its meter feed keeps the peak
-      // basis (96 UBAP, 3.91733 L/s DN50) and an info says so.
-      expect(count('tank-fill-capacity-unset:GT'), 1);
-      // Backlog W-2 — WM: lift GT 0.0 − WM 0.5 = −0.5 + 3.5 m at 3.91733
-      // L/s on DN50 (hf = 10.67 x 3.5 x Q^1.852 / (150^1.852 x 0.05^4.8704)
-      // = 0.2636 m) + 5.0 inlet = 4.7636 m <= 10 m: no warning.
+      // Backlog W-5 — GT is auto-sized (population 200): no capacity
+      // warning. W-2 — WM: lift GT 0.0 − WM 0.5 = −0.5 + 3.5 m at 0.69444
+      // L/s on DN25 (hf = 10.67 x 3.5 x Q^1.852 / (150^1.852 x 0.025^4.8704)
+      // = 0.3130 m) + 5.0 inlet = 4.8130 m <= 10 m: no warning.
+      expect(kinds.where((k) => k.startsWith('tank-capacity-unset')), isEmpty);
       expect(kinds.where((k) => k.startsWith('mains-pressure-insufficient')),
           isEmpty);
       // Backlog A-3 — every hose valve DESIGNATED pressure-regulating (info).
@@ -1122,20 +1123,35 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 50 staff x 4 floors = 200 x 50 L/person/day (public / office, `// VERIFY`) = 10 000 L = 10.00 m3/day; GT has no capacity (the fire tank FT is not domestic storage).
-  test('backlog W-4: daily demand 10.00 m3/day, no reserve figure (no tank capacity)', () async {
+  // Backlog W-4 / W-5 (2026-11-14) — 50 staff x 4 floors = 200 x 50
+  // L/person/day (public / office, `// VERIFY`) = 10 000 L = 10.00 m3/day.
+  // GT has no capacity entered and is its cold system's only storage (FT is
+  // fire-only): the ground target, share 1 ⇒ 10 000 L x 1.0 day = 10 000 L
+  // (a ladder size). Fill 10 000 / 14 400 = 0.69444 L/s: the meter feed WM →
+  // GT DN20 v 2.210 > 2.0 → DN25 v 1.415 (was the 96-UBAP peak 3.91733 L/s
+  // DN50). P1 (on GT's outflow) is unchanged. Reserve 10 000 / 10 000 =
+  // 1.0 day.
+  test('backlog W-4/W-5: GT auto 10 000 L, meter feed DN25, reserve 1.0 day',
+      () async {
     final c = await _loadOffice(buildOffice());
     expect(c.read(populationProvider), 200);
-    expect(c.read(demandPerPersonProvider), 50.0);
-    expect(c.read(dailyDemandLitresProvider), closeTo(10000.0, 1e-9));
+    expect(c.read(dailyDemandLitresProvider), closeTo(10000, 1e-9));
+    final a = c.read(autoTankCapacitiesProvider)['GT']!;
+    expect(a.roofTarget, isFalse);
+    expect(a.share, closeTo(1.0, 1e-12));
+    expect(a.rawLitres, closeTo(10000, 1e-9));
+    expect(a.litres, 10000);
+    expect(c.read(autoTankCapacitiesProvider).containsKey('FT'), isFalse);
+    final wm = c.read(sizingProvider)['e_cw_WM_GT']!;
+    expect(wm.flow.inLitersPerSecond, closeTo(0.694444, 5e-7));
+    expect(wm.diameter.inMillimeters, 25);
+    expect(wm.velocity.metersPerSecond, closeTo(1.415, 5e-4));
+    final m = c.read(mainsPressureChecksProvider).single;
+    expect(m.required.meters, closeTo(4.8130, 5e-4));
     final r = c.read(waterReserveProvider);
-    // No domestic tank has a capacity: every one is excluded and named, no
-    // stored volume and no days figure (never 0).
-    expect(r.excludedTankIds, ['GT']);
-    expect(r.storedLitres, isNull);
-    expect(r.days, isNull);
-    final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
-    expect(kinds, isNot(contains('daily-demand-unset')));
+    expect(r.excludedTankIds, isEmpty);
+    expect(r.storedLitres, closeTo(10000, 1e-9));
+    expect(r.days, closeTo(1.0, 1e-12));
     c.dispose();
   });
 }

@@ -195,6 +195,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       // Backlog W-4 — population + per-person override (unset ⇒ omitted).
       population: read(populationProvider),
       demandPerPersonL: read(demandPerPersonOverrideProvider),
+      groundStorageDays: read(groundStorageDaysProvider),
+      roofStorageFraction: read(roofStorageFractionProvider),
       hotWaterFlowTempC: read(hotWaterFlowTempProvider),
       hotWaterDeltaTK: read(hotWaterDeltaTProvider),
       coolingLoadMethod: read(coolingLoadMethodProvider).code,
@@ -357,6 +359,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(mainsHeadProvider.notifier).set(s.mainsHeadM);
   read(populationProvider.notifier).set(s.population);
   read(demandPerPersonOverrideProvider.notifier).set(s.demandPerPersonL);
+  read(groundStorageDaysProvider.notifier).set(s.groundStorageDays);
+  read(roofStorageFractionProvider.notifier).set(s.roofStorageFraction);
   read(hotWaterFlowTempProvider.notifier).set(s.hotWaterFlowTempC);
   read(hotWaterDeltaTProvider.notifier).set(s.hotWaterDeltaTK);
   read(coolingLoadMethodProvider.notifier)

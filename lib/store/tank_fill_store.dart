@@ -5,14 +5,24 @@
 // Review), never a parallel re-derivation of a size.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
+import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart' show SniProfile;
 import 'package:mechx_engine/sizing/tank_fill.dart';
 import 'package:mechx_engine/units.dart';
 
-import 'app_state.dart' show dailyDemandLitresProvider, mainsHeadProvider;
-import 'network_store.dart' show sizingNetworkProvider;
+import 'app_state.dart'
+    show
+        dailyDemandLitresProvider,
+        groundStorageDaysProvider,
+        mainsHeadProvider,
+        occupancyProvider,
+        roofStorageFractionProvider;
+import 'fixture_library_store.dart' show fixtureLibraryProvider;
+import 'network_store.dart'
+    show drawnSizingNetworkProvider, sizingNetworkProvider;
 import 'project_store.dart' show projectControllerProvider;
-import 'sizing_store.dart' show sizingProvider;
+import 'sizing_store.dart'
+    show kDefaultLeafDemand, kDefaultLeafFixtureUnits, sizingProvider;
 import 'fire_store.dart' show fireTankReservesProvider;
 
 /// One cold-water storage tank and its fill.
@@ -174,4 +184,79 @@ final waterReserveProvider = Provider<WaterReserve>((ref) {
   ];
   return WaterReserve(
       tanks: tanks, dailyLitres: ref.watch(dailyDemandLitresProvider));
+});
+
+/// Backlog W-5 (2026-11-14) — the AUTO capacity of every domestic tank with
+/// no entered capacity (`autoTankCapacities`): its share of the daily demand
+/// (the cold-water fixture units it serves among tanks of its role) x the
+/// Building-page target, rounded up to the standard ladder. The units come
+/// from a water-only pre-pass of the sizer over the DRAWN network (units
+/// never depend on a tank's capacity, so the pass is the main sizing's
+/// units); it runs only when a population is set and some domestic tank has
+/// no capacity. Read by [sizingNetworkProvider], the one effective-capacity
+/// source; never persisted.
+final autoTankCapacitiesProvider =
+    Provider<Map<String, AutoTankCapacity>>((ref) {
+  final daily = ref.watch(dailyDemandLitresProvider);
+  if (daily == null) return const {};
+  final drawn = ref.watch(drawnSizingNetworkProvider);
+  final fire = <String>{};
+  final cold = <String>{};
+  for (final e in drawn.edges) {
+    if (e.service == ServiceType.fireHydrant ||
+        e.service == ServiceType.fireSprinkler) {
+      fire
+        ..add(e.fromId)
+        ..add(e.toId);
+    } else if (e.service == ServiceType.coldWater) {
+      cold
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+  }
+  final needs = drawn.nodes.any((n) =>
+      isStorageTankNode(n) &&
+      cold.contains(n.id) &&
+      !fire.contains(n.id) &&
+      (n.tankCapacityLitres ?? 0) <= 0);
+  if (!needs) return const {};
+  final water = Network(nodes: drawn.nodes, edges: [
+    for (final e in drawn.edges)
+      if (e.service == ServiceType.coldWater ||
+          e.service == ServiceType.hotWater)
+        e,
+  ]);
+  final occupancy = ref.watch(occupancyProvider);
+  final library = {for (final f in ref.watch(fixtureLibraryProvider)) f.id: f};
+  final project = ref.watch(projectControllerProvider);
+  const profile = SniProfile();
+  final fu = <String, double>{};
+  final legs = <String>{};
+  final sz = autoSizeNetwork(
+    water,
+    const SizingContext(),
+    leafDemand: kDefaultLeafDemand,
+    leafFixtureUnits: kDefaultLeafFixtureUnits,
+    nodeFixtureUnits: {
+      for (final n in water.nodes)
+        if (library[n.customFixtureId] case final f?)
+          n.id: f.supplyUnits
+        else if (n.fixture != null)
+          n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
+    },
+    building: project.building,
+    calibrationBySheet: project.calibrations,
+    mounting: project.mounting,
+    fixtureUnitsOut: fu,
+    parallelLegEdgeIdsOut: legs,
+  );
+  return autoTankCapacities(
+    net: water,
+    edgeUnits: fu,
+    flowFromOf: (id) => sz[id]?.flowFromId,
+    dailyLitres: daily,
+    groundDays: ref.watch(groundStorageDaysProvider),
+    roofFraction: ref.watch(roofStorageFractionProvider),
+    excludeEdgeIds: legs,
+  );
 });

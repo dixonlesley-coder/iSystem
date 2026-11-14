@@ -704,21 +704,24 @@ void main() {
               net.nodeById(id)!, project.building, project.mounting)
           .meters;
       for (final u in kShopUnits) {
-        // TP: lift RT 12.0 − GT 0.0 = 12.000; friction 0.18026 × (1.0 + 4.7
-        // + 4.0 + 4.0 + 2.3 = 16.0) = 2.884; + the float-valve inlet
-        // residual 5.0 (backlog W-3, `kTankInletResidualHeadM`; it was a 0 m
-        // free discharge) ⇒ H = 19.884 m (was 14.884). The flow stays the
-        // 12.5-UBAP peak 0.56389 L/s: RT has no capacity, so W-1 keeps the
-        // peak basis (info `tank-fill-capacity-unset`). P_h = 9810 ×
-        // 0.56389e-3 × 19.884 = 110.0 W (was 82.3); shaft / 0.70 = 157.1 W
-        // (was 117.6) ⇒ 0.37 kW unchanged; fed input 370 / 0.90 = 411.1 W.
+        // Backlog W-5 (2026-11-14) — RT has no capacity entered, so it is
+        // AUTO-sized: the daily demand 15 persons x 120 L = 1800 L/day; the
+        // three roof tanks (each fed from its unit's GT: the roof fraction)
+        // serve 12.5 UBAP each of 37.5 ⇒ share 1/3 ⇒ 600 L x 0.20 = 120 L ⇒
+        // the 250 L standard size. Fill 250 / 3600 = 0.069444 L/s (was the
+        // 12.5-UBAP peak 0.56389), DN15 (v 0.393). TP: lift RT 12.0 − GT 0.0
+        // = 12.000 + friction 0.015133 m/m (DN15 at 0.069444, C150) × (1.0 +
+        // 4.7 + 4.0 + 4.0 + 2.3 = 16.0) = 0.242 + the float-valve inlet
+        // residual 5.0 ⇒ H = 17.242 m (was 19.884). P_h = 9810 × 0.069444e-3
+        // × 17.242 = 11.7 W (was 110.0); shaft / 0.70 = 16.8 W ⇒ 0.37 kW
+        // (the smallest frame, unchanged); fed input 370 / 0.90 = 411.1 W.
         final tp = duties[shopId('TP', u)]!;
         expect(transfers, contains(shopId('TP', u)));
         expect(z(shopId('RT', u)) - z(shopId('GT', u)), closeTo(12.0, 1e-9));
-        expect(tp.flow.inLitersPerSecond, closeTo(0.5639, 5e-5));
-        expect(tp.head.meters, closeTo(19.884, 5e-4));
-        expect(tp.hydraulicPower.watts, closeTo(110.0, 0.05));
-        expect(tp.shaftPower.watts, closeTo(157.1, 0.05));
+        expect(tp.flow.inLitersPerSecond, closeTo(0.069444, 5e-6));
+        expect(tp.head.meters, closeTo(17.242, 5e-4));
+        expect(tp.hydraulicPower.watts, closeTo(11.7, 0.05));
+        expect(tp.shaftPower.watts, closeTo(16.8, 0.05));
         expect(tp.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
         expect(fed[shopId('TP', u)]!.input, closeTo(411.1, 0.05));
         // BS: H = (225 − 8.064) / 9.81 = 22.114 m; P_h = 122.3 W, shaft
@@ -758,12 +761,12 @@ void main() {
       expect(kinds.where((k) => k.startsWith('unconnected-orphan')), isEmpty);
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('downfeed-below-target')));
-      // Backlog W-1 — no tank has a capacity: each GT / RT keeps the peak
-      // fill basis and says so (6 infos); every roof tank's fill is drawn
-      // (no `roof-tank-fill-undrawn`); each meter: −0.5 + 0.63093 + 5.0 =
-      // 5.131 m <= 10 m (no `mains-pressure-insufficient`, backlog W-2).
-      expect(kinds.where((k) => k.startsWith('tank-fill-capacity-unset')),
-          hasLength(6));
+      // Backlog W-5 — no capacity is entered, but the population is: every
+      // GT / RT is auto-sized (650 / 250 L), so no `tank-capacity-unset`;
+      // every roof tank's fill is drawn (no `roof-tank-fill-undrawn`); each
+      // meter: −0.5 + 3.5 m at 0.045139 L/s DN15 (0.02385 m) + 5.0 = 4.524 m
+      // <= 10 m (no `mains-pressure-insufficient`, backlog W-2).
+      expect(kinds.where((k) => k.startsWith('tank-capacity-unset')), isEmpty);
       expect(kinds.where((k) => k.startsWith('roof-tank-fill-undrawn')),
           isEmpty);
       expect(kinds.where((k) => k.startsWith('mains-pressure-insufficient')),
@@ -914,18 +917,43 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 5 persons x 3 units = 15 x 120 L/person/day (private) = 1800 L = 1.80 m3/day; no GT / RT has a capacity.
-  test('backlog W-4: daily demand 1.80 m3/day, no reserve figure (no tank capacity)', () async {
+  // Backlog W-4 / W-5 (2026-11-14) — daily demand, auto capacities and the
+  // water reserve: 5 persons x 3 units = 15 x 120 L/person/day (private,
+  // `// VERIFY`) = 1800 L = 1.80 m3/day. No capacity is entered: each GT
+  // (ground role, share 12.5 / 37.5 = 1/3) = 600 L x 1.0 day = 600 → 650 L;
+  // each RT (roof role, fed from its GT, share 1/3) = 600 x 0.20 = 120 →
+  // 250 L. Stored 3 x 650 + 3 x 250 = 2700 L; reserve 2700 / 1800 = 1.5 days.
+  test('backlog W-4/W-5: auto 650 / 250 L tanks, reserve 1.5 days', () async {
     final c = await _loadShophouse(buildShophouse());
     expect(c.read(populationProvider), 15);
-    expect(c.read(demandPerPersonProvider), 120.0);
-    expect(c.read(dailyDemandLitresProvider), closeTo(1800.0, 1e-9));
+    expect(c.read(dailyDemandLitresProvider), closeTo(1800, 1e-9));
+    final auto = c.read(autoTankCapacitiesProvider);
+    for (final u in kShopUnits) {
+      final gt = auto['GT_$u']!;
+      expect(gt.roofTarget, isFalse);
+      expect(gt.share, closeTo(1 / 3, 1e-12));
+      expect(gt.rawLitres, closeTo(600, 1e-9));
+      expect(gt.litres, 650);
+      final rt = auto['RT_$u']!;
+      expect(rt.roofTarget, isTrue);
+      expect(rt.share, closeTo(1 / 3, 1e-12));
+      expect(rt.rawLitres, closeTo(120, 1e-9));
+      expect(rt.litres, 250);
+      // Meter feed: 650 / 14 400 = 0.045139 L/s, DN15 v 0.255.
+      final wm = c.read(sizingProvider)['e_cw_WM_${u}_GT_$u']!;
+      expect(wm.flow.inLitersPerSecond, closeTo(0.045139, 5e-7));
+      expect(wm.diameter.inMillimeters, 15);
+      expect(wm.velocity.metersPerSecond, closeTo(0.255, 5e-4));
+      // Transfer: 250 / 3600 = 0.069444 L/s, DN15 v 0.393.
+      final tr = c.read(sizingProvider)['e_cw_U2_${u}_RT_$u']!;
+      expect(tr.flow.inLitersPerSecond, closeTo(0.069444, 5e-7));
+      expect(tr.diameter.inMillimeters, 15);
+      expect(tr.velocity.metersPerSecond, closeTo(0.393, 5e-4));
+    }
     final r = c.read(waterReserveProvider);
-    // No domestic tank has a capacity: every one is excluded and named, no
-    // stored volume and no days figure (never 0).
-    expect(r.excludedTankIds, ['GT_A', 'GT_B', 'GT_C', 'RT_A', 'RT_B', 'RT_C']);
-    expect(r.storedLitres, isNull);
-    expect(r.days, isNull);
+    expect(r.excludedTankIds, isEmpty);
+    expect(r.storedLitres, closeTo(2700, 1e-9));
+    expect(r.days, closeTo(1.5, 1e-12));
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds, isNot(contains('daily-demand-unset')));
     c.dispose();

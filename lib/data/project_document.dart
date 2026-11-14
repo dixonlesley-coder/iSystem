@@ -219,6 +219,11 @@ class DesignSettings {
   final int? population;
   final double? demandPerPersonL;
 
+  /// Backlog W-5 — the auto tank capacity targets (ground days, roof
+  /// fraction of the daily demand). Additive — written only off the default.
+  final double groundStorageDays;
+  final double roofStorageFraction;
+
   /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
   /// allowable recirculation loop DROP ΔT (K). They set the recirc flow AND the
   /// modelled return temperature the anti-Legionella check judges. Additive —
@@ -311,6 +316,8 @@ class DesignSettings {
     this.mainsHeadM = kDefaultMainsHeadM,
     this.population,
     this.demandPerPersonL,
+    this.groundStorageDays = kGroundStorageDaysDefault,
+    this.roofStorageFraction = kRoofStorageFractionDefault,
     this.hotWaterFlowTempC = 60.0,
     this.hotWaterDeltaTK = 5.0,
     this.anthropicApiKey = '',
@@ -356,6 +363,10 @@ class DesignSettings {
         if (mainsHeadM != kDefaultMainsHeadM) 'mainsHead_m': mainsHeadM,
         if (population != null) 'population': population,
         if (demandPerPersonL != null) 'demand_lpd': demandPerPersonL,
+        if (groundStorageDays != kGroundStorageDaysDefault)
+          'ground_storage_days': groundStorageDays,
+        if (roofStorageFraction != kRoofStorageFractionDefault)
+          'roof_storage_frac': roofStorageFraction,
         'hotWaterFlowTempC': hotWaterFlowTempC,
         'hotWaterDeltaTK': hotWaterDeltaTK,
         // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
@@ -445,6 +456,10 @@ class DesignSettings {
           final num v when v.isFinite && v >= 1 => v.round(),
           _ => null,
         },
+        groundStorageDays: _clampOr(json['ground_storage_days'], 0.1, 30.0,
+            kGroundStorageDaysDefault),
+        roofStorageFraction: _clampOr(json['roof_storage_frac'], 0.05, 5.0,
+            kRoofStorageFractionDefault),
         demandPerPersonL: switch (json['demand_lpd']) {
           final num v when v.isFinite && v > 0 =>
             v.toDouble().clamp(1.0, 2000.0).toDouble(),
