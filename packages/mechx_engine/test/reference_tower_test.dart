@@ -572,13 +572,14 @@ void main() {
       check('e_cw_RT_A', 720, valve(720), 100, 1.374);
       // Backlog W-1 (2026-11-14) — the fill line is sized on the tanks'
       // fill flows (capacity / refill time); the 720 UBAP it serves is
-      // unchanged. Meter feed WM → GT: 60 000 L / (4 h x 3600 s) = 4.16667
-      // L/s; DN50 v = 4.16667e-3 / 1.96350e-3 = 2.122 > 2.0 → DN65 v =
-      // 4.16667e-3 / 3.31831e-3 = 1.256. Transfer GT → TP / TPS → U0..U29 →
+      // unchanged. Meter feed WM → GT (backlog T-1: GT 150 000 L, about one
+      // day): 150 000 L / (4 h x 3600 s) = 10.41667 L/s; DN80 v = 10.41667e-3
+      // / 5.02655e-3 = 2.072 > 2.0 → DN100 v = 10.41667e-3 / 7.85398e-3 =
+      // 1.326 (60 000 L gave 4.16667 L/s DN65 v 1.256). Transfer GT → TP / TPS → U0..U29 →
       // RT: 30 000 L / (1 h x 3600 s) = 8.33333 L/s; DN65 v 2.511 > 2.0 →
       // DN80 v = 8.33333e-3 / 5.02655e-3 = 1.658 (was 10.79267 L/s DN100,
       // the peak demand; the standby leg TPS mirrors the duty leg).
-      check('e_cw_WM_GT', 720, 4.16667, 65, 1.256);
+      check('e_cw_WM_GT', 720, 10.41667, 100, 1.326);
       for (final id in [
         'e_cw_GT_TP', 'e_cw_TP_U0', 'e_cw_GT_TPS', 'e_cw_TPS_U0', //
         'e_cw_U29_RT',

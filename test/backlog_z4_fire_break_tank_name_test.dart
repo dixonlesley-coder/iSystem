@@ -67,11 +67,12 @@ void main() {
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds.where((k) => k.startsWith('roof-tank-below-top')), isEmpty);
 
-    // Domestic paths ignore BT: reserve GT 60 000 + RT 30 000 = 90 000 L,
+    // Domestic paths ignore BT: reserve GT 150 000 (backlog T-1) + RT
+    // 30 000 = 180 000 L,
     // no tank-fill line, no auto capacity.
     final reserve = c.read(waterReserveProvider);
     expect(reserve.tanks.map((t) => t.tankId).toSet(), {'GT', 'RT'});
-    expect(reserve.storedLitres, closeTo(90000, 1e-9));
+    expect(reserve.storedLitres, closeTo(180000, 1e-9));
     expect(c.read(tankFillsProvider).map((t) => t.tankId), isNot(contains('BT')));
   });
 }

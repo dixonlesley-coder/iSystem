@@ -143,7 +143,7 @@ String towerRiserNode(int f) => f >= 27 ? 'BR$f' : 'GR$f';
 
 /// Declared tank capacities (litres). No provider sizes a tank (office
 /// backlog b), so they are the brief's values.
-const double kTowerGroundTankL = 60000;
+const double kTowerGroundTankL = 150000; // backlog T-1: about one day (150 m3/day)
 const double kTowerRoofTankL = 30000;
 const double kTowerFireTankL = 120000;
 

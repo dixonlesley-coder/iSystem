@@ -289,7 +289,18 @@ judged.
 | Shophouse | 15 (5 per unit x 3) | 120 | 1.80 | GT auto 650 L (1/3 x 1800 x 1.0 = 600 → 650), RT auto 250 L (1/3 x 1800 x 0.20 = 120 → 250), per unit: 2.7 m3 | 2700 / 1800 = 1.5 days |
 | Office | 200 (50 staff x 4 floors) | 50 | 10.00 | GT auto 10 000 L (only domestic tank: 10 000 x 1.0) | 1.0 day |
 | Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 (entered) | 30 000 / 11 520 = 2.6 days |
-| Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 60 000 + RT 30 000 = 90.0 m3 (entered) | 90 000 / 150 000 = 0.6 days (14 h) |
+| Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 150 000 + RT 30 000 = 180.0 m3 (entered; GT was 60 000 before backlog T-1) | 180 000 / 150 000 = 1.2 days |
+
+**Tower storage to one day (backlog T-1, 2026-11-14).** Owner: "enlarge tanks
+to 1 day". GT 60 000 → 150 000 L (entered), RT 30 000 L unchanged. Meter feed
+150 000 / 14 400 = 10.41667 L/s: DN80 v 2.072 > 2.0 → DN100 v 1.326 (was 4.16667
+L/s DN65); W-2 −0.5 + 3.5 m x 0.01575 m/m (0.05512) + 5.0 = 4.555 m <= 10 m,
+passes; reserve 0.6 → 1.2 days; the D-4 BOM difference is the DN40 + DN65 0 m run
+lines again. Transfer line / TP unchanged. **Deliberate:** the genset stays
+declared at 800 kVA (owner decision) although the app's unforced recommendation
+is 650 kVA: at 650 kVA the one-step transfer of PP-E (352.4 kW) would exceed the
+0.6 x 520 = 312 kW first step and need staging; 800 kVA takes it in one step
+(352.4 <= 384 kW).
 
 **Auto capacities (backlog W-5, 2026-11-14).** House / shophouse / office enter no
 capacity, so their tanks are auto-sized from their populations. Moved: shophouse

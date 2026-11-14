@@ -1418,11 +1418,12 @@ void main() {
   // Backlog D-4 — the seven PRV stations placed ON the riser with the store
   // intent solve and zone exactly as the fixture's spliced stations; the
   // only difference is the BOM: the splice's 0 m RUNs PRVk → GRk print a
-  // 0.000 m cold-water run line (DN40, PPR; DN65 / DN80 too before backlog
-  // W-1 gave the fill line those bores) that the drawn stations (two riser
+  // 0.000 m cold-water run line each for DN40 and DN65 (PPR; DN80 too before
+  // backlog W-1 gave the fill line that bore, DN65 hidden while the meter
+  // feed was DN65, W-1 to T-1) that the drawn stations (two riser
   // segments, the lower one 0 m inside its riser line) do not. So the tower keeps its spliced fixture; this pins the difference.
   test('D-4: the PRVs placed with insertComponentOnRiser = the spliced '
-      'fixture except one 0 m run BOM line', () async {
+      'fixture except two 0 m run BOM lines', () async {
     final fixture = await _loadTower(buildTower());
     final drawn = await _loadTower(buildTower(prvFloors: const []));
     final ids = placePrvsByIntent(drawn, kTowerPrvFloors);
@@ -1440,8 +1441,11 @@ void main() {
     // line DN80, so the splice's 0 m DN65 / DN80 runs add 0 m to BOM lines
     // that exist in both drawings; only the DN40 0 m line is still the
     // splice's own.
+    // Backlog T-1 — the meter feed went DN65 → DN100 (GT 150 000 L), so the
+    // splice's 0 m DN65 run is again a line of its own.
     expect({...a}.difference({...b}), {
       'bom coldWater run 40 PPR 0.000000000 CW',
+      'bom coldWater run 65 PPR 0.000000000 CW',
     });
     expect({...b}.difference({...a}), isEmpty);
     fixture.dispose();
@@ -2177,8 +2181,8 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 100 staff x 30 floors = 3000 x 50 L/person/day (public / office) = 150 000 L = 150.00 m3/day; stored GT 60 000 + RT 30 000 = 90 000 L; reserve 90 000 / 150 000 = 0.6 days = 14.4 h.
-  test('backlog W-4: daily demand 150.00 m3/day, reserve 0.6 days (14 h)', () async {
+  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 100 staff x 30 floors = 3000 x 50 L/person/day (public / office) = 150 000 L = 150.00 m3/day; stored GT 150 000 (backlog T-1, was 60 000) + RT 30 000 = 180 000 L; reserve 180 000 / 150 000 = 1.2 days.
+  test('backlog W-4: daily demand 150.00 m3/day, reserve 1.2 days', () async {
     final c = await _loadTower(buildTower());
     expect(c.read(populationProvider), 3000);
     expect(c.read(demandPerPersonProvider), 50.0);
@@ -2187,9 +2191,23 @@ void main() {
     // GT + RT counted (the fire tank FT is fire-only, not domestic).
     expect([for (final t in r.counted) t.tankId], ['GT', 'RT']);
     expect(r.excludedTankIds, isEmpty);
-    expect(r.storedLitres, closeTo(90000.0, 1e-9));
-    expect(r.days, closeTo(0.6, 5e-5));
-    expect(formatReserveDays(r.days!), '0.6 days (14 h)');
+    expect(r.storedLitres, closeTo(180000.0, 1e-9));
+    expect(r.days, closeTo(1.2, 5e-5));
+    expect(formatReserveDays(r.days!), '1.2 days');
+    // Backlog T-1 — the meter feed carries GT's fill 150 000 / 14 400 =
+    // 10.41667 L/s: DN80 v 2.072 > 2.0 → DN100 v 1.326. W-2: lift GT 0.0 −
+    // WM 0.5 = −0.5 + 3.5 m on DN100 at 10.41667 L/s (Hazen–Williams C150
+    // 0.01575 m/m = 0.05512 m) + 5.0 inlet = 4.5551 m <= 10 m: passes.
+    final wm = c.read(sizingProvider)['e_cw_WM_GT']!;
+    expect(wm.flow.inLitersPerSecond, closeTo(10.41667, 5e-6));
+    expect(wm.diameter.inMillimeters, 100);
+    expect(wm.velocity.metersPerSecond, closeTo(1.326, 5e-4));
+    final m = c.read(mainsPressureChecksProvider).single;
+    expect(m.required.meters, closeTo(4.5551, 5e-4));
+    expect(m.ok, isTrue);
+    // The transfer side does not move (RT 30 000 L unchanged): 8.33333 L/s.
+    expect(c.read(supplyMoverDutiesProvider)['TP']!.flow.inLitersPerSecond,
+        closeTo(8.33333, 5e-5));
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds, isNot(contains('daily-demand-unset')));
     c.dispose();
