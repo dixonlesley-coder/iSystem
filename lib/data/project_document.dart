@@ -222,6 +222,10 @@ class DesignSettings {
   /// Backlog W-5 — the auto tank capacity targets (ground days, roof
   /// fraction of the daily demand). Additive — written only off the default.
   final double groundStorageDays;
+
+  /// Backlog T-3 — the SNI 03-7065 building-use preset name (null = none;
+  /// an unknown name loads as none). Additive.
+  final String? demandUse;
   final double roofStorageFraction;
 
   /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
@@ -317,6 +321,7 @@ class DesignSettings {
     this.population,
     this.demandPerPersonL,
     this.groundStorageDays = kGroundStorageDaysDefault,
+    this.demandUse,
     this.roofStorageFraction = kRoofStorageFractionDefault,
     this.hotWaterFlowTempC = 60.0,
     this.hotWaterDeltaTK = 5.0,
@@ -363,6 +368,7 @@ class DesignSettings {
         if (mainsHeadM != kDefaultMainsHeadM) 'mainsHead_m': mainsHeadM,
         if (population != null) 'population': population,
         if (demandPerPersonL != null) 'demand_lpd': demandPerPersonL,
+        if (demandUse != null) 'demand_use': demandUse,
         if (groundStorageDays != kGroundStorageDaysDefault)
           'ground_storage_days': groundStorageDays,
         if (roofStorageFraction != kRoofStorageFractionDefault)
@@ -454,6 +460,10 @@ class DesignSettings {
         // Backlog W-4 — tolerant: absent / non-numeric / non-positive ⇒ null.
         population: switch (json['population']) {
           final num v when v.isFinite && v >= 1 => v.round(),
+          _ => null,
+        },
+        demandUse: switch (json['demand_use']) {
+          final String n => dailyDemandUseNamed(n)?.name,
           _ => null,
         },
         groundStorageDays: _clampOr(json['ground_storage_days'], 0.1, 30.0,

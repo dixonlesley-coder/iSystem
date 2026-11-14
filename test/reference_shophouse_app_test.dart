@@ -72,6 +72,7 @@ Future<ProviderContainer> _loadShophouse(ReferenceBuilding shop) async {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(shop.occupancy);
   c.read(populationProvider.notifier).set(shop.population);
+  c.read(demandUseProvider.notifier).pick(shop.demandUse);
   c.read(networkControllerProvider.notifier).loadNetwork(shop.network);
   // Unit A's shop: drawn through the Room tool's intent (default ceiling =
   // the controller's seed), then typed and named as in the Rooms inspector.
@@ -764,8 +765,9 @@ void main() {
       // Backlog W-5 — no capacity is entered, but the population is: every
       // GT / RT is auto-sized (650 / 250 L), so no `tank-capacity-unset`;
       // every roof tank's fill is drawn (no `roof-tank-fill-undrawn`); each
-      // meter: −0.5 + 3.5 m at 0.045139 L/s DN15 (0.02385 m) + 5.0 = 4.524 m
-      // <= 10 m (no `mains-pressure-insufficient`, backlog W-2).
+      // meter: −0.5 + 3.5 m at 0.034722 L/s DN15 (0.01467 m) + 5.0 = 4.515 m
+      // <= 10 m (no `mains-pressure-insufficient`, backlog W-2; 4.524 m with
+      // the 650 L tank before T-3).
       expect(kinds.where((k) => k.startsWith('tank-capacity-unset')), isEmpty);
       expect(kinds.where((k) => k.startsWith('roof-tank-fill-undrawn')),
           isEmpty);
@@ -917,33 +919,37 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 / W-5 (2026-11-14) — daily demand, auto capacities and the
-  // water reserve: 5 persons x 3 units = 15 x 120 L/person/day (private,
-  // `// VERIFY`) = 1800 L = 1.80 m3/day. No capacity is entered: each GT
-  // (ground role, share 12.5 / 37.5 = 1/3) = 600 L x 1.0 day = 600 → 650 L;
-  // each RT (roof role, fed from its GT, share 1/3) = 600 x 0.20 = 120 →
-  // 250 L. Stored 3 x 650 + 3 x 250 = 2700 L; reserve 2700 / 1800 = 1.5 days.
-  test('backlog W-4/W-5: auto 650 / 250 L tanks, reserve 1.5 days', () async {
+  // Backlog W-4 / W-5 / T-3 (2026-11-14) — daily demand, auto capacities and
+  // the water reserve: 5 persons x 3 units = 15 x 100 L/penghuni dan
+  // pegawai/day (the 'Ruko / rukan' preset, SNI 03-7065 Tabel 1, `// VERIFY`;
+  // 120 private default before T-3) = 1500 L = 1.50 m3/day. No capacity is
+  // entered: each GT (ground role, share 12.5 / 37.5 = 1/3) = 500 L x 1.0 day
+  // = 500 → the 500 L standard size (650 before T-3); each RT (roof role,
+  // share 1/3) = 500 x 0.20 = 100 → 250 L (unchanged). Stored 3 x 500 + 3 x
+  // 250 = 2250 L; reserve 2250 / 1500 = 1.5 days (unchanged).
+  test('backlog W-4/W-5/T-3: auto 500 / 250 L tanks, reserve 1.5 days', () async {
     final c = await _loadShophouse(buildShophouse());
     expect(c.read(populationProvider), 15);
-    expect(c.read(dailyDemandLitresProvider), closeTo(1800, 1e-9));
+    expect(c.read(dailyDemandLitresProvider), closeTo(1500, 1e-9));
+    expect(c.read(demandUseInForceProvider)?.name, 'Ruko / rukan');
     final auto = c.read(autoTankCapacitiesProvider);
     for (final u in kShopUnits) {
       final gt = auto['GT_$u']!;
       expect(gt.roofTarget, isFalse);
       expect(gt.share, closeTo(1 / 3, 1e-12));
-      expect(gt.rawLitres, closeTo(600, 1e-9));
-      expect(gt.litres, 650);
+      expect(gt.rawLitres, closeTo(500, 1e-9));
+      expect(gt.litres, 500);
       final rt = auto['RT_$u']!;
       expect(rt.roofTarget, isTrue);
       expect(rt.share, closeTo(1 / 3, 1e-12));
-      expect(rt.rawLitres, closeTo(120, 1e-9));
+      expect(rt.rawLitres, closeTo(100, 1e-9));
       expect(rt.litres, 250);
-      // Meter feed: 650 / 14 400 = 0.045139 L/s, DN15 v 0.255.
+      // Meter feed: 500 / 14 400 = 0.034722 L/s, DN15 v = 0.034722e-3 /
+      // 1.76715e-4 = 0.196 (0.045139 L/s v 0.255 with 650 L before T-3).
       final wm = c.read(sizingProvider)['e_cw_WM_${u}_GT_$u']!;
-      expect(wm.flow.inLitersPerSecond, closeTo(0.045139, 5e-7));
+      expect(wm.flow.inLitersPerSecond, closeTo(0.034722, 5e-7));
       expect(wm.diameter.inMillimeters, 15);
-      expect(wm.velocity.metersPerSecond, closeTo(0.255, 5e-4));
+      expect(wm.velocity.metersPerSecond, closeTo(0.196, 5e-4));
       // Transfer: 250 / 3600 = 0.069444 L/s, DN15 v 0.393.
       final tr = c.read(sizingProvider)['e_cw_U2_${u}_RT_$u']!;
       expect(tr.flow.inLitersPerSecond, closeTo(0.069444, 5e-7));
@@ -952,7 +958,7 @@ void main() {
     }
     final r = c.read(waterReserveProvider);
     expect(r.excludedTankIds, isEmpty);
-    expect(r.storedLitres, closeTo(2700, 1e-9));
+    expect(r.storedLitres, closeTo(2250, 1e-9));
     expect(r.days, closeTo(1.5, 1e-12));
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds, isNot(contains('daily-demand-unset')));

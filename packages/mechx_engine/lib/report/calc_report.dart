@@ -291,6 +291,10 @@ class CalcReportData {
   final ({int population, double litresPerPerson, double litresPerDay})?
       dailyDemand;
   final WaterReserve? waterReserve;
+
+  /// Backlog T-3 — the SNI 03-7065 building-use preset the per-person figure
+  /// came from (null: the occupancy default or a hand figure).
+  final DailyDemandUse? dailyDemandUse;
   final Map<String, String> reserveTankTags;
 
   final SprinklerDesign? sprinkler;
@@ -435,6 +439,7 @@ class CalcReportData {
     this.mainsChecks = const [],
     this.dailyDemand,
     this.waterReserve,
+    this.dailyDemandUse,
     this.reserveTankTags = const {},
     this.sprinkler,
     this.standpipe,
@@ -928,6 +933,14 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
   }
   // Backlog W-4 — the daily demand (only with a known population).
   final dd = d.dailyDemand;
+  final use = d.dailyDemandUse;
+  if (dd != null && use != null) {
+    ws.writeln(strings.format(RptStringKey.wsDailyDemandBasis, {
+      'use': use.name,
+      'lpd': use.litres.toStringAsFixed(0),
+      'unit': use.unit,
+    }));
+  }
   if (dd != null) {
     String n1(double v) =>
         v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);

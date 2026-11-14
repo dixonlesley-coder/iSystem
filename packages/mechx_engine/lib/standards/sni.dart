@@ -182,6 +182,37 @@ double dailyDemandPerPersonDefault(Occupancy o) => switch (o) {
       Occupancy.assembly => 10.0,
     };
 
+/// Backlog T-3 (2026-11-14) — one row of SNI 03-7065-2005 Tabel 1
+/// ("pemakaian air dingin minimum sesuai penggunaan gedung"): a building use,
+/// its daily water use and the unit it is counted per.
+typedef DailyDemandUse = ({String name, double litres, String unit});
+
+/// Backlog T-3 — the per-person / per-unit daily water use presets, SNI
+/// 03-7065-2005 Tabel 1 as quoted in secondary sources (theses / journals;
+/// the BSN document itself was not consulted). The hospital row is omitted
+/// (sources disagree: 500 vs 50 L/bed) and the department-store row is per
+/// m2, not per person. // VERIFY — [SniProfile.dailyDemandPerPersonTable].
+const List<DailyDemandUse> kSniDailyDemandUses = [
+  (name: 'Rumah tinggal', litres: 120, unit: 'penghuni'),
+  (name: 'Rumah susun', litres: 100, unit: 'penghuni'),
+  (name: 'Asrama', litres: 120, unit: 'penghuni'),
+  (name: 'Ruko / rukan', litres: 100, unit: 'penghuni dan pegawai'),
+  (name: 'Kantor / pabrik', litres: 50, unit: 'pegawai'),
+  (name: 'Gedung pertunjukan / bioskop', litres: 10, unit: 'kursi'),
+  (name: 'Gedung serba guna', litres: 25, unit: 'kursi'),
+  (name: 'Restoran', litres: 15, unit: 'kursi'),
+  (name: 'Hotel berbintang', litres: 250, unit: 'tempat tidur'),
+  (name: 'Peribadatan', litres: 5, unit: 'orang'),
+];
+
+/// Backlog T-3 — the preset named [name], null for an unknown / absent name.
+DailyDemandUse? dailyDemandUseNamed(String? name) {
+  for (final u in kSniDailyDemandUses) {
+    if (u.name == name) return u;
+  }
+  return null;
+}
+
 /// Occupancy class for UBAP fixture-unit loads (SNI 8153:2015 Tabel 3 columns):
 /// pribadi (private) / umum (public) / tempat berkumpul (assembly).
 enum Occupancy { private, public, assembly }
@@ -585,11 +616,14 @@ class SniProfile implements StandardsProfile {
   /// Unverified section, no Review advisory).
   StandardValue<Object?> get dailyDemandPerPersonTable =>
       const StandardValue<Object?>(
-        'daily demand per person: private (rumah tinggal) 120, public '
-        '(kantor) 50, assembly (gedung pertunjukan, per seat) 10 L/person/day',
+        'daily demand per person: occupancy defaults private (rumah tinggal) '
+        '120, public (kantor) 50, assembly (gedung pertunjukan, per seat) 10; '
+        'building-use presets rumah susun 100, asrama 120, ruko / rukan 100, '
+        'gedung serba guna 25, restoran 15, hotel berbintang 250, peribadatan '
+        '5 L/unit/day',
         unit: 'L/person/day',
-        citation: 'SNI 03-7065-2005 style per-person daily water use (NOT '
-            'confirmed verbatim)',
+        citation: 'SNI 03-7065-2005 Tabel 1 as quoted in secondary sources; '
+            'hospital row omitted (sources disagree)',
         status: VerificationStatus.notAnSniClause,
         note: 'Daily demand = population x litres per person per day (the '
             'occupancy default, editable per project); the water reserve is '

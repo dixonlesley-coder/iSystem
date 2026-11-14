@@ -43,6 +43,10 @@ class ReferenceBuilding {
   /// fixture states its basis.
   final int? population;
 
+  /// Backlog T-3 — the SNI 03-7065 Tabel 1 building-use preset the app
+  /// tests pick on the Building page (null = the occupancy default).
+  final String? demandUse;
+
   const ReferenceBuilding({
     required this.name,
     required this.building,
@@ -53,5 +57,6 @@ class ReferenceBuilding {
     required this.electrical,
     required this.occupancy,
     this.population,
+    this.demandUse,
   });
 }

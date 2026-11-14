@@ -117,6 +117,7 @@ Future<ProviderContainer> _loadTower(ReferenceBuilding b) async {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
   c.read(populationProvider.notifier).set(b.population);
+  c.read(demandUseProvider.notifier).pick(b.demandUse);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(ductSettingsProvider.notifier)
     ..setShape(kTowerDuctShape)

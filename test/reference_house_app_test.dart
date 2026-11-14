@@ -56,6 +56,7 @@ Future<ProviderContainer> _loadHouse(ReferenceBuilding house) async {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(house.occupancy);
   c.read(populationProvider.notifier).set(house.population);
+  c.read(demandUseProvider.notifier).pick(house.demandUse);
   c.read(networkControllerProvider.notifier).loadNetwork(house.network);
   c.read(electricalProjectProvider.notifier).setProject(house.electrical);
   // Let the electrical store's deferred MEP-equipment sync run.

@@ -4,7 +4,8 @@ import 'package:mechx_engine/network/network.dart' show Network;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
-import 'package:mechx_engine/standards/sni.dart' show Occupancy;
+import 'package:mechx_engine/standards/sni.dart'
+    show Occupancy, dailyDemandUseNamed;
 
 import '../data/autosave.dart';
 import '../ui/strings/app_strings.dart';
@@ -647,6 +648,25 @@ void setDemandPerPersonUndoable(ProviderReader read, double? next) =>
         apply: (v) => read(demandPerPersonOverrideProvider.notifier).set(v),
         next: next,
         label: StringKey.buildingInputDemandPerPerson);
+
+/// Backlog T-3 — undoable building-use preset pick: the use name and the
+/// per-person figure it fills move together in ONE undo step.
+void pickDemandUseUndoable(ProviderReader read, String? name) =>
+    setSettingUndoable<(String?, double?)>(read,
+        get: () => (
+              read(demandUseProvider),
+              read(demandPerPersonOverrideProvider),
+            ),
+        apply: (v) {
+          read(demandUseProvider.notifier).set(v.$1);
+          read(demandPerPersonOverrideProvider.notifier).set(v.$2);
+        },
+        next: (
+          dailyDemandUseNamed(name)?.name,
+          dailyDemandUseNamed(name)?.litres ??
+              read(demandPerPersonOverrideProvider),
+        ),
+        label: StringKey.buildingInputDemandUse);
 
 /// Backlog W-5 — undoable ground storage target (days).
 void setGroundStorageDaysUndoable(ProviderReader read, double next) =>

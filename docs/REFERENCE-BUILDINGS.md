@@ -286,10 +286,18 @@ judged.
 | Building | Population (basis) | L/person/day | Daily m3 | Domestic storage | Reserve |
 |---|---|---|---|---|---|
 | House | 5 (one household) | 120 | 0.60 | RT auto 650 L (only tank: 600 x 1.0 → 650) | 650 / 600 = 1.08 days |
-| Shophouse | 15 (5 per unit x 3) | 120 | 1.80 | GT auto 650 L (1/3 x 1800 x 1.0 = 600 → 650), RT auto 250 L (1/3 x 1800 x 0.20 = 120 → 250), per unit: 2.7 m3 | 2700 / 1800 = 1.5 days |
+| Shophouse | 15 (5 per unit x 3) | 100 (Ruko / rukan preset, T-3) | 1.50 | GT auto 500 L (1/3 x 1500 x 1.0 = 500 → 500), RT auto 250 L (1/3 x 1500 x 0.20 = 100 → 250); total 2.25 m3 | 2250 / 1500 = 1.5 days |
 | Office | 200 (50 staff x 4 floors) | 50 | 10.00 | GT auto 10 000 L (only domestic tank: 10 000 x 1.0) | 1.0 day |
-| Apartment | 96 (4 per unit x 2 units x 12) | 120 | 11.52 | GT 20 000 + RT 10 000 = 30.0 m3 (entered) | 30 000 / 11 520 = 2.6 days |
+| Apartment | 96 (4 per unit x 2 units x 12) | 100 (Rumah susun preset, T-3) | 9.60 | GT 20 000 + RT 10 000 = 30.0 m3 (entered) | 30 000 / 9 600 = 3.125 days |
 | Tower | 3000 (100 staff x 30 floors) | 50 | 150.00 | GT 150 000 + RT 30 000 = 180.0 m3 (entered; GT was 60 000 before backlog T-1) | 180 000 / 150 000 = 1.2 days |
+
+**SNI 03-7065 presets (backlog T-3, 2026-11-14).** The apartment picks 'Rumah
+susun' (100 L/penghuni/day): 9 600 L/day (was 11 520), reserve 3.125 days (was
+2.6). The shophouse picks 'Ruko / rukan' (100 L/penghuni dan pegawai/day): 1 500
+L/day (was 1 800); auto GT 500 L (was 650; M-601 '0.5 m3 (auto)'), RT 250 L
+unchanged; meter feed 0.045139 → 0.034722 L/s (DN15, v 0.255 → 0.196); W-2 4.524 →
+4.515 m; transfer line and TP unchanged; reserve 2250 / 1500 = 1.5 days
+(unchanged). House, office and tower keep their occupancy defaults.
 
 **Auto marks on the drawings (backlog T-2, 2026-11-14).** House M-601 TK-01
 '- (*)' → '0.7 m3 (auto)', M-201 'TK-01 Roof tank' → 'TK-01 Roof tank · 0.7 m3

@@ -121,6 +121,7 @@ enum RptStringKey {
   wsMainsShort,
   // Backlog W-4 — {pop} {lpd} {m3} {lps}
   wsDailyDemand,
+  wsDailyDemandBasis, // {use} {lpd} {unit}
   // {tag} {kind} {cap} {fire} {dom}
   wsReserveTank,
   wsReserveFireShare, // {fire}
@@ -634,6 +635,9 @@ const Map<RptStringKey, String> kReportStringsEn = {
           '**{req} m** (lift {lift} + feed friction {fric} at {lps} L/s + '
           'inlet residual {res}) · {verdict} _(// VERIFY mains pressure)_',
   RptStringKey.wsMainsShort: 'INSUFFICIENT',
+  RptStringKey.wsDailyDemandBasis:
+      '- Daily demand basis: {use}, {lpd} L/{unit}/day (SNI 03-7065-2005 '
+          'Tabel 1) _(// VERIFY secondary sources)_',
   RptStringKey.wsDailyDemand:
       '- Daily water demand: {pop} persons x {lpd} L/person/day = **{m3} '
           'm3/day** · average draw {lps} L/s _(// VERIFY per-person figure)_',
@@ -1239,6 +1243,9 @@ const Map<RptStringKey, String> kReportStringsId = {
           '**{req} m** (angkat {lift} + gesekan pipa {fric} pada {lps} L/s + '
           'sisa tekanan inlet {res}) · {verdict} _(// VERIFY tekanan PDAM)_',
   RptStringKey.wsMainsShort: 'TIDAK CUKUP',
+  RptStringKey.wsDailyDemandBasis:
+      '- Dasar kebutuhan harian: {use}, {lpd} L/{unit}/hari (SNI 03-7065-2005 '
+          'Tabel 1) _(// VERIFY sumber sekunder)_',
   RptStringKey.wsDailyDemand:
       '- Kebutuhan air harian: {pop} orang x {lpd} L/orang/hari = **{m3} '
           'm3/hari** · pemakaian rata-rata {lps} L/s _(// VERIFY angka per '

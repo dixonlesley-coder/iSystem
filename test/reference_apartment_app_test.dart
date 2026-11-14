@@ -111,6 +111,7 @@ Future<ProviderContainer> _loadApartment(ReferenceBuilding b) async {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
   c.read(populationProvider.notifier).set(b.population);
+  c.read(demandUseProvider.notifier).pick(b.demandUse);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(networkControllerProvider.notifier).loadNetwork(b.network);
   final rooms = c.read(roomAreasProvider.notifier);
@@ -1753,19 +1754,20 @@ void main() {
     c.dispose();
   });
 
-  // Backlog W-4 (2026-11-14) — daily demand and water reserve: 4 persons x 2 units x 12 floors = 96 x 120 L/person/day (private) = 11 520 L = 11.52 m3/day; stored GT 20 000 + RT 10 000 = 30 000 L; reserve 30 000 / 11 520 = 2.6042 days.
-  test('backlog W-4: daily demand 11.52 m3/day, reserve 2.6 days', () async {
+  // Backlog W-4 / T-3 (2026-11-14) — daily demand and water reserve: 4 persons x 2 units x 12 floors = 96 x 100 L/penghuni/day (the 'Rumah susun' preset, SNI 03-7065 Tabel 1, `// VERIFY`; 120 private default before T-3) = 9 600 L = 9.60 m3/day; stored GT 20 000 + RT 10 000 = 30 000 L; reserve 30 000 / 9 600 = 3.125 days.
+  test('backlog W-4/T-3: daily demand 9.60 m3/day, reserve 3.1 days', () async {
     final c = await _loadApartmentDrawnPrv();
     expect(c.read(populationProvider), 96);
-    expect(c.read(demandPerPersonProvider), 120.0);
-    expect(c.read(dailyDemandLitresProvider), closeTo(11520.0, 1e-9));
+    expect(c.read(demandPerPersonProvider), 100.0);
+    expect(c.read(demandUseInForceProvider)?.name, 'Rumah susun');
+    expect(c.read(dailyDemandLitresProvider), closeTo(9600.0, 1e-9));
     final r = c.read(waterReserveProvider);
     // GT + RT counted (the fire tank FT is fire-only, not domestic).
     expect([for (final t in r.counted) t.tankId], ['GT', 'RT']);
     expect(r.excludedTankIds, isEmpty);
     expect(r.storedLitres, closeTo(30000.0, 1e-9));
-    expect(r.days, closeTo(2.604167, 5e-5));
-    expect(formatReserveDays(r.days!), '2.6 days');
+    expect(r.days, closeTo(3.125, 5e-5));
+    expect(formatReserveDays(r.days!), '3.1 days');
     final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
     expect(kinds, isNot(contains('daily-demand-unset')));
     c.dispose();

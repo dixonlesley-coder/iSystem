@@ -395,6 +395,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       _ => null,
     },
     waterReserve: ref.read(waterReserveProvider),
+    dailyDemandUse: ref.read(demandUseInForceProvider),
     reserveTankTags: {
       for (final t in ref.read(waterReserveProvider).tanks)
         t.tankId: '${nodeTagMap[t.tankId] ?? t.tankId}'

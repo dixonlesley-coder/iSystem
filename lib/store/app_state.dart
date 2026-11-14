@@ -154,6 +154,43 @@ class DemandPerPersonController extends Notifier<double?> {
       state = (v == null || v <= 0) ? null : v.clamp(1.0, 2000.0).toDouble();
 }
 
+/// Backlog T-3 (2026-11-14) — the SNI 03-7065 Tabel 1 building-use preset
+/// last picked (its name; null = none). Picking one fills the per-person
+/// override with its figure ([DemandUseController.pick]); the override then
+/// stays an ordinary editable value.
+final demandUseProvider =
+    NotifierProvider<DemandUseController, String?>(DemandUseController.new);
+
+class DemandUseController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  /// Records [name] (an unknown name clears it) without touching the figure
+  /// (used by load / undo).
+  void set(String? name) => state = dailyDemandUseNamed(name)?.name;
+
+  /// Picks the preset [name]: records it and fills the per-person override
+  /// with its litres.
+  void pick(String? name) {
+    final u = dailyDemandUseNamed(name);
+    state = u?.name;
+    if (u != null) {
+      ref.read(demandPerPersonOverrideProvider.notifier).set(u.litres);
+    }
+  }
+}
+
+/// Backlog T-3 — the preset the per-person figure in force came from: the
+/// picked use while the override still equals its figure (an edit away
+/// from it, or a cleared override, means the basis is no longer the
+/// preset); null otherwise.
+final demandUseInForceProvider = Provider<DailyDemandUse?>((ref) {
+  final u = dailyDemandUseNamed(ref.watch(demandUseProvider));
+  final o = ref.watch(demandPerPersonOverrideProvider);
+  if (u == null || o == null || (o - u.litres).abs() > 1e-9) return null;
+  return u;
+});
+
 /// Backlog W-4 — the daily demand per person in force: the override, else
 /// the occupancy default.
 final demandPerPersonProvider = Provider<double>((ref) =>

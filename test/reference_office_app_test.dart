@@ -87,6 +87,7 @@ Future<ProviderContainer> _loadOffice(ReferenceBuilding b) async {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
   c.read(populationProvider.notifier).set(b.population);
+  c.read(demandUseProvider.notifier).pick(b.demandUse);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(networkControllerProvider.notifier).loadNetwork(b.network);
   final rooms = c.read(roomAreasProvider.notifier);

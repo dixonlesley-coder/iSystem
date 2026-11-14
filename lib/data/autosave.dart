@@ -196,6 +196,7 @@ ProjectDocument buildDocument(ProviderReader read) {
       population: read(populationProvider),
       demandPerPersonL: read(demandPerPersonOverrideProvider),
       groundStorageDays: read(groundStorageDaysProvider),
+      demandUse: read(demandUseProvider),
       roofStorageFraction: read(roofStorageFractionProvider),
       hotWaterFlowTempC: read(hotWaterFlowTempProvider),
       hotWaterDeltaTK: read(hotWaterDeltaTProvider),
@@ -360,6 +361,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(populationProvider.notifier).set(s.population);
   read(demandPerPersonOverrideProvider.notifier).set(s.demandPerPersonL);
   read(groundStorageDaysProvider.notifier).set(s.groundStorageDays);
+  read(demandUseProvider.notifier).set(s.demandUse);
   read(roofStorageFractionProvider.notifier).set(s.roofStorageFraction);
   read(hotWaterFlowTempProvider.notifier).set(s.hotWaterFlowTempC);
   read(hotWaterDeltaTProvider.notifier).set(s.hotWaterDeltaTK);

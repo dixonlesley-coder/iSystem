@@ -638,4 +638,6 @@ ReferenceBuilding buildApartment({int? prvFloor = kAptPrvFloor}) =>
       occupancy: Occupancy.private,
       // Backlog W-4 — 4 persons per unit x 2 units x 12 floors = 96.
       population: 96,
+      // Backlog T-3 — the 'Rumah susun' preset (100 L/penghuni/day).
+      demandUse: 'Rumah susun',
     );

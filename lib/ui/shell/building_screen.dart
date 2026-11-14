@@ -4,7 +4,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/sizing/tank_fill.dart' show formatReserveDays;
-import 'package:mechx_engine/standards/sni.dart' show Occupancy;
+import 'package:mechx_engine/standards/sni.dart'
+    show Occupancy, kSniDailyDemandUses;
 import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
 import 'package:mechx_engine/report/riser_tags.dart' show fflLabel;
@@ -27,6 +28,7 @@ import '../../store/app_state.dart'
         demandPerPersonOverrideProvider,
         dailyDemandLitresProvider,
         groundStorageDaysProvider,
+        demandUseInForceProvider,
         roofStorageFractionProvider,
         statusMessageProvider;
 import '../../store/floor_remap.dart'
@@ -663,6 +665,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     final perPersonOverride = ref.watch(demandPerPersonOverrideProvider);
     final daily = ref.watch(dailyDemandLitresProvider);
     final reserve = ref.watch(waterReserveProvider);
+    final demandUse = ref.watch(demandUseInForceProvider);
     final groundDays = ref.watch(groundStorageDaysProvider);
     final roofFraction = ref.watch(roofStorageFractionProvider);
     final slope = ref.watch(drainageSlopeProvider);
@@ -938,6 +941,27 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 onSubmit: (v) => setPopulationUndoable(
                     ref.read, v == null || v <= 0 ? null : v.round()),
               ),
+            ],
+          ),
+          caption(context.strings.format(
+              StringKey.buildingInputCaptionPopulation,
+              {'unit': demandUse?.unit ?? 'person'})),
+          // Backlog T-3 — the SNI 03-7065 Tabel 1 building-use presets: a
+          // pick fills the per-person figure (then an ordinary override).
+          const SizedBox(height: MechXSpacing.sm),
+          Text(context.strings(StringKey.buildingInputDemandUse),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              for (final u in kSniDailyDemandUses)
+                MechXSegment(
+                  label: '${u.name} ${u.litres.toStringAsFixed(0)}',
+                  selected: demandUse?.name == u.name,
+                  onTap: () => pickDemandUseUndoable(ref.read, u.name),
+                ),
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),

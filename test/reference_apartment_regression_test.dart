@@ -57,6 +57,7 @@ ProviderContainer _load(ReferenceBuilding b, Network net) {
   c.read(feedStrategyProvider.notifier).set(FeedStrategy.downfeed);
   c.read(occupancyProvider.notifier).set(b.occupancy);
   c.read(populationProvider.notifier).set(b.population);
+  c.read(demandUseProvider.notifier).pick(b.demandUse);
   c.read(fireHazardProvider.notifier).set(FireHazardClass.lightHazard);
   c.read(networkControllerProvider.notifier).loadNetwork(net);
   return c;

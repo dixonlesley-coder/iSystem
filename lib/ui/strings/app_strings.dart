@@ -1177,6 +1177,8 @@ enum StringKey {
   reserveHeadlineValue, // {days} {stored} {daily}
   reserveExcluded, // {n}
   buildingInputGroundStorageDays,
+  buildingInputDemandUse,
+  buildingInputCaptionPopulation, // {unit}
   buildingInputRoofStorageFraction,
   buildingInputCaptionStorageTargets,
   issueTankCapacityUnsetTitle,
@@ -2860,6 +2862,9 @@ const Map<StringKey, String> _en = {
   StringKey.issueDailyDemandUnsetTitle: 'Population not set: no water-reserve figure',
   StringKey.issueDailyDemandUnsetMessage:
       'No population is entered on the Building page, so there is no daily water demand and no water-reserve (days) figure. Enter the population (persons).',
+  StringKey.buildingInputDemandUse: 'Building use (SNI 03-7065 Tabel 1)',
+  StringKey.buildingInputCaptionPopulation:
+      'Counted per {unit} (the unit follows the building-use preset).',
   StringKey.buildingInputGroundStorageDays: 'Ground storage (days of demand)',
   StringKey.buildingInputRoofStorageFraction: 'Roof tank (fraction of demand)',
   StringKey.buildingInputCaptionStorageTargets:
@@ -4621,6 +4626,9 @@ const Map<StringKey, String> _id = {
   StringKey.issueDailyDemandUnsetTitle: 'Jumlah penghuni belum diisi: tanpa angka cadangan air',
   StringKey.issueDailyDemandUnsetMessage:
       'Jumlah penghuni belum diisi di halaman Bangunan, sehingga tidak ada kebutuhan air harian dan tidak ada angka cadangan air (hari). Isi jumlah penghuni (orang).',
+  StringKey.buildingInputDemandUse: 'Penggunaan gedung (SNI 03-7065 Tabel 1)',
+  StringKey.buildingInputCaptionPopulation:
+      'Dihitung per {unit} (satuan mengikuti preset penggunaan gedung).',
   StringKey.buildingInputGroundStorageDays: 'Tampungan bawah (hari kebutuhan)',
   StringKey.buildingInputRoofStorageFraction: 'Tangki atap (fraksi kebutuhan)',
   StringKey.buildingInputCaptionStorageTargets:

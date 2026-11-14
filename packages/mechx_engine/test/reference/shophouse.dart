@@ -400,4 +400,7 @@ ReferenceBuilding buildShophouse() => ReferenceBuilding(
       occupancy: Occupancy.private,
       // Backlog W-4 — 5 persons per unit x 3 units = 15.
       population: 15,
+      // Backlog T-3 — the 'Ruko / rukan' preset (100 L/penghuni dan
+      // pegawai/day).
+      demandUse: 'Ruko / rukan',
     );
