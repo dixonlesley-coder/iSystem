@@ -62,6 +62,38 @@ void main() {
     expect(recoveryPartnerSlot(recoveryPartnerSlot(p)), p);
   });
 
+  test('findLatestRecovery: equal modified times (one-second resolution on '
+      'Windows) resolve to the LATER family member, whatever the directory '
+      'listing order — the v1.24.0 release-gate failure', () async {
+    final primary = recoverySlotFor(null);
+    final session = recoverySessionSlot(primary, 1);
+    final second = recoverySessionSlot(primary, 2);
+    final at = DateTime(2026, 11, 15, 3, 0, 0);
+    // Written in every order, so no listing order can pass by luck.
+    for (final order in [
+      [primary, session, second],
+      [second, session, primary],
+      [session, second, primary],
+    ]) {
+      for (final p in [primary, session, second]) {
+        final f = File(p);
+        if (f.existsSync()) f.deleteSync();
+      }
+      for (final p in order) {
+        await writeRecovery(_doc('T'), path: p);
+      }
+      for (final p in [primary, session, second]) {
+        File(p).setLastModifiedSync(at);
+      }
+      expect(await findLatestRecovery(), second, reason: '$order');
+      File(second).deleteSync();
+      expect(await findLatestRecovery(), session, reason: '$order');
+    }
+    expect(recoverySlotIndex(primary), 0);
+    expect(recoverySlotIndex(session), 1);
+    expect(recoverySlotIndex(second), 2);
+  });
+
   Future<(ProviderContainer, String, String)> pendingSession() async {
     final c = ProviderContainer();
     addTearDown(c.dispose);

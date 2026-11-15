@@ -3881,9 +3881,11 @@ class NetworkController extends Notifier<DrawingState> {
   /// each child is placed at its parent plus the rotated delta with the minor
   /// component zeroed (axis) or |dx| == |dy| forced (diagonal, read back from
   /// the absolute positions, not just the delta; "was axis-aligned / diagonal"
-  /// is judged to 1e-9 of the run length) — so an
-  /// orthogonal layout turned 45° is exactly diagonal, never off by an ulp
-  /// that ortho / the riser view would read as a skew. Any other angle is a
+  /// is judged to 1e-9 of the run length) — so a
+  /// diagonal layout turned 45° is EXACTLY axis-aligned, never off by an ulp
+  /// that ortho / the riser view would read as a skew, and an orthogonal one
+  /// is diagonal to the last bit its coordinates hold (within 2 ulp of the
+  /// largest coordinate; exactly, where both axes' float grids allow). Any other angle is a
   /// plain rotation. Plan-only: floors, elevations and ids are untouched (a
   /// riser's two coincident ends map to one point, so it stays vertical).
   /// Returns false (recording nothing) for a non-finite input, an empty set,
