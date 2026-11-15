@@ -31,6 +31,11 @@ void main() {
     return Offset(node.x, node.y);
   }
 
+  /// One unit in the last place of [x] (IEEE double): 2^(exponent - 52).
+  double ulp(double x) => x == 0
+      ? double.minPositive
+      : math.pow(2.0, (math.log(x.abs()) / math.ln2).floor() - 52).toDouble();
+
   NetNode node(String id, double x, double y, {int floor = 0, String s = 's'}) =>
       NetNode(id: id, sheetId: s, x: x, y: y, floorIndex: floor);
   NetEdge run(String id, String a, String b) =>
@@ -271,10 +276,21 @@ void main() {
             const {}, {'ab', 'bd', 'de'}, const Offset(7.1, 3.3), angle);
         final net = c.read(networkControllerProvider).network;
         Offset d(String p, String q) => pos(net, q) - pos(net, p);
-        // The axis runs are now exact diagonals…
+        // The axis runs are now diagonals, exact to the last bit the
+        // coordinates hold. Each end is stored as fl(parent + leg) per axis
+        // (half an ulp of the coordinate) and read back as fl(child - parent)
+        // (half an ulp of the leg), so |dx| and |dy| can differ by at most
+        // 2 ulp of the largest number involved — and NOT by zero in general:
+        // when x and y sit in different binades no exactly diagonal point
+        // exists (the Windows release gate found one at -45, off by 1 ulp).
         for (final (p, q) in [('a', 'b'), ('b', 'd')]) {
           final v = d(p, q);
-          expect(v.dx.abs(), v.dy.abs(), reason: '$angle $p-$q $v');
+          final a = pos(net, p), b = pos(net, q);
+          final big = [a.dx, a.dy, b.dx, b.dy]
+              .map((x) => x.abs())
+              .reduce(math.max);
+          expect((v.dx.abs() - v.dy.abs()).abs(), lessThanOrEqualTo(2 * ulp(big)),
+              reason: '$angle $p-$q ${v.dx} ${v.dy}');
         }
         // …and the diagonal tail is exactly axis-aligned (an odd number of
         // 45 deg turns in total so far alternates the two).

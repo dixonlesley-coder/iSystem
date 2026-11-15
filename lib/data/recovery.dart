@@ -87,6 +87,24 @@ String recoverySessionSlot(String slot, int n) {
 
 final _sessionSuffix = RegExp(r'\.session(-\d+)?\.mechx$');
 
+/// The position of [slot] in its family: 0 the primary, 1 the session
+/// sibling, n the numbered sibling `.session-<n>.mechx`.
+int recoverySlotIndex(String slot) {
+  final m = _sessionSuffix.firstMatch(slot);
+  if (m == null) return 0;
+  final n = m.group(1);
+  return n == null ? 1 : int.tryParse(n.substring(1)) ?? 1;
+}
+
+/// Tie-break for two snapshots with the SAME modified time: is [a] the one
+/// to prefer over [b] as "latest"? The later family member wins; then the
+/// name, so the result is deterministic.
+bool _laterOnTie(String a, String b) {
+  final ia = recoverySlotIndex(a), ib = recoverySlotIndex(b);
+  if (ia != ib) return ia > ib;
+  return a.compareTo(b) > 0;
+}
+
 /// The primary `<key>.mechx` of any member of a recovery slot family.
 String recoveryPrimarySlot(String slot) {
   final m = _sessionSuffix.firstMatch(slot);
@@ -240,7 +258,9 @@ Future<String?> readRecoverySource(String path) async {
 /// The most-recently-written recovery snapshot across all per-project slots in
 /// [dir] (the app-support recovery dir by default), or null when none exists.
 /// Only primary `.mechx` files are considered — the `.bak`/`.tmp`/`.src`
-/// siblings are skipped. Never throws (a missing/unreadable dir ⇒ null).
+/// siblings are skipped. Equal modified times (one-second resolution on
+/// Windows) resolve to the later family member. Never throws (a
+/// missing/unreadable dir ⇒ null).
 Future<String?> findLatestRecovery({String? dir}) async {
   try {
     final d = Directory(dir ?? recoveryDir());
@@ -250,7 +270,16 @@ Future<String?> findLatestRecovery({String? dir}) async {
     await for (final e in d.list(followLinks: false)) {
       if (e is! File || !e.path.endsWith('.mechx')) continue;
       final at = (await e.stat()).modified;
-      if (bestAt == null || at.isAfter(bestAt)) {
+      // A TIE is real, not theoretical: file times are read at one-second
+      // resolution on Windows, so two snapshots written in the same second
+      // compare equal. A session sibling is only ever written AFTER the
+      // member before it in its family (it exists because that one was
+      // pending), so on a tie the later family member is the newer; across
+      // families the name decides, so the answer never depends on the
+      // directory listing order.
+      if (bestAt == null ||
+          at.isAfter(bestAt) ||
+          (at == bestAt && _laterOnTie(e.path, best!))) {
         best = e.path;
         bestAt = at;
       }
