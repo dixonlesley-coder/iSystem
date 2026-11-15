@@ -3879,7 +3879,9 @@ class NetworkController extends Notifier<DrawingState> {
   /// re-squares every selected run that WAS exactly axis-aligned or exactly
   /// diagonal: walking the selected edges breadth-first from the first node,
   /// each child is placed at its parent plus the rotated delta with the minor
-  /// component zeroed (axis) or |dx| == |dy| forced (diagonal) — so an
+  /// component zeroed (axis) or |dx| == |dy| forced (diagonal, read back from
+  /// the absolute positions, not just the delta; "was axis-aligned / diagonal"
+  /// is judged to 1e-9 of the run length) — so an
   /// orthogonal layout turned 45° is exactly diagonal, never off by an ulp
   /// that ortho / the riser view would read as a skew. Any other angle is a
   /// plain rotation. Plan-only: floors, elevations and ids are untouched (a
@@ -3940,8 +3942,38 @@ class NetworkController extends Notifier<DrawingState> {
   /// diagonal before the turn is exactly diagonal / axis-aligned after it.
   void _resquareRotated(Network net, Set<String> ids, Set<String> edgeIds,
       Map<String, Offset> next, Offset Function(Offset d) rot) {
-    bool square(Offset d) =>
-        d.dx == 0 || d.dy == 0 || d.dx.abs() == d.dy.abs();
+    // "Square" is judged within the SAME relative tolerance [snap] uses, not
+    // bit-for-bit: a run reads back as child - parent, and (p + m) - p is not
+    // m in general, so an exactly placed diagonal can read an ulp off (and
+    // sin / cos differ in the last bit between platforms — the Windows
+    // release-gate failure of 2026-11-15). 1e-9 of the run length is far
+    // below anything drawn.
+    bool square(Offset d) {
+      final tol = d.distance * 1e-9;
+      return d.dx.abs() <= tol ||
+          d.dy.abs() <= tol ||
+          (d.dx.abs() - d.dy.abs()).abs() <= tol;
+    }
+
+    // The child of [p] along the diagonal (sx, sy) at leg [m], chosen so the
+    // run READS exactly diagonal where the coordinates can hold it:
+    // |c.dx - p.dx| == |c.dy - p.dy| bit-for-bit. p + m rounds per axis, so
+    // the leg is shortened to the smaller read-back (a few ulps) until both
+    // axes agree. Best effort: when x and y sit on very different float grids
+    // no such point may exist, and the run stays diagonal to the last bit the
+    // coarser axis holds — [square] still recognises it on the next turn.
+    Offset diagonalChild(Offset p, double sx, double sy, double m) {
+      var leg = m;
+      var c = Offset(p.dx + sx * leg, p.dy + sy * leg);
+      for (var i = 0; i < 16; i++) {
+        final a = (c.dx - p.dx).abs(), b = (c.dy - p.dy).abs();
+        if (a == b) return c;
+        leg = math.min(a, b);
+        c = Offset(p.dx + sx * leg, p.dy + sy * leg);
+      }
+      return c;
+    }
+
     Offset snap(Offset d) {
       final len = d.distance;
       if (len == 0) return Offset.zero;
@@ -3976,7 +4008,11 @@ class NetworkController extends Notifier<DrawingState> {
           placed.add(cid);
           queue.add(cid);
           if (!square(d0)) continue; // keeps its plain rotated position
-          next[cid] = next[pid]! + snap(rot(d0));
+          final v = snap(rot(d0));
+          final at = next[pid]!;
+          next[cid] = (v.dx != 0 && v.dy != 0 && v.dx.abs() == v.dy.abs())
+              ? diagonalChild(at, v.dx.sign, v.dy.sign, v.dx.abs())
+              : at + v;
         }
       }
     }

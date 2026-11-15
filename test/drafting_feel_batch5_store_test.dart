@@ -292,6 +292,70 @@ void main() {
       }
     });
 
+    test(
+        'rotateSelectionAbout 45: the re-squaring survives the round trip '
+        'through absolute coordinates (x and y of very different magnitude, '
+        'so (px + m) - px and (py + m) - py round differently) — the Windows '
+        'release-gate failure of 2026-11-15', () {
+      // On Windows sin / cos of 135 deg differ from Linux in the last bit, so
+      // the re-squared positions landed on coordinates where a diagonal placed
+      // as parent + (m, m) no longer READ as |dx| == |dy| when the next turn
+      // recomputed child - parent. The run was then not re-squared, and an
+      // axis-aligned result carried a ~1e-15 skew. Reproduced here on any
+      // platform with coordinates of unequal magnitude.
+      for (final origin in const [
+        Offset(0.1, 1000003.7),
+        Offset(123456.789, 0.3),
+        Offset(-7777.77, 0.123456789),
+      ]) {
+        final c = make();
+        final n = c.read(networkControllerProvider.notifier);
+        n.loadNetwork(Network(
+          nodes: [
+            node('a', origin.dx, origin.dy),
+            node('b', origin.dx + 100, origin.dy),
+            node('d', origin.dx + 100, origin.dy + 50),
+            node('e', origin.dx + 130.3, origin.dy + 80.3),
+          ],
+          edges: [
+            run('ab', 'a', 'b'),
+            run('bd', 'b', 'd'),
+            run('de', 'd', 'e'),
+          ],
+        ));
+        const sel = {'ab', 'bd', 'de'};
+        const pivot = Offset(7.1, 3.3);
+        Offset d(String p, String q) {
+          final net = c.read(networkControllerProvider).network;
+          return pos(net, q) - pos(net, p);
+        }
+
+        for (final angle in [45.0, 135.0, -45.0, 225.0, 45.0, -135.0]) {
+          n.rotateSelectionAbout(const {}, sel, pivot, angle);
+          // A diagonal is exact only as far as the absolute coordinates
+          // can hold it (1e6 has a 1.2e-10 grid): equal to 1e-9 here…
+          for (final (p, q) in [('a', 'b'), ('b', 'd')]) {
+            final v = d(p, q);
+            expect(v.dx.abs(), closeTo(v.dy.abs(), 1e-9),
+                reason: '$origin $angle $p-$q ${v.dx} ${v.dy}');
+          }
+          // …but an axis-aligned run is EXACT on every turn, because the
+          // near-diagonal it came from is still recognised and re-squared.
+          final tail = d('d', 'e');
+          expect(tail.dx == 0 || tail.dy == 0, isTrue,
+              reason: '$origin $angle tail ${tail.dx} ${tail.dy}');
+          n.rotateSelectionAbout(const {}, sel, pivot, -angle);
+          final ab = d('a', 'b'), bd = d('b', 'd'), back = d('d', 'e');
+          expect(ab.dx == 0 || ab.dy == 0, isTrue,
+              reason: '$origin back $angle a-b ${ab.dx} ${ab.dy}');
+          expect(bd.dx == 0 || bd.dy == 0, isTrue,
+              reason: '$origin back $angle b-d ${bd.dx} ${bd.dy}');
+          expect(back.dx.abs(), closeTo(back.dy.abs(), 1e-9),
+              reason: '$origin back $angle tail ${back.dx} ${back.dy}');
+        }
+      }
+    });
+
     test('rotateSelectionAbout 30: a plain rotation matching the preview', () {
       final c = make();
       final n = c.read(networkControllerProvider.notifier);
