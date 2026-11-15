@@ -79,6 +79,12 @@ app widget tests size the surface to a desktop window via
 **The gate (must stay green): `flutter analyze` clean + engine `dart test` +
 app `flutter test`.** No change lands red.
 
+CI (`.github/workflows/ci.yml`) runs that gate on Linux (`verify`) AND the
+engine + app tests on Windows (`verify-windows`, `flutter test --exclude-tags
+golden` — goldens are Linux-locked). The app ships on Windows only: never assert
+bit-exact trig results, and never rely on sub-second file modified times (they
+read at one-second resolution there).
+
 ### Watch-outs when running commands
 - Bash `cwd` persists between calls. `dart test` only works inside
   `packages/mechx_engine`; `flutter test` only from the repo root. Double-check
