@@ -93,6 +93,32 @@ export 'riser_tags.dart' show equipmentDetail;
 /// F7: the mode / filter / toggles / viewports are held in the transient
 /// [schematicViewProvider] so they survive a hop to another workspace and back.
 /// Only the ephemeral Export / Show popover-open flags stay widget-local.
+/// Backlog Z-5 — the ONE node label both riser painters (Auto and Edit)
+/// print: a fire zone break tank ([fireBreakTankIds], the zone chain's
+/// `fireBreakTankIdsProvider`) reads [kFireBreakTankLabel]; any other
+/// component its [NodeComponent.label]; a fixture its type; a junction null.
+String? schematicNodeLabel(NetNode node,
+    {Set<String> fireBreakTankIds = const {}}) {
+  if (fireBreakTankIds.contains(node.id)) return kFireBreakTankLabel;
+  final c = node.component;
+  if (c != null) return c.label;
+  final f = node.fixture;
+  if (f != null) return _schematicFixtureLabel(f);
+  return null;
+}
+
+String _schematicFixtureLabel(PlumbingFixture f) => switch (f) {
+      PlumbingFixture.waterClosetFlushValve => 'WC',
+      PlumbingFixture.waterClosetFlushTank => 'WC',
+      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.urinalFlushValve => 'Urinal',
+      PlumbingFixture.lavatory => 'Lavatory',
+      PlumbingFixture.shower => 'Shower',
+      PlumbingFixture.bathtub => 'Bathtub',
+      PlumbingFixture.kitchenSink => 'Sink',
+      PlumbingFixture.hoseBibb => 'Hose bibb',
+    };
+
 class SchematicView extends ConsumerStatefulWidget {
   const SchematicView({super.key});
 
@@ -2192,6 +2218,7 @@ class _EditElevationState extends ConsumerState<_EditElevation>
                       sizing: sizing,
                       building: building,
                       mounting: ref.watch(mountingProvider),
+                      fireBreakTankIds: ref.watch(fireBreakTankIdsProvider),
                       colors: colors,
                       transform: vt,
                       selectedEdgeIds: selection.edgeIds,
@@ -3453,26 +3480,9 @@ class _AutoSchematicPainter extends CustomPainter {
 
   /// A human label for [node] on the single-line — its equipment name
   /// ([NodeComponent.label]) or fixture type — or null for a plain junction.
-  String? _nodeLabel(NetNode node) {
-    if (fireBreakTankIds.contains(node.id)) return kFireBreakTankLabel;
-    final c = node.component;
-    if (c != null) return c.label;
-    final f = node.fixture;
-    if (f != null) return _fixtureLabel(f);
-    return null;
-  }
+  String? _nodeLabel(NetNode node) =>
+      schematicNodeLabel(node, fireBreakTankIds: fireBreakTankIds);
 
-  String _fixtureLabel(PlumbingFixture f) => switch (f) {
-        PlumbingFixture.waterClosetFlushValve => 'WC',
-        PlumbingFixture.waterClosetFlushTank => 'WC',
-        PlumbingFixture.urinalFlushTank => 'Urinal',
-        PlumbingFixture.urinalFlushValve => 'Urinal',
-        PlumbingFixture.lavatory => 'Lavatory',
-        PlumbingFixture.shower => 'Shower',
-        PlumbingFixture.bathtub => 'Bathtub',
-        PlumbingFixture.kitchenSink => 'Sink',
-        PlumbingFixture.hoseBibb => 'Hose bibb',
-      };
 
   /// Dashed connectors between floors that share a service but have NO drawn
   /// riser of that service between them — a "you haven't routed this vertical
@@ -4871,11 +4881,15 @@ class _EditSchematicPainter extends CustomPainter {
     this.marquee,
     this.marqueeWindow = true,
     this.mounting = const MountingHeights(),
+    this.fireBreakTankIds = const {},
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
+
+  /// Backlog Z-5 — fire zone break tanks, labelled 'Fire break tank'.
+  final Set<String> fireBreakTankIds;
 
   /// The project mounting heights — the SAME value the solve sizes on, so the
   /// riser length label equals the solved length (audit water-drainage-8).
@@ -5259,25 +5273,9 @@ class _EditSchematicPainter extends CustomPainter {
 
   /// A human label for [node] — its equipment name or fixture type — or null for
   /// a plain junction. Mirrors the Auto painter.
-  String? _nodeLabel(NetNode node) {
-    final c = node.component;
-    if (c != null) return c.label;
-    final f = node.fixture;
-    if (f != null) return _fixtureLabel(f);
-    return null;
-  }
+  String? _nodeLabel(NetNode node) =>
+      schematicNodeLabel(node, fireBreakTankIds: fireBreakTankIds);
 
-  String _fixtureLabel(PlumbingFixture f) => switch (f) {
-        PlumbingFixture.waterClosetFlushValve => 'WC',
-        PlumbingFixture.waterClosetFlushTank => 'WC',
-        PlumbingFixture.urinalFlushTank => 'Urinal',
-        PlumbingFixture.urinalFlushValve => 'Urinal',
-        PlumbingFixture.lavatory => 'Lavatory',
-        PlumbingFixture.shower => 'Shower',
-        PlumbingFixture.bathtub => 'Bathtub',
-        PlumbingFixture.kitchenSink => 'Sink',
-        PlumbingFixture.hoseBibb => 'Hose bibb',
-      };
 
   /// Nodes carry their schematic symbol (equipment glyph / fixture drop-triangle
   /// / plain junction) + a label — reusing the Auto painter's treatment (B6), so
@@ -5365,6 +5363,7 @@ class _EditSchematicPainter extends CustomPainter {
   @override
   bool shouldRepaint(_EditSchematicPainter old) =>
       old.network != network ||
+      old.fireBreakTankIds != fireBreakTankIds ||
       old.sizing != sizing ||
       old.building != building ||
       old.mounting != mounting ||
