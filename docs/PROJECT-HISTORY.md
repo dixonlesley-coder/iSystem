@@ -524,13 +524,22 @@ Moved out of `CLAUDE.md` (2026-11-09) so agents do not load it on every turn. Re
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.23.0`** (two user-reported fixes: the declared PLN daya
+  is `v1.24.0`** (the 2026-11 reference-building programme, PR #58: five hand-checked
+  reference buildings as fixed fixtures with every mismatch fixed; the drawing review
+  against `docs/DRAFTING-CHECKLIST.md` with keyed tags, detail sheets, numbered sheets
+  and paginated PDF/DXF twins; the fire / electrical / supply / HVAC / hot-water
+  backlogs; water supply W-1..W-7 + T-1..T-3 — tank fill flow from a refill time, the
+  mains-pressure check, every roof tank on the transfer main, the daily-demand input
+  with SNI 03-7065 building-use presets and the water reserve in days, auto-sized tank
+  capacities marked "(auto)"; designed fire zones Z-1..Z-5 — a drawn break tank + relay
+  pump per zone; and the riser-export spatial index; `pubspec.yaml` now `1.24.0+30`),
+  atop `v1.23.0` (two user-reported fixes: the declared PLN daya
   [`supplyCapacityVa`] now SIZES the service-entrance incomer + busbar instead of
   only labelling the supply head — with the judge-only
   `service-capacity-below-demand` limiter warning and the multi-root /
   null-capacity honesty gates — and the board schedule's R/S/T phase band rebuilt
   as three EQUAL ruled cells with centred heads/figures/totals;
-  `pubspec.yaml` now `1.23.0+29`), atop
+  `pubspec.yaml` then `1.23.0+29`), atop
   `v1.22.0` (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
   fix — all 38 findings, incl. the by-construction PRV zones, the device-only
   ampacity-capped selectivity floor, per-circuit kA / containment-sourced conduit /
