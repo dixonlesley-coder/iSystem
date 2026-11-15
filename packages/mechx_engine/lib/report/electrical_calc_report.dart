@@ -12,6 +12,7 @@
 /// never hides provenance gaps (§8 / golden rule 6).
 library;
 
+import '../electrical/advanced_study.dart' show serviceMvProtection;
 import '../electrical/compute.dart' show kUpsInputFactor, serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/fault.dart'
@@ -22,6 +23,8 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
+import '../electrical/sources.dart'
+    show GeneratorResult, GensetSizingReason, kGensetFirstStepFraction;
 import '../standards/puil.dart' show BreakerClassCode;
 import '../standards/sni.dart'
     show Revision, StandardValue, VerificationStatus;
@@ -464,6 +467,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         '${_n(s.demandW)} W (${_n(s.demandVa.inKilovoltAmperes)} kVA)'
       ),
       (strings(RptStringKey.ssOriginDemand), '${_n(r.totalDemandW)} W'),
+      // Backlog E-3 — the MV-side device of the printed transformer.
+      if (serviceMvProtection(data.project, r) case final mv?)
+        (strings(RptStringKey.ssMvProtection), mv.summary),
       (strings(RptStringKey.edbEarthingSystem), r.earthing.label),
     ]));
 
@@ -679,6 +685,24 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                 '(${_oneLineKindLabel(node, strings)})'
                 '${node.sub != null ? ' — ${_oneLineSub(node.sub!, strings)}' : ''}'
           ),
+        // Backlog B-3 — the governing reason of an UNFORCED standby set.
+        if (ol.gensetSizing case final g?
+            when g.governing != null && g.floorsKva != null)
+          ('', _gensetSizingLine(g, strings)),
+        // Backlog E-4 — the block-load (step) check of the standby set.
+        if (ol.gensetStepLoad case final st?)
+          (
+            '',
+            strings.format(RptStringKey.olGenStepLoad, {
+              'step': st.stepKw.toStringAsFixed(1),
+              'allow': st.allowableKw.toStringAsFixed(1),
+              'pct': (kGensetFirstStepFraction * 100).toStringAsFixed(0),
+              'rated': st.ratedKw.toStringAsFixed(1),
+              'verdict': strings(st.exceeded
+                  ? RptStringKey.olGenStepLoadStaged
+                  : RptStringKey.olGenStepLoadOk),
+            })
+          ),
       ]));
     if (ol.interlocks.isNotEmpty) {
       blocks
@@ -741,6 +765,26 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
   }
 
   return blocks;
+}
+
+/// Backlog B-3 — 'Genset sizing: 300 kVA, governed by motor start (running
+/// 128.46 kVA, motor start 286.83 kVA)', plus the disconnection floor when
+/// one was found.
+String _gensetSizingLine(GeneratorResult g, ReportStrings strings) {
+  final f = g.floorsKva!;
+  final reason = switch (g.governing!) {
+    GensetSizingReason.running => RptStringKey.olGenSizingRunning,
+    GensetSizingReason.motorStart => RptStringKey.olGenSizingMotorStart,
+    GensetSizingReason.disconnection => RptStringKey.olGenSizingDisconnection,
+  };
+  return strings.format(RptStringKey.olGenSizing, {
+    'kva': '${g.units > 1 ? '${g.units} x ' : ''}'
+        '${_n(g.ratingKva.inKilovoltAmperes)}',
+    'reason': strings(reason),
+    'run': _n(f.running),
+    'start': _n(f.start),
+    'ads': f.ads > 0 ? ', ADS ${_n(f.ads)} kVA' : '',
+  });
 }
 
 /// Render [data] as a Markdown electrical calculation report.

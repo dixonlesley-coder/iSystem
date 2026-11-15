@@ -42,11 +42,15 @@ void main() {
 
   group('placePlanLabel', () {
     test('a label much longer than its run splits to two lines beside it', () {
-      // Run (0,0)→(60,0); one-line width 31 × 9 × 0.55 = 153.45 > 60 × 1.15,
-      // so the two-line form goes first. Block at the midpoint (30, 0), upper
-      // side, near edge d = 6.3, height h = 9 + 11.7 = 20.7:
-      //   line 0 baseline = d + h − 9 = 18.0, start x = 30 − 59.4/2 = 0.3
-      //   line 1 baseline = 18.0 − 11.7 = 6.3, start x = 30 − 79.2/2 = −9.6
+      // Run (0,0)→(60,0); one-line Helvetica width 15 199 / 1000 em × 9 =
+      // 136.791 > 60 × 1.15, so the two-line form goes first (fix round 3 —
+      // widths are measured, AFM units, '·' at the 556 fallback). Block at the
+      // midpoint (30, 0), upper side, near edge d = 6.3, height
+      // h = 9 + 11.7 = 20.7:
+      //   line 0 'CW-F2 · DN15' = 6 834 u = 61.506; baseline = d + h − 9 =
+      //     18.0, start x = 30 − 61.506/2 = −0.753
+      //   line 1 '4.6 m - CL +3.70' = 7 476 u = 67.284; baseline = 18.0 −
+      //     11.7 = 6.3, start x = 30 − 67.284/2 = −3.642
       final layout = PlanLabelLayout();
       final p = placePlanLabel(
         ax: 0,
@@ -61,10 +65,10 @@ void main() {
       expect(p.leaderAnchor, isNull);
       expect(p.lines, hasLength(2));
       expect(p.lines[0].text, 'CW-F2 · DN15');
-      expect(p.lines[0].x, closeTo(0.3, 1e-9));
+      expect(p.lines[0].x, closeTo(-0.753, 1e-9));
       expect(p.lines[0].y, closeTo(18.0, 1e-9));
       expect(p.lines[1].text, '4.6 m - CL +3.70');
-      expect(p.lines[1].x, closeTo(-9.6, 1e-9));
+      expect(p.lines[1].x, closeTo(-3.642, 1e-9));
       expect(p.lines[1].y, closeTo(6.3, 1e-9));
       expect(layout.labelCount, 1);
     });
@@ -72,9 +76,10 @@ void main() {
     test('another run through the midpoint slides the tag along its own run',
         () {
       // Own run 'a' (0,0)→(200,0); run 'b' crosses it vertically at x = 100.
-      // Both midpoint slots (u ±9.9 about x = 100) touch 'b' → rejected; the
-      // quarter station x = 50 is clear, upper side, no leader:
-      //   anchor = (50 − 19.8/2, 0.7·9) = (40.1, 6.3).
+      // 'DN50' = D 722 + N 722 + 5 556 + 0 556 = 2 556 u × 9 / 1000 = 23.004.
+      // Both midpoint slots (u ±11.502 about x = 100) touch 'b' → rejected;
+      // the quarter station x = 50 is clear, upper side, no leader:
+      //   anchor = (50 − 23.004/2, 0.7·9) = (38.498, 6.3).
       final layout = PlanLabelLayout()
         ..addRun('a', 0, 0, 200, 0)
         ..addRun('b', 100, -50, 100, 50);
@@ -88,7 +93,7 @@ void main() {
           layout: layout,
           ownRunId: 'a');
       expect(p.leaderAnchor, isNull);
-      expect(p.x, closeTo(40.1, 1e-9));
+      expect(p.x, closeTo(38.498, 1e-9));
       expect(p.y, closeTo(6.3, 1e-9));
     });
 
@@ -103,17 +108,18 @@ void main() {
           textSize: 9,
           layout: layout,
           ownRunId: 'a');
-      // The original greedy first slot: (50 − 9.9, 6.3).
+      // The greedy first slot: (50 − 23.004/2, 6.3) = (38.498, 6.3).
       expect(p.leaderAnchor, isNull);
-      expect(p.x, closeTo(40.1, 1e-9));
+      expect(p.x, closeTo(38.498, 1e-9));
       expect(p.y, closeTo(6.3, 1e-9));
     });
 
     test(
         'collision is ORIENTED: parallel diagonal tags whose bounds overlap '
         'both stay beside their runs', () {
-      // Two parallel 45° runs 30 apart; 20-char tags (w = 99). Their
-      // axis-aligned bounds overlap (each ±38.2 about centres ~30 apart), but
+      // Two parallel 45° runs 30 apart; 20-char tags (w = 9 560 u × 9 / 1000
+      // = 86.04). Their axis-aligned bounds overlap (each ±33.6 about centres
+      // ~30 apart), but
       // the rotated rectangles sit on opposite sides of run A — A's tag on its
       // far side, B's between the runs (v 6.3..15.3 of 30) — so neither moves.
       const s = 30 / math.sqrt2; // perpendicular offset components
@@ -142,10 +148,10 @@ void main() {
       expect(a.leaderAnchor, isNull);
       expect(b.leaderAnchor, isNull);
       // B kept its midpoint-upper slot: mid (50+s, 50−s) + normal × 6.3 −
-      // bearing × 49.5, normal (−√½, √½), bearing (√½, √½).
+      // bearing × 43.02, normal (−√½, √½), bearing (√½, √½).
       const r = math.sqrt1_2;
-      expect(b.x, closeTo(50 + s - r * 6.3 - r * 49.5, 1e-9));
-      expect(b.y, closeTo(50 - s + r * 6.3 - r * 49.5, 1e-9));
+      expect(b.x, closeTo(50 + s - r * 6.3 - r * 43.02, 1e-9));
+      expect(b.y, closeTo(50 - s + r * 6.3 - r * 43.02, 1e-9));
       expect(b.angleDeg, closeTo(45, 1e-9));
     });
 
@@ -280,8 +286,8 @@ void main() {
       // PDF: WinAnsi 0xD8 (latin1 'Ø'), never the ASCII 'O' stand-in.
       expect(pdf(), contains('SA-F1 · Ø200'));
       expect(pdf(), isNot(contains('O200')));
-      // DXF: the AutoCAD %%c control code (via dxfText; '·' → '-').
-      expect(dxf(), contains('SA-F1 - %%c200'));
+      // DXF: the AutoCAD %%c control code (via dxfText; '·' → '%%183').
+      expect(dxf(), contains('SA-F1 %%183 %%c200'));
       expect(dxf(), isNot(contains('O200')));
     });
 
@@ -290,7 +296,7 @@ void main() {
       // takes the split form first — the same choice in points and in mm.
       expect(pdf(), contains('(CW-F1 · DN15) Tj'));
       expect(pdf(), contains('(0.8 m - CL +3.70 drop 2.60 m) Tj'));
-      expect(dxf(), contains('\n1\nCW-F1 - DN15\n'));
+      expect(dxf(), contains('\n1\nCW-F1 %%183 DN15\n'));
       expect(dxf(), contains('\n1\n0.8 m - CL +3.70 drop 2.60 m\n'));
     });
   });

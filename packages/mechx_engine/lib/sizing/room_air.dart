@@ -27,9 +27,10 @@ library;
 
 import 'dart:math' as math;
 
+import '../network/network.dart'
+    show ServiceType, defaultDuctRoughnessForService;
 import '../units.dart';
-import 'air_velocity.dart'
-    show kReturnFaceVelocityMax, kSupplyFaceVelocityMax;
+import 'air_velocity.dart' show AirTerminalKind, terminalFaceVelocityMax;
 import 'duct_sizing.dart' as duct;
 import 'fan.dart';
 import 'grille_sizing.dart';
@@ -224,6 +225,11 @@ final class RoomAirResult {
 /// parameters. The duct static is a first-pass estimate for equipment
 /// selection (see the library doc); the network solve is the authority once
 /// runs are drawn.
+///
+/// [trunkRoughness] — the trunk's Darcy wall roughness for the static
+/// estimate; null (default) ⇒ the room service's default duct product
+/// (`defaultDuctRoughnessForService`, backlog F-1: PU for a supply trunk,
+/// BJLS for an extract trunk), the basis an unset drawn duct also reads.
 RoomAirResult sizeRoomAir({
   required Area floorArea,
   required Length ceilingHeight,
@@ -244,6 +250,7 @@ RoomAirResult sizeRoomAir({
   double fanEfficiency = 0.65,
   double motorEfficiency = 0.90,
   bool extractOnly = false,
+  Roughness? trunkRoughness,
 }) {
   final volume = roomVolumeM3(floorArea, ceilingHeight);
   final airflow = airChangeFlow(
@@ -253,16 +260,16 @@ RoomAirResult sizeRoomAir({
   );
 
   // 2 + 3 — air terminals (supply diffusers, return grilles).
-  // The application's noise-driven limit is capped at the SAME face-velocity
-  // band the air-velocity checker judges placed terminals against (supply
-  // 3.0 m/s, return 4.0 m/s, `air_velocity.dart`) — otherwise a retail
-  // (3.5 m/s) or industrial (5.0 m/s) room's auto-placed terminals were
-  // flagged 'too high' by the engine's own checker. One limit, two readers.
-  final appFace = recommendedFaceVelocity(grilleApplication).metersPerSecond;
-  final supplyFace = Velocity(
-      math.min(appFace, kSupplyFaceVelocityMax.metersPerSecond));
-  final returnFace = Velocity(
-      math.min(appFace, kReturnFaceVelocityMax.metersPerSecond));
+  // Backlog F-2 — each bank is counted and faced on the ONE limit the
+  // air-velocity checker judges a placed terminal of that kind in this room
+  // against (`terminalFaceVelocityMax`: the application's noise-driven value
+  // capped by the kind's band, supply 3.0 m/s, return / exhaust 4.0 m/s), so
+  // the app never recommends a bank its own checker would pass with fewer
+  // terminals, nor auto-places one it would flag. One limit, two readers.
+  final supplyFace =
+      terminalFaceVelocityMax(AirTerminalKind.supply, grilleApplication);
+  final returnFace = terminalFaceVelocityMax(
+      AirTerminalKind.returnOrExhaust, grilleApplication);
   final return_ = _autoTerminals(airflow, returnFace, freeAreaRatio);
   // Round 11 — an extract room supplies NO conditioned air: an empty bank.
   final supply = extractOnly
@@ -271,11 +278,21 @@ RoomAirResult sizeRoomAir({
       : _autoTerminals(airflow, supplyFace, freeAreaRatio);
 
   // 4 — supply trunk duct (carries the whole room airflow).
+  // The size is picked exactly as the drawn network picks it
+  // (`network_sizing` — the same ladders and caps); the friction the static
+  // estimate uses is then read with the trunk's DUCT PRODUCT roughness.
+  // Backlog F-1: that roughness is the SAME basis an unset drawn duct of the
+  // room's service uses (`defaultDuctRoughnessForService`: PU 0.03 mm for an
+  // AC supply trunk, BJLS 0.09 mm for an extract trunk), so the room estimate
+  // and the drawn-duct fan static never differ by material.
+  final roughness = trunkRoughness ??
+      defaultDuctRoughnessForService(
+          extractOnly ? ServiceType.exhaust : ServiceType.duct);
   duct.DuctSizingResult? round;
   duct.RectangularDuctResult? rect;
   double frictionPerMetre;
   if (ductShape == DuctShape.rectangular) {
-    rect = ductMethod == DuctSizingMethod.equalFriction
+    final picked = ductMethod == DuctSizingMethod.equalFriction
         ? duct.sizeRectangularByEqualFriction(
             airflow: airflow,
             targetPaPerMetre: ductEqualFrictionPa,
@@ -289,17 +306,33 @@ RoomAirResult sizeRoomAir({
             maxVelocity: maxDuctVelocity,
             aspectRatio: ductAspectRatio,
           );
-    frictionPerMetre = rect.frictionPerMetrePa;
-  } else if (ductMethod == DuctSizingMethod.equalFriction) {
-    round = duct.sizeByEqualFriction(
-      airflow: airflow,
-      targetPaPerMetre: ductEqualFrictionPa,
-      maxVelocity: maxDuctVelocity,
+    frictionPerMetre = duct.ductFrictionPaPerMetre(
+        airflow, picked.equivalentDiameter,
+        roughness: roughness);
+    rect = duct.RectangularDuctResult(
+      width: picked.width,
+      height: picked.height,
+      equivalentDiameter: picked.equivalentDiameter,
+      actualVelocity: picked.actualVelocity,
+      frictionPerMetrePa: frictionPerMetre,
+      overCapacity: picked.overCapacity,
     );
-    frictionPerMetre = round.frictionPerMetrePa;
   } else {
-    round = duct.sizeByVelocity(airflow: airflow, maxVelocity: maxDuctVelocity);
-    frictionPerMetre = round.frictionPerMetrePa;
+    final picked = ductMethod == DuctSizingMethod.equalFriction
+        ? duct.sizeByEqualFriction(
+            airflow: airflow,
+            targetPaPerMetre: ductEqualFrictionPa,
+            maxVelocity: maxDuctVelocity,
+          )
+        : duct.sizeByVelocity(airflow: airflow, maxVelocity: maxDuctVelocity);
+    frictionPerMetre = duct.ductFrictionPaPerMetre(airflow, picked.diameter,
+        roughness: roughness);
+    round = duct.DuctSizingResult(
+      diameter: picked.diameter,
+      actualVelocity: picked.actualVelocity,
+      frictionPerMetrePa: frictionPerMetre,
+      overCapacity: picked.overCapacity,
+    );
   }
 
   // 5 — equipment duty against an estimated total static pressure:

@@ -533,7 +533,7 @@ void main() {
   // ── drafting-5: the CAD deliverable is code-page safe ─────────────────────
   group('drafting-5 DXF text encoding', () {
     test('dxfText maps the non-ASCII drawing glyphs to R12-safe ASCII', () {
-      expect(dxfText('CW-R1 \u00b7 DN32'), 'CW-R1 - DN32');
+      expect(dxfText('CW-R1 \u00b7 DN32'), 'CW-R1 %%183 DN32');
       expect(dxfText('\u00d8200'), '%%c200');
       expect(dxfText('\u00f8200'), '%%c200');
       expect(dxfText('90\u00b0'), '90%%d');
@@ -554,7 +554,7 @@ void main() {
             // A middle-dot tag (the label separator the app's tags carry).
             edgeTags: const {'e': 'CW-F1 \u00b7 L1', 'r': 'CW-R1 \u00b7 S'});
         expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
-        expect(dxf, contains('CW-F1 - L1'));
+        expect(dxf, contains('CW-F1 %%183 L1'));
         if (mpp != null) {
           expect(dxf, contains('9\n\$ACADVER\n1\nAC1009\n'));
         }

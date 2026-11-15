@@ -23,6 +23,9 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show EdgeSizing, fireHopSources;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
+import 'package:mechx_engine/sizing/fire_water_reserve.dart';
+import 'package:mechx_engine/sizing/fire_zones.dart';
+import 'package:mechx_engine/geometry/building.dart' show Floor;
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
@@ -161,20 +164,98 @@ final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
   return best;
 });
 
+/// Backlog A-3 (2026-11-13) — one pumped fire system's WORKING pressure (the
+/// churn pressure at its pump discharge — at the stage discharge that sees
+/// the maximum on a series system, [fireStagedOverPressureCheck]) and the
+/// pressure class ([firePressureClassFor]) its pipework and fittings
+/// downstream of the pump must carry. [pumpId] names the pump whose discharge
+/// sees it. Never clamped: the solved churn is printed.
+class FirePressureClassLine {
+  final FireSystemBasis basis;
+  final String? pumpId;
+  final double churnKpa;
+  final double ratedKpa;
+  final double? frictionShare;
+  final FirePressureClass pressureClass;
+
+  /// A hydrant-only standpipe (no sprinkler head drawn).
+  final bool standpipe;
+
+  const FirePressureClassLine({
+    required this.basis,
+    required this.pumpId,
+    required this.churnKpa,
+    required this.ratedKpa,
+    required this.frictionShare,
+    required this.pressureClass,
+    required this.standpipe,
+  });
+}
+
+/// Backlog A-3 — the working pressure and pressure class of every pumped
+/// (not gravity / dry / transfer) fire system carrying sprinklers or
+/// hydrants, in [fireSystemBasesProvider] order.
+final firePressureClassesProvider =
+    Provider<List<FirePressureClassLine>>((ref) {
+  final out = <FirePressureClassLine>[];
+  final net = ref.watch(sizingNetworkProvider);
+  for (final b in ref.watch(fireSystemBasesProvider)) {
+    if (b.standsDown ||
+        b.flow.cubicMetersPerSecond <= 0 ||
+        (!b.system.hasSprinkler && !b.system.hasHydrant)) {
+      continue;
+    }
+    final standpipe = !b.system.hasSprinklerHead(net);
+    double churn, rated;
+    double? share;
+    String? pump;
+    if (b.stages.length >= 2) {
+      final c = fireStagedOverPressureCheck(
+        stages: [
+          for (final st in b.stages)
+            FireStageLift(st.rating, st.suctionLiftM, st.upstream),
+        ],
+        systemRatedHeadM: b.head.meters,
+        indexFrictionM: b.indexFrictionM,
+      );
+      churn = c.churnKpa;
+      rated = c.ratedKpa;
+      share = c.frictionShare;
+      pump = b.stages[c.stage].dutyPumpId;
+    } else {
+      final c = fireOverPressureCheck(
+          rating: b.rating, indexFrictionM: b.indexFrictionM);
+      churn = c.churnKpa;
+      rated = c.ratedKpa;
+      share = c.frictionShare;
+      pump = b.dutyPumpId;
+    }
+    out.add(FirePressureClassLine(
+      basis: b,
+      pumpId: pump,
+      churnKpa: churn,
+      ratedKpa: rated,
+      frictionShare: share,
+      pressureClass: firePressureClassFor(churn),
+      standpipe: standpipe,
+    ));
+  }
+  return out;
+});
+
 /// Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — every drawn
-/// fire SYSTEM carrying sprinklers whose pump CHURN pressure (NFPA 20
-/// shut-off, 140 % of its rated head) exceeds the [kFireComponentMaxPressureKpa] (175 psi) rating of
-/// standard listed components, with the friction share of its rated head.
-/// JUDGE-ONLY (`fireOverPressureCheck`): the fire sizer caps velocity at
-/// 6 m/s, so a tall system can build half its rated head out of friction and
-/// churn at ~17 bar on DN40 pipe — the review says so, it never resizes.
+/// fire SYSTEM whose pump CHURN pressure is too high for the components.
+/// JUDGE-ONLY: it never resizes.
 ///
-/// Round 52 (fire-convergence-4-staged-sprinkler-system-false-over-
-/// pressure) — a SERIES (zoned) system is judged at every stage's discharge
-/// ([fireStagedOverPressureCheck]: the chain's churn heads less the static
-/// lift up to that stage), never 1.4 x the summed system head at one point;
-/// [pumpId] names the pump whose discharge sees the reported maximum (the
-/// system's duty pump for a single stage). A TRANSFER system is not judged.
+/// Backlog A-3 (2026-11-13, superseding the Round-48 175 psi component limit
+/// for sprinkler-bearing systems) — a churn above 175 psi now sets a higher
+/// pressure CLASS for the pipework and fittings ([firePressureClassesProvider]:
+/// PN16 to 1600 kPa, PN25 to 2413 kPa), printed on the fire results and BOM.
+/// Only a churn above [kStandpipeMaxSystemPressureKpa] (350 psi, NFPA 14
+/// 7.2.1.1) is listed here: no class permits a single zone above it, the
+/// standpipe must be split into vertical zones. A series system is judged at
+/// every stage's discharge (Round 52); [pumpId] names the pump whose
+/// discharge sees the maximum. A TRANSFER system is not judged.
 final fireOverPressureProvider = Provider<
     List<
         ({
@@ -184,66 +265,21 @@ final fireOverPressureProvider = Provider<
           String? pumpId,
           bool standpipe,
         })>>((ref) {
-  final out = <({
-    FireSystemBasis basis,
-    ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
-        check,
-    String? pumpId,
-    bool standpipe,
-  })>[];
-  final net = ref.watch(sizingNetworkProvider);
-  for (final b in ref.watch(fireSystemBasesProvider)) {
-    // The 175 psi limit is the SPRINKLER component listing (NFPA 13).
-    // Round 63 (fire-convergence-15-standpipe-system-pressure-unjudged) — a
-    // hydrant-only standpipe is judged against the NFPA 14 7.2.1.1 SYSTEM
-    // maximum (350 psi, [kStandpipeMaxSystemPressureKpa]) that forces
-    // vertical zoning; a combined system against the tighter sprinkler
-    // component rating (which covers the standpipe limit too).
-    if (b.standsDown ||
-        b.flow.cubicMetersPerSecond <= 0 ||
-        (!b.system.hasSprinkler && !b.system.hasHydrant)) {
-      continue;
-    }
-    // Round 64 — a sprinkler-labelled pipe with no head is no sprinkler
-    // system: only a drawn head makes it sprinkler-rated.
-    final standpipe = !b.system.hasSprinklerHead(net);
-    final limitKpa = standpipe
-        ? kStandpipeMaxSystemPressureKpa
-        : kFireComponentMaxPressureKpa;
-    if (b.stages.length >= 2) {
-      final c = fireStagedOverPressureCheck(
-        stages: [
-          for (final st in b.stages)
-            FireStageLift(st.rating, st.suctionLiftM, st.upstream),
-        ],
-        systemRatedHeadM: b.head.meters,
-        indexFrictionM: b.indexFrictionM,
-        maxComponentKpa: limitKpa,
-      );
-      if (!c.over) continue;
-      out.add((
-        basis: b,
-        check: (
-          churnKpa: c.churnKpa,
-          ratedKpa: c.ratedKpa,
-          over: c.over,
-          frictionShare: c.frictionShare,
+  return [
+    for (final l in ref.watch(firePressureClassesProvider))
+      if (l.pressureClass == FirePressureClass.zoneRequired)
+        (
+          basis: l.basis,
+          check: (
+            churnKpa: l.churnKpa,
+            ratedKpa: l.ratedKpa,
+            over: true,
+            frictionShare: l.frictionShare,
+          ),
+          pumpId: l.pumpId,
+          standpipe: l.standpipe,
         ),
-        pumpId: b.stages[c.stage].dutyPumpId,
-        standpipe: standpipe,
-      ));
-      continue;
-    }
-    final c = fireOverPressureCheck(
-        rating: b.rating,
-        indexFrictionM: b.indexFrictionM,
-        maxComponentKpa: limitKpa);
-    if (c.over) {
-      out.add(
-          (basis: b, check: c, pumpId: b.dutyPumpId, standpipe: standpipe));
-    }
-  }
-  return out;
+  ];
 });
 
 /// Round 76 (fire-convergence-27-hose-outlet-static-over-175psi-unjudged) —
@@ -284,8 +320,76 @@ class StandpipeOutletOverPressure {
 /// which is unchanged). A series system's outlets take the churn / rated
 /// heads of the stages on their own path; a hose-reel residual is judged
 /// only when the friction to the reel is measured (calibrated).
+///
+/// Backlog A-3 (2026-11-13) — a STATIC range ([residual] false) is no longer a
+/// defect to fix outside the app: every outlet in it is DESIGNATED a
+/// pressure-regulating hose valve ([StandpipeOutletPressure.prvHoseValve],
+/// [prvHoseValvesProvider]); the Review states it as the INFO
+/// `standpipe-prv-hose-valves`. The residual (hose-reel) ranges are unchanged.
 final standpipeOutletOverPressureProvider =
     Provider<List<StandpipeOutletOverPressure>>((ref) {
+  final out = <StandpipeOutletOverPressure>[];
+  for (final (basis: b, outlets: outlets)
+      in ref.watch(standpipeOutletPressuresProvider)) {
+    for (final residual in [false, true]) {
+      // Over outlets per floor, then contiguous floor runs.
+      final byFloor = <int, List<StandpipeOutletPressure>>{};
+      for (final o in outlets) {
+        if (residual ? o.overResidual : o.overStatic) {
+          (byFloor[o.floorIndex] ??= []).add(o);
+        }
+      }
+      final floors = byFloor.keys.toList()..sort();
+      var i = 0;
+      while (i < floors.length) {
+        var j = i;
+        while (j + 1 < floors.length && floors[j + 1] == floors[j] + 1) {
+          j++;
+        }
+        final run = [
+          for (var k = i; k <= j; k++) ...byFloor[floors[k]]!,
+        ];
+        double kpa(StandpipeOutletPressure o) =>
+            residual ? o.residualKpa! : o.staticKpa;
+        var mx = kpa(run.first), mn = kpa(run.first);
+        for (final o in run) {
+          if (kpa(o) > mx) mx = kpa(o);
+          if (kpa(o) < mn) mn = kpa(o);
+        }
+        out.add(StandpipeOutletOverPressure(
+          basis: b,
+          pumpId: b.dutyPumpId,
+          residual: residual,
+          lowFloor: floors[i],
+          highFloor: floors[j],
+          maxKpa: mx,
+          minKpa: mn,
+          lowestOutletId: run.first.outletId,
+        ));
+        i = j + 1;
+      }
+    }
+  }
+  return out;
+});
+
+/// Backlog A-3 — every hose outlet designated a pressure-regulating hose
+/// valve (static at churn above 175 psi, unregulated), keyed by outlet id —
+/// the per-outlet flag the fire results, the component take-off and the
+/// riser tag read.
+final prvHoseValvesProvider =
+    Provider<Map<String, StandpipeOutletPressure>>((ref) => {
+          for (final (basis: _, outlets: outlets)
+              in ref.watch(standpipeOutletPressuresProvider))
+            for (final o in outlets)
+              if (o.prvHoseValve) o.outletId: o,
+        });
+
+/// Round 76 / backlog A-3 — the pressure at EVERY hose outlet of every
+/// pumped standpipe ([standpipeOutletPressures]), per system.
+final standpipeOutletPressuresProvider = Provider<
+    List<({FireSystemBasis basis, List<StandpipeOutletPressure> outlets})>>(
+    (ref) {
   final net = ref.watch(sizingNetworkProvider);
   final bases = ref.watch(fireSystemBasesProvider);
   if (bases.isEmpty) return const [];
@@ -298,7 +402,8 @@ final standpipeOutletOverPressureProvider =
         building: project.building,
         mounting: project.mounting,
       ).meters;
-  final out = <StandpipeOutletOverPressure>[];
+  final out =
+      <({FireSystemBasis basis, List<StandpipeOutletPressure> outlets})>[];
   for (final b in bases) {
     if (b.standsDown || b.pumpIds.isEmpty || b.flow.cubicMetersPerSecond <= 0) {
       continue;
@@ -362,44 +467,7 @@ final standpipeOutletOverPressureProvider =
       ratedHeadByPump: rated,
       frictionToOutletM: friction,
     );
-    for (final residual in [false, true]) {
-      // Over outlets per floor, then contiguous floor runs.
-      final byFloor = <int, List<StandpipeOutletPressure>>{};
-      for (final o in outlets) {
-        if (residual ? o.overResidual : o.overStatic) {
-          (byFloor[o.floorIndex] ??= []).add(o);
-        }
-      }
-      final floors = byFloor.keys.toList()..sort();
-      var i = 0;
-      while (i < floors.length) {
-        var j = i;
-        while (j + 1 < floors.length && floors[j + 1] == floors[j] + 1) {
-          j++;
-        }
-        final run = [
-          for (var k = i; k <= j; k++) ...byFloor[floors[k]]!,
-        ];
-        double kpa(StandpipeOutletPressure o) =>
-            residual ? o.residualKpa! : o.staticKpa;
-        var mx = kpa(run.first), mn = kpa(run.first);
-        for (final o in run) {
-          if (kpa(o) > mx) mx = kpa(o);
-          if (kpa(o) < mn) mn = kpa(o);
-        }
-        out.add(StandpipeOutletOverPressure(
-          basis: b,
-          pumpId: b.dutyPumpId,
-          residual: residual,
-          lowFloor: floors[i],
-          highFloor: floors[j],
-          maxKpa: mx,
-          minKpa: mn,
-          lowestOutletId: run.first.outletId,
-        ));
-        i = j + 1;
-      }
-    }
+    out.add((basis: b, outlets: outlets));
   }
   return out;
 });
@@ -479,12 +547,11 @@ class FireSystemBasis {
   final FirePumpRatingResult? stagedJockeyRating;
   FirePumpRatingResult get jockeyRating => stagedJockeyRating ?? rating;
 
-  /// Round 37 r2 — a COMBINED (sprinkler + hydrant) system whose sprinkler
-  /// HEAD exceeds the standpipe head: the pump is rated on the sprinkler point
-  /// (its small remote-area flow), so the standpipe flow ([standpipe]) at the
-  /// standpipe head is not a rated point — judge-only
-  /// `combined-fire-sprinkler-governs` (the Round-37 'larger head at its own
-  /// flow, never both' residual, surfaced rather than silent).
+  /// Round 37 r2, superseded by reference apartment A1 — a COMBINED
+  /// (sprinkler + hydrant) system whose sprinkler HEAD exceeds the standpipe
+  /// head: the sprinkler sets the pump HEAD while the standpipe ([standpipe])
+  /// sets the FLOW (rated at max flow, max head — both points covered); the
+  /// INFO `combined-fire-sprinkler-governs` names the split.
   final bool sprinklerGovernsCombined;
 
   /// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
@@ -572,6 +639,40 @@ class FireSystemBasis {
   /// be rated on.
   final double? dryRequiredInletHeadM;
 
+  /// Backlog A-1 (2026-11-13, office O3) — the SPRINKLER POINT head (m) of a
+  /// system that carries a sprinkler head: `sprinklerPumpRatedPoint` over
+  /// this system's sprinkler lift, the remote-area result and the sized
+  /// sprinkler index friction from the duty pump — the SAME figure the
+  /// rating basis reads. The sprinkler-vs-pump judge
+  /// ([sprinklerPumpCheckProvider]) requires exactly this head, so the judge
+  /// and the rating never give two heads for one requirement. Null when no
+  /// sprinkler head is drawn on the system.
+  final double? sprinklerPointHeadM;
+
+  /// Backlog Z-2 (2026-11-14) — the RELAY duty of a zone room that also
+  /// fills the next zone's break tank ([fillTankId], Round 70
+  /// `fireFillDestinationTank`): the fill flow it must deliver
+  /// ([fillFlow], what the tank feeds — `fireTransferFedFlow`), the head
+  /// that refill needs ([fillHeadM]: `fireRelayFillHeadM` = lift to the
+  /// tank + the sized fill-path friction + the 5 m inlet residual) and the
+  /// zone's OWN point before the max ([ownFlow] / [ownHead]). The rated
+  /// point is max(own, fill) on each term (never clamped down). Null when
+  /// the system fills no break tank.
+  final String? fillTankId;
+  final FlowRate? fillFlow;
+  final double? fillHeadM;
+  final FlowRate? ownFlow;
+  final Head? ownHead;
+
+  /// True when the break-tank fill sets the rated FLOW / HEAD (strictly
+  /// above the zone's own figure).
+  bool get fillGovernsFlow =>
+      fillFlow != null &&
+      ownFlow != null &&
+      fillFlow!.cubicMetersPerSecond > ownFlow!.cubicMetersPerSecond + 1e-12;
+  bool get fillGovernsHead =>
+      fillHeadM != null && ownHead != null && fillHeadM! > ownHead!.meters + 1e-9;
+
   /// True when this system has no pump of its own to rate: gravity-fed, a
   /// transfer fill or a dry (brigade-fed) system.
   bool get standsDown => gravityFed || transfer || dry;
@@ -612,6 +713,12 @@ class FireSystemBasis {
     this.dry = false,
     this.dryInletId,
     this.dryRequiredInletHeadM,
+    this.sprinklerPointHeadM,
+    this.fillTankId,
+    this.fillFlow,
+    this.fillHeadM,
+    this.ownFlow,
+    this.ownHead,
   });
 }
 
@@ -831,11 +938,15 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           indexPathFriction: f == null ? null : Head(f),
         );
     final FireTerminalKind basisKind;
+    // Backlog A-1 — the system's sprinkler point head (one source of truth
+    // for the rating basis AND the sprinkler-vs-pump judge).
+    double? sprinklerPointHead;
     if (ratedOnSprinkler) {
       friction = frictionTo(FireTerminalKind.sprinkler);
       final p = sprinklerPoint(friction, liftTo(FireTerminalKind.sprinkler));
       flow = p.flow;
       head = p.head;
+      if (sys.hasSprinklerHead(net)) sprinklerPointHead = p.head.meters;
       basisKind = FireTerminalKind.sprinkler;
     } else {
       final hydrantFriction = frictionTo(FireTerminalKind.hydrant);
@@ -848,6 +959,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
         final sp = sprinklerPoint(
             sprinklerFriction, liftTo(FireTerminalKind.sprinkler));
+        sprinklerPointHead = sp.head.meters;
         if (sp.flow.cubicMetersPerSecond >
             st.requiredFlow.cubicMetersPerSecond + 1e-12) {
           // Round 50 (regression-3) — the sprinkler remote-area flow exceeds
@@ -870,7 +982,16 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             basisKind = FireTerminalKind.hydrant;
           }
         } else if (sp.head.meters > st.pumpHead.meters + 1e-9) {
-          flow = sp.flow;
+          // Reference apartment A1 (supersedes the Round-37 'larger head at
+          // its own flow') — one pump serving both systems is rated at the
+          // LARGER flow (the standpipe's) and the LARGER head (the
+          // sprinkler's): a centrifugal pump rated on the small remote-area
+          // flow delivers at most 150 % of it, never the hose flow. At the
+          // smaller sprinkler flow the curve gives at least the rated head,
+          // so both points are covered (conservative by the head gap).
+          // `sprinklerGovernsCombined` now means: the sprinkler sets the
+          // HEAD, the standpipe the FLOW.
+          flow = st.requiredFlow;
           head = sp.head;
           friction = sprinklerFriction;
           sprinklerGoverns = true;
@@ -989,10 +1110,16 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final fillTank = pumps.isNotEmpty && hasTerminal && duty != null
         ? fillTankOf(sys)
         : null;
+    FlowRate? ownFlow, fillFlow;
+    Head? ownHead;
+    double? fillHeadM;
     if (fillTank != null) {
+      ownFlow = flow;
+      ownHead = head;
       final fed = fireTransferFedFlow(net, sys, fillTank.id, systems,
           sprinklerDemand: remote.remoteAreaDemand,
           destinationTankOf: destinationOf);
+      fillFlow = fed;
       if (fed != null && fed.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
         flow = fed;
       }
@@ -1008,7 +1135,13 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         lengthOf: lengthOf,
         targetIds: {fillTank.id},
       );
-      final fillHead = math.max(0.0, tankZ - pumpZ) + math.max(0.0, f ?? 0.0);
+      // Backlog Z-2 (2026-11-14) — the refill also passes the tank's inlet
+      // (float) valve: + [kTankInletResidualHeadM] (`fireRelayFillHeadM`,
+      // the W-3 transfer convention). The fill path is sized at the fill
+      // flow (backlog Z-1), so its sized friction is the friction at it.
+      final fillHead =
+          fireRelayFillHeadM(liftM: tankZ - pumpZ, frictionM: f ?? 0.0);
+      fillHeadM = fillHead;
       if (fillHead > head.meters + 1e-9) head = Head(fillHead);
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
@@ -1373,6 +1506,12 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       dry: dry,
       dryInletId: dry ? inlets.first.id : null,
       dryRequiredInletHeadM: dryHeadM,
+      sprinklerPointHeadM: sprinklerPointHead,
+      fillTankId: fillTank?.id,
+      fillFlow: fillFlow,
+      fillHeadM: fillHeadM,
+      ownFlow: ownFlow,
+      ownHead: ownHead,
     ));
   }
   return out;
@@ -1585,10 +1724,13 @@ final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
 /// (fireSprinkler edges):
 ///  * flow:  remote-area demand (`sprinklerRemoteAreaProvider`) vs the pump's
 ///           rated flow;
-///  * head:  a LOWER-BOUND sprinkler requirement — static lift from the pump
-///           datum (floor 0) to the top-floor ceiling + the branch-base pressure
-///           as head (P/ρg) — vs the pump head. Riser / main friction is NOT
-///           added, so a flagged shortfall is certain, never speculative.
+///  * head:  the system's SPRINKLER POINT ([FireSystemBasis.
+///           sprinklerPointHeadM], `sprinklerPumpRatedPoint`: static lift +
+///           the remote-head pressure + the sized sprinkler index friction, the
+///           15 m allowance basis as its floor) vs the pump head — the SAME head
+///           the rating basis reads. Backlog A-1 (2026-11-13, office O3)
+///           superseded the audit-round-8 LOWER BOUND (lift + branch-base, no
+///           friction): one requirement, one head.
 ///
 /// Round 29 (regression-sprinkler-check-uses-other-systems-pump) — Round 28
 /// rates every connected fire system on its OWN demand
@@ -1626,8 +1768,6 @@ final sprinklerPumpCheckProvider = Provider<
   final net = ref.watch(sizingNetworkProvider);
   if (!ref.watch(sprinklerHeadDrawnProvider)) return null;
   final remote = ref.watch(sprinklerRemoteAreaProvider);
-  final building = ref.watch(projectControllerProvider).building;
-  const rhoG = 1000 * 9.81;
   final demand = remote.remoteAreaDemand.inLitersPerSecond;
   // The pump serving each sprinkler-bearing system, judged against THAT
   // system's own lift (Round 49 — pump datum floor -> its highest head's
@@ -1648,11 +1788,10 @@ final sprinklerPumpCheckProvider = Provider<
     // only system, judged against the project fire pump (Round 29).
     final own = b.pumpIds.isNotEmpty || b.system.standpipeTermApplies(net);
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
-    final lift =
-        b.system.staticLiftM(net, building, FireTerminalKind.sprinkler);
-    if (pump != null) {
-      pumps.add((pump, lift + remote.branchBasePressure.pascals / rhoG));
-    }
+    // Backlog A-1 — the requirement is the system's own sprinkler point
+    // (the rating basis' figure), never a parallel re-derivation.
+    final required = b.sprinklerPointHeadM;
+    if (pump != null && required != null) pumps.add((pump, required));
   }
   if (pumps.isEmpty) return null;
   ({
@@ -1693,3 +1832,301 @@ final sprinklerPumpCheckProvider = Provider<
   }
   return worst;
 });
+
+/// Backlog A-2 (2026-11-13, reference office backlog b) — the fire-water
+/// reserve of one FIRE TANK: a ground tank on a fire service
+/// ([NodeComponent.groundTank] incident to a sprinkler / hydrant pipe) that
+/// belongs to a drawn, wet fire system. [reserve] is the system's rated demand
+/// flow x the required duration ([fireWaterReserve]); [capacityLitres] the
+/// tank node's OWN entered capacity (null when unset — never fabricated).
+class FireTankReserve {
+  final String tankId;
+  final String sheetId;
+  final FireSystemBasis basis;
+  final FireWaterReserve reserve;
+  final double? capacityLitres;
+  final FireTankVerdict verdict;
+  const FireTankReserve({
+    required this.tankId,
+    required this.sheetId,
+    required this.basis,
+    required this.reserve,
+    required this.capacityLitres,
+    required this.verdict,
+  });
+
+  double get requiredLitres => reserve.volumeLitres;
+}
+
+/// Backlog A-2 — every fire tank and its required reserve (JUDGE-ONLY: the
+/// Review raises `fire-tank-undersized` / `fire-tank-capacity-unset`, the Fire
+/// inspector and the calc report print the requirement; nothing is resized).
+/// A tank on several systems takes the largest requirement. A dry (brigade-
+/// fed) or transfer-only system holds no reserve of its own. Sorted by id.
+final fireTankReservesProvider = Provider<List<FireTankReserve>>((ref) {
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isEmpty) return const [];
+  final net = ref.watch(sizingNetworkProvider);
+  final hazard = ref.watch(fireHazardProvider);
+  // Backlog Z-2 — a zone BREAK tank is judged on its own requirement
+  // ([fireBreakTankChecksProvider]: 30 min of the relay pump's rated flow,
+  // automatically refilled), never as a full fire-water reserve.
+  final breakTanks = {
+    for (final c in ref.watch(fireBreakTankChecksProvider)) c.tankId,
+  };
+  final best = <String, FireTankReserve>{};
+  for (final b in bases) {
+    if (b.dry || b.transfer || b.flow.cubicMetersPerSecond <= 0) continue;
+    final r = fireWaterReserve(
+      ratedFlow: b.flow,
+      standpipe: b.system.hasHoseOutlet(net),
+      sprinkler: b.system.hasSprinklerHead(net),
+      hazard: hazard,
+    );
+    if (r == null) continue;
+    for (final id in b.system.nodeIds) {
+      final n = net.nodeById(id);
+      if (n == null || n.component != NodeComponent.groundTank) continue;
+      if (breakTanks.contains(id)) continue;
+      final onFire = net.edgesAt(id).any((e) =>
+          e.service == ServiceType.fireSprinkler ||
+          e.service == ServiceType.fireHydrant);
+      if (!onFire) continue;
+      final prev = best[id];
+      if (prev != null && prev.requiredLitres >= r.volumeLitres - 1e-9) {
+        continue;
+      }
+      best[id] = FireTankReserve(
+        tankId: id,
+        sheetId: n.sheetId,
+        basis: b,
+        reserve: r,
+        capacityLitres: n.tankCapacityLitres,
+        verdict: judgeFireTank(
+            capacityLitres: n.tankCapacityLitres,
+            requiredLitres: r.volumeLitres),
+      );
+    }
+  }
+  final ids = best.keys.toList()..sort(naturalIdCompare);
+  return [for (final id in ids) best[id]!];
+});
+
+/// Backlog A-3 — the pressure-class label of every fire pipe downstream of a
+/// pump whose system working pressure is above the standard 175 psi class
+/// ([firePumpDownstreamEdgeIds]; a pipe on several systems takes the higher
+/// class). A standard-class system adds nothing (its BOM is byte-identical).
+final firePipePressureClassByEdgeProvider =
+    Provider<Map<String, String>>((ref) {
+  final lines = ref.watch(firePressureClassesProvider);
+  if (lines.isEmpty) return const {};
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final cls = <String, FirePressureClass>{};
+  for (final l in lines) {
+    if (l.pressureClass == FirePressureClass.standard) continue;
+    for (final id in firePumpDownstreamEdgeIds(
+        net: net, system: l.basis.system, sizing: sizing)) {
+      final cur = cls[id];
+      if (cur == null || cur.index < l.pressureClass.index) {
+        cls[id] = l.pressureClass;
+      }
+    }
+  }
+  return {
+    for (final MapEntry(:key, :value) in cls.entries)
+      key: firePressureClassLabel(value),
+  };
+});
+
+/// Backlog A-3 — the take-off VARIANT of every hose valve designated
+/// pressure-regulating ([prvHoseValvesProvider]): its inlet static at churn
+/// and its set residual.
+final prvHoseValveVariantsProvider = Provider<Map<String, String>>((ref) => {
+      for (final MapEntry(:key, :value)
+          in ref.watch(prvHoseValvesProvider).entries)
+        key: 'pressure-regulating, inlet ${value.staticKpa.toStringAsFixed(0)} '
+            'kPa static, set ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} '
+            'kPa residual',
+    });
+
+/// Backlog Z-1 / Z-2 (2026-11-14) — the drawn fire ZONE chain
+/// ([fireZones] over [fireRatingSystems], the elevations every fire basis
+/// reads). No break tank ⇒ every zone is numbered 1 ([fireZoned] false).
+final fireZoneChainProvider = Provider<List<FireZone>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  return fireZones(net,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters);
+});
+
+/// Backlog Z-4 — the zone BREAK tanks ([fireZoneBreakTankIds] of the
+/// chain): every surface that prints a tank's kind names them 'Fire break
+/// tank', and the roof-tank-below-top info skips them.
+final fireBreakTankIdsProvider = Provider<Set<String>>(
+    (ref) => fireZoneBreakTankIds(ref.watch(fireZoneChainProvider)));
+
+/// Backlog Z-2 — one fire zone's break tank: the tank the zone draws from,
+/// filled by the zone below ([FireZone.upstream]). [requirement] is the
+/// zone pump's rated flow x [kFireBreakTankDurationMin] (refilled at least
+/// at that flow); [capacityLitres] the tank node's OWN entered capacity
+/// (a fire tank is never auto-sized). [fillFlow] is the fill flow the zone
+/// below is rated to deliver; [fillEdgeId] the pipe flowing into the tank
+/// from that zone (its sized bore is the fill pipe).
+class FireBreakTankCheck {
+  final String tankId;
+  final String sheetId;
+  final int zoneNumber;
+  final FireBreakTankRequirement requirement;
+  final double? capacityLitres;
+  final FireTankVerdict verdict;
+  final FlowRate? fillFlow;
+  final String? fillEdgeId;
+  const FireBreakTankCheck({
+    required this.tankId,
+    required this.sheetId,
+    required this.zoneNumber,
+    required this.requirement,
+    required this.capacityLitres,
+    required this.verdict,
+    required this.fillFlow,
+    required this.fillEdgeId,
+  });
+
+  double get requiredLitres => requirement.volumeLitres;
+}
+
+/// The basis of [zone] (its rating system's row of [bases]).
+FireSystemBasis? fireZoneBasis(FireZone zone, List<FireSystemBasis> bases) {
+  for (final b in bases) {
+    if (identical(b.system, zone.system)) return b;
+  }
+  for (final b in bases) {
+    if (b.system.nodeIds.length == zone.system.nodeIds.length &&
+        b.system.nodeIds.containsAll(zone.system.nodeIds)) {
+      return b;
+    }
+  }
+  return null;
+}
+
+/// Backlog Z-2 — every zone break tank and its JUDGE-ONLY verdict: the
+/// Review raises `fire-break-tank-undersized:<tank>` (capacity set below
+/// the requirement) / `fire-break-tank-capacity-unset:<tank>`; the Fire
+/// inspector and the calc report print the same figures. Sorted by zone.
+final fireBreakTankChecksProvider =
+    Provider<List<FireBreakTankCheck>>((ref) {
+  final zones = ref.watch(fireZoneChainProvider);
+  if (!fireZoned(zones)) return const [];
+  final bases = ref.watch(fireSystemBasesProvider);
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <FireBreakTankCheck>[];
+  for (final z in zones) {
+    final tankId = z.suctionTankId;
+    final up = z.upstream;
+    if (tankId == null || up == null) continue;
+    final tank = net.nodeById(tankId);
+    final b = fireZoneBasis(z, bases);
+    if (tank == null || b == null || b.standsDown) continue;
+    if (!(b.flow.cubicMetersPerSecond > 0)) continue;
+    final req = FireBreakTankRequirement(ratedFlow: b.flow);
+    final lower = fireZoneBasis(zones[up], bases);
+    String? fillEdge;
+    for (final e in zones[up].system.edges) {
+      if (e.fromId != tankId && e.toId != tankId) continue;
+      final sz = sizing[e.id];
+      if (sz == null || sz.flow.cubicMetersPerSecond <= 0) continue;
+      if (fillEdge == null || naturalIdCompare(e.id, fillEdge) < 0) {
+        fillEdge = e.id;
+      }
+    }
+    out.add(FireBreakTankCheck(
+      tankId: tankId,
+      sheetId: tank.sheetId,
+      zoneNumber: z.number,
+      requirement: req,
+      capacityLitres: tank.tankCapacityLitres,
+      verdict: judgeFireTank(
+          capacityLitres: tank.tankCapacityLitres,
+          requiredLitres: req.volumeLitres),
+      fillFlow: lower?.fillFlow,
+      fillEdgeId: fillEdge,
+    ));
+  }
+  return out;
+});
+
+/// Backlog Z-2 — one fire zone as every surface prints it: its basis (the
+/// existing per-system rating), the floors its terminals serve, the lowest
+/// and highest terminal elevations, its working pressure / class and the
+/// break tank it draws from. Empty unless the drawing holds a designed break
+/// ([fireZoned]): a single-zone building prints exactly as before.
+class FireZoneLine {
+  final FireZone zone;
+  final FireSystemBasis basis;
+  final int lowFloor;
+  final int highFloor;
+  final double lowTerminalZ;
+  final double highTerminalZ;
+  final FirePressureClassLine? pressure;
+  final FireBreakTankCheck? breakTank;
+  const FireZoneLine({
+    required this.zone,
+    required this.basis,
+    required this.lowFloor,
+    required this.highFloor,
+    required this.lowTerminalZ,
+    required this.highTerminalZ,
+    required this.pressure,
+    required this.breakTank,
+  });
+}
+
+final fireZoneLinesProvider = Provider<List<FireZoneLine>>((ref) {
+  final zones = ref.watch(fireZoneChainProvider);
+  if (!fireZoned(zones)) return const [];
+  final bases = ref.watch(fireSystemBasesProvider);
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final classes = ref.watch(firePressureClassesProvider);
+  final tanks = ref.watch(fireBreakTankChecksProvider);
+  final out = <FireZoneLine>[];
+  for (final z in zones) {
+    final b = fireZoneBasis(z, bases);
+    if (b == null) continue;
+    int? lo, hi;
+    double? zlo, zhi;
+    for (final n in net.nodes) {
+      if (!z.system.nodeIds.contains(n.id) ||
+          n.role != NodeRole.fixture ||
+          isSupplyInletComponent(n.component)) {
+        continue;
+      }
+      final el = nodeElevation(n, project.building, project.mounting).meters;
+      lo = lo == null || n.floorIndex < lo ? n.floorIndex : lo;
+      hi = hi == null || n.floorIndex > hi ? n.floorIndex : hi;
+      zlo = zlo == null || el < zlo ? el : zlo;
+      zhi = zhi == null || el > zhi ? el : zhi;
+    }
+    if (lo == null || hi == null) continue;
+    out.add(FireZoneLine(
+      zone: z,
+      basis: b,
+      lowFloor: lo,
+      highFloor: hi,
+      lowTerminalZ: zlo!,
+      highTerminalZ: zhi!,
+      pressure: classes.where((l) => identical(l.basis, b)).firstOrNull,
+      breakTank: tanks.where((t) => t.tankId == z.suctionTankId).firstOrNull,
+    ));
+  }
+  return out;
+});
+
+/// Backlog Z-2 — the floor-range label of a fire zone ('Lantai 1-Lantai 15').
+String fireZoneFloorsLabel(List<Floor> floors, int low, int high) {
+  String name(int f) => f >= 0 && f < floors.length ? floors[f].name : 'F$f';
+  return low == high ? name(low) : '${name(low)}-${name(high)}';
+}

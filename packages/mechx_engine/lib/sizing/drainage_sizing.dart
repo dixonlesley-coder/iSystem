@@ -57,6 +57,8 @@ double drainageFixtureUnit(PlumbingFixture fixture) {
       return 4; // VERIFY
     case PlumbingFixture.urinalFlushTank:
       return 4; // VERIFY
+    case PlumbingFixture.urinalFlushValve:
+      return 4; // VERIFY — the same urinal row (backlog D-5)
     case PlumbingFixture.lavatory:
       return 1; // VERIFY
     case PlumbingFixture.shower:
@@ -253,7 +255,8 @@ const double kMinTrapDrainMm = 50.0;
 /// True for the fixtures whose trap imposes the [kMinTrapDrainMm] floor.
 bool isDn50TrapFixture(PlumbingFixture fixture) =>
     fixture == PlumbingFixture.shower ||
-    fixture == PlumbingFixture.urinalFlushTank;
+    fixture == PlumbingFixture.urinalFlushTank ||
+    fixture == PlumbingFixture.urinalFlushValve;
 
 /// True for the fixtures that impose the [kMinWcDrainMm] floor.
 bool isWaterCloset(PlumbingFixture fixture) =>

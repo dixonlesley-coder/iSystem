@@ -184,7 +184,8 @@ class _Node extends StatelessWidget {
       PowerNodeKind.pv || PowerNodeKind.pvInverter => colors.success,
       PowerNodeKind.battery || PowerNodeKind.batteryInverter => colors.danger,
       PowerNodeKind.hybridInverter => colors.accent,
-      PowerNodeKind.bus => colors.textSecondary,
+      PowerNodeKind.bus || PowerNodeKind.transformer => colors.textSecondary,
+      PowerNodeKind.capacitor => colors.textSecondary,
       PowerNodeKind.mainPanel => colors.textPrimary,
       PowerNodeKind.ats => colors.warning,
     };

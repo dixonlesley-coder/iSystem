@@ -645,7 +645,10 @@ void main() {
       }
       final duty = c.read(supplyMoverDutiesProvider)['TP'];
       expect(duty, isNotNull);
-      expect(duty!.head.meters, closeTo(lift + friction, 1e-9));
+      // Backlog W-3 (2026-11-14) — + the float-valve inlet residual 5.0 m
+      // (`kTankInletResidualHeadM`; the tank inlet was a 0 m free discharge).
+      expect(duty!.head.meters,
+          closeTo(lift + friction + kTankInletResidualHeadM, 1e-9));
       expect(
         duty.flow.cubicMetersPerSecond,
         closeTo(q.cubicMetersPerSecond, 1e-12),

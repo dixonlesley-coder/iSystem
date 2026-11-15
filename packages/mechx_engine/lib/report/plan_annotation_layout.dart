@@ -25,7 +25,9 @@ import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../units.dart' show Length;
-import 'drawing_chrome.dart' show LabelBox, kMinPlotTextMm;
+import 'drawing_chrome.dart'
+    show LabelBox, helveticaTextWidth, kMinPlotTextMm;
+import 'plan_detail.dart';
 import 'plan_symbols.dart';
 
 /// Paper millimetres per PDF point.
@@ -34,6 +36,11 @@ const double kPlanPaperMmPerPt = 25.4 / 72;
 /// Plotted height of a plan run / riser / equipment tag and of the UP/DN
 /// marks: 9 pt (3.175 mm) — above the ISO 3098 2.5 mm minimum.
 const double kPlanLabelTextMm = 9 * kPlanPaperMmPerPt;
+
+/// Drawing review R1 — the radius of a detail bubble (5 mm) and the height
+/// of its letter (4 mm).
+const double kPlanDetailBubbleMm = 5;
+const double kPlanDetailLetterMm = 4;
 
 /// Plotted height of a riser tie-dimension figure: the ISO 3098 minimum.
 const double kPlanTieTextMm = kMinPlotTextMm;
@@ -74,8 +81,133 @@ const double kPlanTieTickMm = 2 * kPlanPaperMmPerPt;
 class PlanSheetPlot {
   final int scaleDenominator;
   final List<LabelBox> occupiedPx;
+
+  /// Drawing backlog L-1 (2026-11-13) — the plan PDF's page frame for this
+  /// sheet. When present the DXF lays its annotations out ONCE in the PDF's
+  /// page-point frame (the same `map`, occupied boxes, grid extent and duct
+  /// widths) and maps the placed geometry into model millimetres
+  /// ([mapPlanAnnotations]), so both formats draw one placement result —
+  /// the same slots, keys and overlap stamp — instead of two layouts whose
+  /// floating-point ties could break differently. Null ⇒ the DXF's own
+  /// model-mm layout (legacy callers).
+  final PlanPageFrame? frame;
   const PlanSheetPlot(
-      {required this.scaleDenominator, this.occupiedPx = const []});
+      {required this.scaleDenominator,
+      this.occupiedPx = const [],
+      this.frame});
+}
+
+/// Drawing backlog L-1 — the plan PDF's page geometry for one sheet: sheet
+/// px → page points is `x' = offX + (x − minX) · scale`, `y' = (pageH − offY)
+/// − (y − minY) · scale` (y-up); [occupiedPt] is the PDF's own occupied list
+/// (frame strips, title block, legend…, then the extra px boxes mapped the
+/// same way); [extent] the fit extent in sheet px (the grid extent);
+/// [pointsPerMeter] the true-width duct rule's basis (null: NTS).
+class PlanPageFrame {
+  final double offX, offY, minX, minY, scale, pageH;
+  final double? pointsPerMeter;
+  final List<LabelBox> occupiedPt;
+  final ({double minX, double minY, double maxX, double maxY}) extent;
+  const PlanPageFrame({
+    required this.offX,
+    required this.offY,
+    required this.minX,
+    required this.minY,
+    required this.scale,
+    required this.pageH,
+    required this.pointsPerMeter,
+    required this.occupiedPt,
+    required this.extent,
+  });
+
+  double tx(double x) => offX + (x - minX) * scale;
+  double ty(double y) => (pageH - offY) - (y - minY) * scale;
+}
+
+/// Drawing backlog L-1 — [a] placed in one frame, re-expressed in another by
+/// the uniform map `X = ox + k·x`, `Y = oy + k·y` (k > 0: both frames y-up,
+/// so angles are unchanged); every length (text size, radii) scales by k.
+/// The sheet-pixel anchors and counts are frame-free and kept as they are.
+PlanAnnotations mapPlanAnnotations(PlanAnnotations a,
+    {required double k, required double ox, required double oy}) {
+  double fx(double x) => ox + k * x;
+  double fy(double y) => oy + k * y;
+  LabelSegment seg(LabelSegment s) =>
+      (x1: fx(s.x1), y1: fy(s.y1), x2: fx(s.x2), y2: fy(s.y2));
+  PlacedLabelLine line(PlacedLabelLine l) =>
+      (text: l.text, x: fx(l.x), y: fy(l.y));
+  ({double x, double y})? pt(({double x, double y})? p) =>
+      p == null ? null : (x: fx(p.x), y: fy(p.y));
+  final kt = a.keyTable;
+  return PlanAnnotations(
+    grid: [
+      for (final g in a.grid)
+        PlanGridMark(g.label, g.isColumn, seg(g.line), fx(g.bubbleX),
+            fy(g.bubbleY), g.bubbleR * k),
+    ],
+    upDown: [
+      for (final m in a.upDown)
+        PlanUpDownMark(m.text, fx(m.x), fy(m.y), m.textSize * k),
+    ],
+    ties: [
+      for (final t in a.ties)
+        PlanTieDimension(
+          axisExtension: seg(t.axisExtension),
+          riserExtension: seg(t.riserExtension),
+          dimension: seg(t.dimension),
+          ticks: [for (final s in t.ticks) seg(s)],
+          text: t.text,
+          textX: fx(t.textX),
+          textY: fy(t.textY),
+          textSize: t.textSize * k,
+        ),
+    ],
+    labels: [
+      for (final l in a.labels)
+        PlanPlacedLabel(
+          l.kind,
+          l.id,
+          LeaderedLabelPlacement(
+            x: fx(l.placement.x),
+            y: fy(l.placement.y),
+            angleDeg: l.placement.angleDeg,
+            leaderAnchor: pt(l.placement.leaderAnchor),
+            leaderEnd: pt(l.placement.leaderEnd),
+            lines: [for (final x in l.placement.lines) line(x)],
+            keyCircle: l.placement.keyCircle == null
+                ? null
+                : (
+                    x: fx(l.placement.keyCircle!.x),
+                    y: fy(l.placement.keyCircle!.y),
+                    r: l.placement.keyCircle!.r * k,
+                  ),
+          ),
+          l.textSize * k,
+        ),
+    ],
+    keyTable: kt == null
+        ? null
+        : PlanKeyTable([for (final x in kt.texts) line(x)],
+            [for (final s in kt.rules) seg(s)], kt.textSize * k),
+    overlapCount: a.overlapCount,
+    marks: PlanMarks(
+      lines: [
+        for (final l in a.marks.lines)
+          PlanMarkLine(fx(l.x1), fy(l.y1), fx(l.x2), fy(l.y2),
+              dashed: l.dashed, heavy: l.heavy),
+      ],
+      circles: [
+        for (final c in a.marks.circles)
+          PlanMarkCircle(fx(c.cx), fy(c.cy), c.r * k, filled: c.filled),
+      ],
+      texts: [
+        for (final t in a.marks.texts)
+          PlanMarkText(fx(t.x), fy(t.y), t.size * k, t.text),
+      ],
+    ),
+    unresolvedAnchorsPx: a.unresolvedAnchorsPx,
+    elementAnchorsPx: a.elementAnchorsPx,
+  );
 }
 
 /// What a placed tag annotates.
@@ -146,17 +278,37 @@ class PlanAnnotations {
   final List<PlanTieDimension> ties;
   final List<PlanPlacedLabel> labels;
 
+  /// Drawing-review D5 — the sheet's KETERANGAN PIPA / PIPE KEY table (null
+  /// when no tag had to be keyed).
+  final PlanKeyTable? keyTable;
+
   /// Round 24 — annotations that could only be placed OVERPRINTING something
   /// (the density limit of the sheet: no clear slot existed). The exporters
   /// print [planOverlapWarning] on the sheet when this is non-zero, so an
   /// illegible sheet is never issued as if it were clean.
   final int overlapCount;
+
+  /// Drawing review R1 — the detail boundaries + bubbles (and a detail
+  /// sheet's viewport frames / captions / scale bars), in output units.
+  final PlanMarks marks;
+
+  /// Drawing review R1 — the SHEET-PIXEL anchor of every annotation counted
+  /// in [overlapCount] (the seeds of the detail clusters).
+  final List<({double x, double y})> unresolvedAnchorsPx;
+
+  /// Drawing review R1 — the sheet-pixel anchor of every annotated element
+  /// on the floor (runs at their mid-point, nodes, riser markers).
+  final List<({double x, double y})> elementAnchorsPx;
   const PlanAnnotations(
       {this.grid = const [],
       this.upDown = const [],
       this.ties = const [],
       this.labels = const [],
-      this.overlapCount = 0});
+      this.overlapCount = 0,
+      this.keyTable,
+      this.marks = PlanMarks.empty,
+      this.unresolvedAnchorsPx = const [],
+      this.elementAnchorsPx = const []});
 }
 
 /// Round 24 — the minimum PAPER width (mm) at which a sized duct is drawn
@@ -184,6 +336,32 @@ List<LabelSegment> planDoubleLineOutline(
   return [
     (x1: ax + nx, y1: ay + ny, x2: bx + nx, y2: by + ny),
     (x1: ax - nx, y1: ay - ny, x2: bx - nx, y2: by - ny),
+  ];
+}
+
+/// Fix round 4 (R3) — the two arms of the A5 flow chevron the plan PDF /
+/// DXF draw on a sized, oriented run from ([ux], [uy]) (upstream) to
+/// ([dx], [dy]): an open chevron at the 2/3 point, [arm] long, 0.75 × [arm]
+/// either side of the run — the exporters' own geometry. Empty when the run
+/// is not longer than [minLen] (no chevron is drawn). Pure.
+List<LabelSegment> planFlowChevronArms(
+    double ux, double uy, double dx, double dy,
+    {required double minLen, required double arm}) {
+  final len = math.sqrt((dx - ux) * (dx - ux) + (dy - uy) * (dy - uy));
+  if (!(len > minLen)) return const [];
+  final dirx = (dx - ux) / len, diry = (dy - uy) / len;
+  final perpx = -diry, perpy = dirx;
+  final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
+  final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
+  final backx = tipx - dirx * arm, backy = tipy - diry * arm;
+  return [
+    for (final sgn in const [1.0, -1.0])
+      (
+        x1: backx + sgn * perpx * (arm * 0.75),
+        y1: backy + sgn * perpy * (arm * 0.75),
+        x2: tipx,
+        y2: tipy,
+      ),
   ];
 }
 
@@ -288,7 +466,25 @@ PlanAnnotations layoutPlanAnnotations({
   double? metersPerPixel,
   List<LabelBox> occupied = const [],
   Map<String, double> runHalfWidths = const {},
+  bool keyedLabels = true,
+  List<PlanDetailCallout> details = const [],
+  PlanMarks extraMarks = PlanMarks.empty,
+  Set<String> unlabelledIds = const {},
+  Map<String, String> flowFromIds = const {},
 }) {
+  // Drawing review R1 — an element anchored inside a detail boundary is
+  // labelled on the detail sheet only (its symbol and pipes stay here).
+  bool inDetail(double xPx, double yPx) =>
+      details.any((d) => !d.keyed && d.containsPx(xPx, yPx));
+  // Drawing backlog I-3 (a) — an element anchored inside a KEYED cluster is
+  // tagged with a key circle straight away (its full tag reads in the key
+  // table), so the cluster reads on the plan without a detail sheet.
+  bool inKeyed(double xPx, double yPx) =>
+      details.any((d) => d.keyed && d.containsPx(xPx, yPx));
+  final unresolvedAt = <({double x, double y})>[];
+  final anchors = <({double x, double y})>[];
+  // Drawing-review D5 — tags that find no legal slot are keyed.
+  final keys = keyedLabels ? PlanKeyRegistry() : null;
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
   final u = unitsPerMm;
   final ts = kPlanLabelTextMm * u;
@@ -308,6 +504,17 @@ PlanAnnotations layoutPlanAnnotations({
     if (hw != null && hw > 0) {
       for (final o in planDoubleLineOutline(pa.x, pa.y, pc.x, pc.y, hw)) {
         layout.addRun(e.id, o.x1, o.y1, o.x2, o.y2);
+      }
+    }
+    // Fix round 4 (R3, 2026-11-13) — the run's flow chevron is its linework
+    // too: unregistered, a foreign tag, an UP/DN mark or a key could print
+    // across its arms.
+    final up = flowFromIds[e.id];
+    if (up != null && (up == a.id || up == c.id)) {
+      final (pu, pd) = up == a.id ? (pa, pc) : (pc, pa);
+      for (final arm in planFlowChevronArms(pu.x, pu.y, pd.x, pd.y,
+          minLen: 30 * kPlanPaperMmPerPt * u, arm: 5 * kPlanPaperMmPerPt * u)) {
+        layout.addRun(e.id, arm.x1, arm.y1, arm.x2, arm.y2);
       }
     }
   }
@@ -332,7 +539,7 @@ PlanAnnotations layoutPlanAnnotations({
       gridMarks.add(PlanGridMark(axis.label, true,
           (x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y), p1.x, top, r));
       layout.addGridLine(p1.x, p1.y, p2.x, p2.y);
-      layout.addBox(
+      layout.addTextBox(
           (minX: p1.x - r, minY: top - r, maxX: p1.x + r, maxY: top + r));
     }
     for (final axis in grid.rows) {
@@ -342,7 +549,7 @@ PlanAnnotations layoutPlanAnnotations({
       gridMarks.add(PlanGridMark(axis.label, false,
           (x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y), left, p1.y, r));
       layout.addGridLine(p1.x, p1.y, p2.x, p2.y);
-      layout.addBox(
+      layout.addTextBox(
           (minX: left - r, minY: p1.y - r, maxX: left + r, maxY: p1.y + r));
     }
   }
@@ -371,14 +578,152 @@ PlanAnnotations layoutPlanAnnotations({
         (minX: p.x - mr, minY: p.y - mr, maxX: p.x + mr, maxY: p.y + mr));
   }
 
+  // ── Drawing review R1 — detail boundaries + bubbles, extra marks ─────────
+  final mLines = <PlanMarkLine>[];
+  final mCircles = <PlanMarkCircle>[];
+  final mTexts = <PlanMarkText>[];
+  for (final d in details) {
+    if (d.keyed) continue;
+    final r = d.rectPx;
+    final c00 = map(r.minX, r.minY), c11 = map(r.maxX, r.maxY);
+    final x0 = math.min(c00.x, c11.x), x1 = math.max(c00.x, c11.x);
+    final y0 = math.min(c00.y, c11.y), y1 = math.max(c00.y, c11.y);
+    for (final (ax, ay, bx, by) in [
+      (x0, y0, x1, y0),
+      (x1, y0, x1, y1),
+      (x1, y1, x0, y1),
+      (x0, y1, x0, y0),
+    ]) {
+      mLines.add(PlanMarkLine(ax, ay, bx, by, dashed: true));
+      layout.addRun(null, ax, ay, bx, by);
+    }
+    // The bubble (letter) + caption at the first clear corner.
+    final rb = kPlanDetailBubbleMm * u;
+    final lts = kPlanDetailLetterMm * u;
+    final capW = helveticaTextWidth(d.caption, ts);
+    LabelBox? bubbleBox, capBox;
+    double bx = 0, by = 0, capX = 0;
+    var placed = false;
+    double leadX = 0, leadY = 0, bestM = 1;
+    // Fix round 3 — with the caption measured at its real width a corner can
+    // be taken by a neighbouring detail's caption: the bubble then steps
+    // further out along its corner's diagonal (tied back to the corner by a
+    // leader) before the sheet counts an overprint (the first ring is
+    // unchanged).
+    for (final (cx, cy, sx, sy, m) in [
+      for (final step in const [1.0, 2.0, 3.0, 4.5, 6.0]) ...[
+        (x1, y1, 1.0, 1.0, step),
+        (x0, y1, -1.0, 1.0, step),
+        (x1, y0, 1.0, -1.0, step),
+        (x0, y0, -1.0, -1.0, step),
+      ],
+    ]) {
+      for (final capSide in [sx, -sx]) {
+        final px = cx + sx * rb * m, py = cy + sy * rb * m;
+        final bb = (minX: px - rb, minY: py - rb, maxX: px + rb, maxY: py + rb);
+        final cxs = capSide > 0 ? px + rb + 1.5 * u : px - rb - 1.5 * u - capW;
+        final cb = (
+          minX: cxs,
+          minY: py - 0.5 * ts,
+          maxX: cxs + capW,
+          maxY: py + 0.7 * ts
+        );
+        if (bubbleBox == null) {
+          bubbleBox = bb;
+          capBox = cb;
+          bx = px;
+          by = py;
+          capX = cxs;
+        }
+        // A pulled-out bubble's leader (corner -> bubble edge) must cross no
+        // run or placed label.
+        final far = m > 1;
+        // The bubble's near edge: its centre sits m·rb·√2 out along the
+        // diagonal, the edge rb short of it.
+        final k = far ? 1 - 1 / (m * math.sqrt2) : 0.0;
+        final lx = cx + (px - cx) * k, ly = cy + (py - cy) * k;
+        // Tested from a little off the corner: the leader starts ON the
+        // detail's own boundary, which is not an obstacle to it.
+        final sx0 = cx + (px - cx) * 0.15 * k, sy0 = cy + (py - cy) * 0.15 * k;
+        final lb = (
+          minX: math.min(sx0, lx),
+          minY: math.min(sy0, ly),
+          maxX: math.max(sx0, lx),
+          maxY: math.max(sy0, ly)
+        );
+        final leaderClear =
+            !far || (!layout.hitsRun(lb, clearance: 0) && !layout.hitsBox(lb));
+        if (!layout.hitsBox(bb) &&
+            !layout.hitsBox(cb) &&
+            !layout.hitsRun(cb, clearance: 0.1 * ts) &&
+            (!far || !layout.hitsRun(bb, clearance: 0)) &&
+            leaderClear) {
+          bubbleBox = bb;
+          capBox = cb;
+          bx = px;
+          by = py;
+          capX = cxs;
+          leadX = cx;
+          leadY = cy;
+          bestM = m;
+          placed = true;
+          break;
+        }
+      }
+      if (placed) break;
+    }
+    if (!placed) {
+      layout.markUnresolved();
+      unresolvedAt.add((x: r.maxX, y: r.minY));
+    }
+    layout.addTextBox(bubbleBox!);
+    layout.addTextBox(capBox!);
+    if (placed && bestM > 1) {
+      // The leader from the boundary corner to the bubble's near edge.
+      final k = 1 - 1 / (bestM * math.sqrt2);
+      final ex = leadX + (bx - leadX) * k;
+      final ey = leadY + (by - leadY) * k;
+      mLines.add(PlanMarkLine(leadX, leadY, ex, ey));
+      layout.addRun(null, leadX, leadY, ex, ey);
+    }
+    mCircles.add(PlanMarkCircle(bx, by, rb));
+    mTexts.add(PlanMarkText(
+        bx - helveticaTextWidth(d.letter, lts) / 2, by - 0.36 * lts, lts, d.letter));
+    mTexts.add(PlanMarkText(capX, by - 0.36 * ts, ts, d.caption));
+  }
+  for (final l in extraMarks.lines) {
+    final a = map(l.x1, l.y1), b = map(l.x2, l.y2);
+    mLines.add(PlanMarkLine(a.x, a.y, b.x, b.y,
+        dashed: l.dashed, heavy: l.heavy));
+    layout.addRun(null, a.x, a.y, b.x, b.y);
+  }
+  for (final c in extraMarks.circles) {
+    final p = map(c.cx, c.cy);
+    final r = c.r * u;
+    mCircles.add(PlanMarkCircle(p.x, p.y, r, filled: c.filled));
+    layout.addBox((minX: p.x - r, minY: p.y - r, maxX: p.x + r, maxY: p.y + r));
+  }
+  for (final t in extraMarks.texts) {
+    final p = map(t.x, t.y);
+    final h = t.size * u;
+    mTexts.add(PlanMarkText(p.x, p.y, h, t.text));
+    layout.addTextBox((
+      minX: p.x,
+      minY: p.y - 0.3 * h,
+      maxX: p.x + helveticaTextWidth(t.text, h),
+      maxY: p.y + h
+    ));
+  }
+
   // ── UP/DN marks: the first clear quadrant about the marker (R6) ───────────
   final upDown = <PlanUpDownMark>[];
   final gap = kPlanRiserTagGapMm * u;
   for (final entry in riserNodes.entries) {
     final n = net.nodeById(entry.key)!;
+    if (inDetail(n.x, n.y) || unlabelledIds.contains(n.id)) continue;
     final p = map(n.x, n.y);
     for (final sense in entry.value) {
-      final w = sense.length * ts * 0.55;
+      final w = helveticaTextWidth(sense, ts);
       // (x, baseline) of the four quadrants: lower-right (the long-standing
       // slot), upper-right, lower-left, upper-left — each box clear of the
       // marker circle and disjoint from its vertical twin.
@@ -415,6 +760,27 @@ PlanAnnotations layoutPlanAnnotations({
         }
         if (pick != null) break;
       }
+      // Fix round 4 (R3, 2026-11-13) — every hugging quadrant crossed by a
+      // run (a stack with four runs leaving it): step out on a ring of 8
+      // directions, still clear of every run and mark, before the stack
+      // fallback (which only checked boxes, so a foreign run could strike
+      // through the 'DN' uncounted).
+      if (pick == null) {
+        ring:
+        for (final f in const [1.6, 2.4, 3.2]) {
+          final rr = gap * f;
+          for (var k = 0; k < 8; k++) {
+            final a = k * math.pi / 4;
+            // The mark's box centred on the ring point.
+            final x = p.x + rr * math.cos(a) - w / 2;
+            final y = p.y + rr * math.sin(a) - 0.5 * ts;
+            if (clearAt(x, y, 0.1 * ts, false)) {
+              pick = (x, y);
+              break ring;
+            }
+          }
+        }
+      }
       // Nothing clear: stack below the first quadrant (never dropped).
       if (pick == null) {
         var (x, y) = quads.first;
@@ -422,13 +788,18 @@ PlanAnnotations layoutPlanAnnotations({
           if (!layout.hitsBox(boxAt(x, y))) break;
           y -= 1.3 * ts;
         }
-        // Round 24 — still colliding after the stack: counted, not silent.
-        if (layout.hitsBox(boxAt(x, y))) layout.markUnresolved();
+        // Round 24 — still colliding after the stack: counted, not silent
+        // (fix round 4: a run through the mark is a collision too).
+        if (layout.hitsBox(boxAt(x, y)) ||
+            layout.hitsRun(boxAt(x, y), clearance: 0)) {
+          layout.markUnresolved();
+          unresolvedAt.add((x: n.x, y: n.y));
+        }
         pick = (x, y);
       }
       final (x, y) = pick;
       upDown.add(PlanUpDownMark(sense, x, y, ts));
-      layout.addBox(boxAt(x, y));
+      layout.addTextBox(boxAt(x, y));
     }
   }
 
@@ -478,7 +849,7 @@ PlanAnnotations layoutPlanAnnotations({
       // Stagger the figure AWAY from the marker (back off along the line
       // toward the axis), then step perpendicular until the box clears
       // everything already placed (marker / UP-DN / other ties).
-      final w = label.length * fs * 0.55;
+      final w = helveticaTextWidth(label, fs);
       final h = fs;
       final along = math.min(22 * pt, len * 0.5);
       LabelBox boxAt(double bcx, double bcy) => (
@@ -531,7 +902,7 @@ PlanAnnotations layoutPlanAnnotations({
       }
       cx ??= fx!;
       cy ??= fy!;
-      layout.addBox(boxAt(cx, cy));
+      layout.addTextBox(boxAt(cx, cy));
       ties.add(PlanTieDimension(
         axisExtension: axisExt,
         riserExtension: riserExt,
@@ -549,6 +920,8 @@ PlanAnnotations layoutPlanAnnotations({
 
     for (final id in riserNodes.keys) {
       final n = net.nodeById(id)!;
+      if (inDetail(n.x, n.y)) continue;
+      final before = layout.unresolvedCount;
       final col = nearestAxis(grid.columns, n.x);
       if (col != null) {
         final t = formatTieOffsetMm((n.x - col.position).abs(), metersPerPixel);
@@ -559,6 +932,7 @@ PlanAnnotations layoutPlanAnnotations({
         final t = formatTieOffsetMm((n.y - row.position).abs(), metersPerPixel);
         if (t != null) tieDim(n.x, row.position, n.x, n.y, t);
       }
+      if (layout.unresolvedCount > before) unresolvedAt.add((x: n.x, y: n.y));
     }
   }
 
@@ -571,6 +945,10 @@ PlanAnnotations layoutPlanAnnotations({
     final a = net.nodeById(e.fromId);
     final c = net.nodeById(e.toId);
     if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
+    final mx = (a.x + c.x) / 2, my = (a.y + c.y) / 2;
+    anchors.add((x: mx, y: my));
+    if (inDetail(mx, my) || unlabelledIds.contains(e.id)) continue;
+    final before = layout.unresolvedCount;
     final pa = map(a.x, a.y), pc = map(c.x, c.y);
     labels.add(PlanPlacedLabel(
         PlanLabelKind.run,
@@ -586,14 +964,18 @@ PlanAnnotations layoutPlanAnnotations({
             layout: layout,
             ownRunId: e.id,
             // Round 29 (drawings-3-3) — clear the duct's own outline.
-            ownHalfWidth: runHalfWidths[e.id] ?? 0),
+            ownHalfWidth: runHalfWidths[e.id] ?? 0,
+            keys: keys,
+            keyOnly: inKeyed(mx, my)),
         ts));
+    if (layout.unresolvedCount > before) unresolvedAt.add((x: mx, y: my));
   }
   // A point feature's tag: a short pseudo-run just right of the feature,
   // anchored on it (so an escaped tag leaders back to the feature itself).
   LeaderedLabelPlacement pointTag(
-      double px, double py, double gapMm, String text, List<String>? split) {
-    final w = text.length * ts * 0.55;
+      double px, double py, double gapMm, String text, List<String>? split,
+      {bool keyOnly = false}) {
+    final w = helveticaTextWidth(text, ts);
     final x0 = px + gapMm * u;
     return placePlanLabel(
         ax: x0,
@@ -604,7 +986,9 @@ PlanAnnotations layoutPlanAnnotations({
         splitLines: split,
         textSize: ts,
         layout: layout,
-        anchorPoint: (x: px, y: py));
+        anchorPoint: (x: px, y: py),
+        keys: keys,
+        keyOnly: keyOnly);
   }
 
   // Round 33 (engineer-walkthrough-plan-fixtures-anonymous) — every plumbing
@@ -623,9 +1007,17 @@ PlanAnnotations layoutPlanAnnotations({
       if (!onFloor(n)) continue;
       final tag = allNodeTags[n.id];
       if (tag == null || tag.isEmpty) continue;
+      anchors.add((x: n.x, y: n.y));
+      if (inDetail(n.x, n.y) || unlabelledIds.contains(n.id)) continue;
+      final before = layout.unresolvedCount;
       final p = map(n.x, n.y);
       labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id,
-          pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null), ts));
+          pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null,
+              keyOnly: inKeyed(n.x, n.y)),
+          ts));
+      if (layout.unresolvedCount > before) {
+        unresolvedAt.add((x: n.x, y: n.y));
+      }
     }
   }
   final printed = <String>{};
@@ -643,9 +1035,44 @@ PlanAnnotations layoutPlanAnnotations({
     final key = '${marker.x.toStringAsFixed(3)},'
         '${marker.y.toStringAsFixed(3)}|${l.text}';
     if (!printed.add(key)) continue;
+    anchors.add((x: marker.x, y: marker.y));
+    if (inDetail(marker.x, marker.y) || unlabelledIds.contains(e.id)) {
+      continue;
+    }
+    final before = layout.unresolvedCount;
     final p = map(marker.x, marker.y);
     labels.add(PlanPlacedLabel(PlanLabelKind.riser, e.id,
-        pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split), ts));
+        pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split,
+            keyOnly: inKeyed(marker.x, marker.y)),
+        ts));
+    if (layout.unresolvedCount > before) {
+      unresolvedAt.add((x: marker.x, y: marker.y));
+    }
+  }
+
+  // Drawing-review D5 — the key table, in the first clear spot near the
+  // drawn floor (the frame / title block / legend are occupied boxes).
+  PlanKeyTable? keyTable;
+  if (keys != null && !keys.isEmpty) {
+    var x0 = double.infinity, y0 = double.infinity;
+    var x1 = -double.infinity, y1 = -double.infinity;
+    for (final n in net.nodes) {
+      if (!onFloor(n)) continue;
+      final p = map(n.x, n.y);
+      x0 = math.min(x0, p.x);
+      y0 = math.min(y0, p.y);
+      x1 = math.max(x1, p.x);
+      y1 = math.max(y1, p.y);
+    }
+    final pad = 80 * ts;
+    keyTable = placePlanKeyTable(layout, keys,
+        textSize: ts,
+        bounds: (
+          minX: x0 - pad,
+          minY: y0 - pad,
+          maxX: x1 + pad,
+          maxY: y1 + pad
+        ));
   }
 
   return PlanAnnotations(
@@ -653,5 +1080,9 @@ PlanAnnotations layoutPlanAnnotations({
       upDown: upDown,
       ties: ties,
       labels: labels,
-      overlapCount: layout.unresolvedCount);
+      overlapCount: layout.unresolvedCount,
+      keyTable: keyTable,
+      marks: PlanMarks(lines: mLines, circles: mCircles, texts: mTexts),
+      unresolvedAnchorsPx: unresolvedAt,
+      elementAnchorsPx: anchors);
 }

@@ -353,13 +353,17 @@ SldSheet buildCoverSheet({
 SldSheet buildDrawingListSheet(
   List<DrawingListEntry> drawings, {
   String projectName = '',
+  int firstNo = 1,
+  bool continued = false,
 }) {
   final prims = <SldPrim>[];
   void label(double x, double y, String t, double size, {bool bold = false}) =>
       prims.add(SldLabel(x, y, t, size: size, bold: bold));
 
-  label(_centeredX('DAFTAR GAMBAR / DRAWING LIST', 20, _sheetW / 2), 70,
-      'DAFTAR GAMBAR / DRAWING LIST', 20, bold: true);
+  final heading = continued
+      ? 'DAFTAR GAMBAR / DRAWING LIST (LANJUTAN / CONT.)'
+      : 'DAFTAR GAMBAR / DRAWING LIST';
+  label(_centeredX(heading, 20, _sheetW / 2), 70, heading, 20, bold: true);
   if (projectName.trim().isNotEmpty) {
     label(_centeredX(projectName, 12, _sheetW / 2), 100, projectName, 12);
   }
@@ -389,7 +393,7 @@ SldSheet buildDrawingListSheet(
     final d = drawings[i];
     final yTop = headTop + (i + 1) * rowH;
     final yMid = yTop + rowH * 0.62;
-    label(cNo, yMid, (i + 1).toString(), 11);
+    label(cNo, yMid, (firstNo + i).toString(), 11);
     label(cNum, yMid, d.number.isEmpty ? '-' : d.number, 11, bold: true);
     label(cTitle, yMid, d.title.isEmpty ? '-' : d.title, 11);
     label(cRev, yMid, d.revision.isEmpty ? '-' : d.revision, 11);
@@ -414,6 +418,35 @@ SldSheet buildDrawingListSheet(
     supplyNote: '',
   );
 }
+
+/// Drawing-review D1 (2026-11-13) — the most Daftar Gambar rows one A3 page
+/// carries while its 11-unit text still plots at >= 7 pt (a 60+ drawing tower
+/// register printed at 6.8 pt on one page); longer registers continue on
+/// further pages of the same drawing (G-002).
+const int kDrawingListRowsPerPage = 24;
+
+/// The number of Daftar Gambar pages [rows] entries need (>= 1).
+int drawingListPageCount(int rows) =>
+    rows <= 0 ? 1 : (rows + kDrawingListRowsPerPage - 1) ~/ kDrawingListRowsPerPage;
+
+/// The Daftar Gambar as pages of at most [kDrawingListRowsPerPage] rows, the
+/// running No. continuing across pages, later pages headed `(LANJUTAN)`.
+List<SldSheet> buildDrawingListSheets(
+  List<DrawingListEntry> drawings, {
+  String projectName = '',
+}) =>
+    [
+      for (var p = 0; p < drawingListPageCount(drawings.length); p++)
+        buildDrawingListSheet(
+          drawings
+              .skip(p * kDrawingListRowsPerPage)
+              .take(kDrawingListRowsPerPage)
+              .toList(),
+          projectName: projectName,
+          firstNo: p * kDrawingListRowsPerPage + 1,
+          continued: p > 0,
+        ),
+    ];
 
 /// The GENERAL NOTES + MASTER LEGEND sheet (N21 + N24): numbered general notes
 /// in the left column and the master symbol dictionary (drawn with the REAL
@@ -506,7 +539,7 @@ List<SldSheet> buildSubmittalFrontMatter({
         preparedBy: preparedBy,
         drawingCount: drawings.isEmpty ? null : drawings.length,
       ),
-      buildDrawingListSheet(drawings, projectName: projectName),
+      ...buildDrawingListSheets(drawings, projectName: projectName),
       buildGeneralNotesSheet(
         services: services,
         components: components,
@@ -606,6 +639,7 @@ String componentLegendCode(NodeComponent c) => switch (c) {
       NodeComponent.acCassette => 'AC-C',
       NodeComponent.acSplitWall => 'AC-W',
       NodeComponent.acDucted => 'AC-D',
+      NodeComponent.waterHeater => 'WH',
     };
 
 /// The human name for a component's legend row (EN, ASCII). Exhaustive.
@@ -648,4 +682,5 @@ String componentLegendName(NodeComponent c) => switch (c) {
       NodeComponent.acCassette => 'AC cassette unit',
       NodeComponent.acSplitWall => 'AC split (wall)',
       NodeComponent.acDucted => 'AC ducted unit',
+      NodeComponent.waterHeater => 'Electric water heater',
     };

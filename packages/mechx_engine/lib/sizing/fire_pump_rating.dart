@@ -351,6 +351,45 @@ const double kFireComponentMaxPressureKpa = 1210;
 /// [kFireComponentMaxPressureKpa].
 const double kStandpipeMaxSystemPressureKpa = 2413;
 
+/// Backlog A-3 (2026-11-13) — the PN16 working-pressure class of fire pipe,
+/// valves and fittings: 1600 kPa. `// VERIFY notAnSniClause` (EN 1092 / ISO
+/// PN rating; the listed-component equivalent must be confirmed against
+/// SNI 03-1745 / 03-3989 and the product data).
+const double kFirePressureClassPn16Kpa = 1600;
+
+/// Backlog A-3 — the pressure class the fire pipework and fittings
+/// downstream of a pump must carry, from the system WORKING pressure (the
+/// churn pressure at the pump discharge): [standard] <= 1210 kPa (175 psi,
+/// [kFireComponentMaxPressureKpa]), [pn16] <= 1600 kPa
+/// ([kFirePressureClassPn16Kpa]), [pn25] <= 2413 kPa (350 psi,
+/// [kStandpipeMaxSystemPressureKpa], the NFPA 14 7.2.1.1 single-zone limit),
+/// [zoneRequired] above it — no class makes a single zone permissible: the
+/// standpipe must be split into vertical zones. Every threshold `// VERIFY`.
+enum FirePressureClass { standard, pn16, pn25, zoneRequired }
+
+/// The [FirePressureClass] of a system whose pump churns at [churnKpa]. The
+/// pressure is the solved one — never clamped. Pure.
+FirePressureClass firePressureClassFor(double churnKpa) {
+  if (churnKpa <= kFireComponentMaxPressureKpa + 1e-9) {
+    return FirePressureClass.standard;
+  }
+  if (churnKpa <= kFirePressureClassPn16Kpa + 1e-9) {
+    return FirePressureClass.pn16;
+  }
+  if (churnKpa <= kStandpipeMaxSystemPressureKpa + 1e-9) {
+    return FirePressureClass.pn25;
+  }
+  return FirePressureClass.zoneRequired;
+}
+
+/// The printed label of [c] (a BOM / report / inspector cell).
+String firePressureClassLabel(FirePressureClass c) => switch (c) {
+      FirePressureClass.standard => 'Standard 175 psi',
+      FirePressureClass.pn16 => 'PN16',
+      FirePressureClass.pn25 => 'PN25 (350 psi)',
+      FirePressureClass.zoneRequired => 'Above 350 psi - zone',
+    };
+
 /// Round 48 — the JUDGE-ONLY over-pressure check of one fire system: the
 /// pump's NFPA 20 CHURN pressure (its shut-off head, [FirePumpRatingResult]
 /// `churn` = 140 % of the rated head) against

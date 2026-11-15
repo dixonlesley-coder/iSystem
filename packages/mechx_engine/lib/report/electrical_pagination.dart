@@ -73,6 +73,14 @@ List<SldSheet> paginatedElectricalRiserSheets({
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
   bool legible(SldSheet s) =>
       minPt(s) >= kMinPlotLabelPt - kRiserLegibleTolerancePt;
+  // Drawing backlog C-2 — the riser issues only the storeys between its
+  // lowest and highest board (the feeders pass through every storey in
+  // between, so none of those is ever empty); the storeys left off above /
+  // below are named in a compact level list in the gutter of the edge band
+  // so the floor order stays readable. Never a label-only page.
+  final occSpan = electricalRiserOccupiedSpan(project, result, building);
+  final levelNotes = electricalRiserOmittedLevelNotes(
+      building, occSpan, electricalRiserBandCount(project, result, building));
   SldSheet build(({int lo, int hi})? r,
           {Set<String> hide = const {},
           Map<String, String> names = const {},
@@ -90,6 +98,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
           typicalNames: names,
           typicalFeederLengths: lengths,
           bandNotes: notes,
+          levelNotes: levelNotes,
           offPageFeedNotes: fedFrom);
   final levels = electricalRiserBandCount(project, result, building);
   List<SldSheet> floorPages(int a, int b,
@@ -110,7 +119,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
         diagramTitle: diagramTitle,
       );
 
-  final plain = floorPages(0, levels - 1);
+  final plain = floorPages(occSpan.lo, occSpan.hi);
   if (plain.every((p) => p.belowMinLabelPt == null)) return plain;
 
   // 1. Typical collapse on the bands that are illegible on their own page.
@@ -134,7 +143,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
   }
   final collapsed = hide.isEmpty
       ? plain
-      : floorPages(0, levels - 1, hide: hide, names: names, lengths: lengths);
+      : floorPages(occSpan.lo, occSpan.hi,
+          hide: hide, names: names, lengths: lengths);
   if (collapsed.every((p) => p.belowMinLabelPt == null)) return collapsed;
 
   // 2. Column pages for each band still too wide BY ITSELF.
@@ -438,7 +448,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
 
   SldSheet flagged(SldSheet p) {
     final pt = minPt(p);
-    return pt < kMinPlotLabelPt - kRiserLegibleTolerancePt
+    return pt < kMinPlotLabelPt - kRiserLegibleTolerancePt &&
+            sldPrintsBelowMinPt(pt, minPt: kMinPlotLabelPt)
         ? p.withBelowMinLabelPt(pt)
         : p;
   }
@@ -546,6 +557,44 @@ List<SldSheet> paginatedElectricalRiserSheets({
   return pages;
 }
 
+/// Drawing backlog C-2 — the band span [lo]..[hi] (0 = lowest) that carries
+/// a board; every band between carries the riser feeders. The whole stack
+/// when no board resolves.
+({int lo, int hi}) electricalRiserOccupiedSpan(ElectricalProject project,
+    ElectricalSystemResult result, BuildingLevels? building) {
+  final levels = electricalRiserBandCount(project, result, building);
+  final floorOf = electricalRiserFloorOf(project, result, building);
+  final occ = [
+    for (final id in result.order)
+      if (result.panels.containsKey(id)) floorOf[id] ?? 0,
+  ];
+  if (occ.isEmpty || levels <= 0) {
+    return (lo: 0, hi: levels > 0 ? levels - 1 : 0);
+  }
+  return (lo: occ.reduce(math.min), hi: occ.reduce(math.max));
+}
+
+/// Drawing backlog C-2 — the compact level list of the storeys a riser
+/// leaves off ([span] outside): on the top drawn band the storeys above it
+/// (highest first), on the bottom drawn band those below. Empty when the
+/// riser draws every storey or there is no building.
+Map<int, String> electricalRiserOmittedLevelNotes(
+    BuildingLevels? building, ({int lo, int hi}) span, int levels) {
+  if (building == null || building.levelCount == 0) return const {};
+  String name(int i) {
+    final n = building.floors[i].name;
+    return n.isEmpty ? 'L${i + 1}' : n;
+  }
+
+  String list(int a, int b) => a == b ? name(a) : '${name(a)}..${name(b)}';
+  return {
+    if (span.hi < levels - 1)
+      span.hi: 'TANPA PANEL, DI ATAS:\t${list(levels - 1, span.hi + 1)}',
+    if (span.lo > 0)
+      span.lo: 'TANPA PANEL, DI BAWAH:\t${list(span.lo - 1, 0)}',
+  };
+}
+
 /// The building single-line OVERVIEW as issuable PAGES (see the library
 /// doc): `[whole]` when it prints at [kMinPlotLabelPt], else the top page +
 /// one page per cut sub-tree (depth-first, in board order).
@@ -578,6 +627,33 @@ List<SldSheet> paginatedElectricalOverviewSheets({
   bool hasGrandchildren(String id) =>
       kidsOf(id).any((k) => kidsOf(k).isNotEmpty);
 
+  // Drawing backlog C-3 — identical sibling leaf boards ride ONE typical
+  // node (their feeders tabulated), and a wide flat tier packs into a grid:
+  // each page is built at the grid width that prints largest. Only used when
+  // the plain sheet is below the floor (a legible sheet is unchanged).
+  final typical = electricalOverviewTypicalGroups(project, result);
+  final typicalHidden = <String>{
+    for (final g in typical.values) ...g.skip(1),
+  };
+  bool legible(SldSheet s) => minPt(s) >= kMinPlotLabelPt - 1e-9;
+  SldSheet bestGrid(
+      SldSheet Function(Map<String, List<String>> typ, int? cols) build,
+      int maxKids) {
+    SldSheet? best;
+    var bestPt = -1.0;
+    for (final cols in <int?>[null, for (var k = maxKids - 1; k >= 1; k--) k]) {
+      final sh = build(typical, cols);
+      final pt = minPt(sh);
+      if (pt > bestPt + 1e-9) {
+        best = sh;
+        bestPt = pt;
+      }
+      // The widest grid that already reaches the floor wins (fewest rows).
+      if (pt >= kMinPlotLabelPt - 1e-9) return sh;
+    }
+    return best!;
+  }
+
   // One sub-tree as pages ([root] null ⇒ the whole building).
   List<SldSheet> pagesFor(String? root) {
     final whole = buildElectricalOverview(
@@ -591,48 +667,81 @@ List<SldSheet> paginatedElectricalOverviewSheets({
             for (final id in result.order)
               if (!hasParent.contains(id)) id,
           ];
-    if (minPt(whole) >= kMinPlotLabelPt - 1e-9) return [whole];
+    if (legible(whole)) return [whole];
     final splittable = roots.any(hasGrandchildren);
     final directCount = roots.fold<int>(0, (n, r) => n + kidsOf(r).length);
-    if (!splittable && directCount < 2) return [whole];
-    final top = splittable
-        ? buildElectricalOverview(
+    // The whole sub-tree on ONE page with typical nodes + a packed grid.
+    final maxKids = [
+      for (final id in result.order) kidsOf(id).length,
+    ].fold<int>(1, math.max);
+    final compact = bestGrid(
+        (typ, cols) => buildElectricalOverview(
             project: project,
             result: result,
             sourceChain: sourceChain,
             subtreeRootId: root,
-            maxDepth: 1)
-        : whole;
+            typicalGroups: typ,
+            gridColumns: cols),
+        maxKids);
+    if (legible(compact)) return [compact];
+    if (!splittable && directCount < 2) return [whole];
+    SldSheet topPage({Set<String>? chunk, bool spine = true}) => bestGrid(
+        (typ, cols) => buildElectricalOverview(
+            project: project,
+            result: result,
+            sourceChain: sourceChain && spine,
+            subtreeRootId: root,
+            maxDepth: splittable ? 1 : null,
+            rootChildIds: chunk,
+            typicalGroups: typ,
+            gridColumns: cols),
+        maxKids);
+    final top = topPage();
     // Round 34 (electrical-drawings-4-overview-pagination-leaves-top-page-
     // below-floor) — a wide FLAT tier is width-bound: cutting sub-trees left
     // the depth-1 top page itself below the floor. Re-check it, and when it
     // is still too small split the roots' direct sub-boards into the fewest
     // equal chunks whose every page prints at the floor (the source spine
     // rides the first chunk; a single-board chunk is the last resort).
+    // Drawing backlog C-3 — a typical node's members ride its first board's
+    // chunk, and each chunk page is grid-packed.
     var tops = [top];
-    if (minPt(top) < kMinPlotLabelPt - 1e-9) {
+    if (!legible(top)) {
       final direct = [
-        for (final r in roots) ...kidsOf(r),
+        for (final r in roots)
+          for (final k in kidsOf(r))
+            if (!typicalHidden.contains(k)) k,
       ];
-      for (var g = 2; g <= direct.length; g++) {
-        final size = (direct.length / g).ceil();
-        final chunks = [
-          for (var i = 0; i < direct.length; i += size)
-            direct.sublist(i, (i + size).clamp(0, direct.length)).toSet(),
-        ];
-        final pages = [
-          for (var i = 0; i < chunks.length; i++)
-            buildElectricalOverview(
-                project: project,
-                result: result,
-                sourceChain: sourceChain && i == 0,
-                subtreeRootId: root,
-                maxDepth: splittable ? 1 : null,
-                rootChildIds: chunks[i]),
-        ];
-        tops = pages;
-        if (pages.every((p) => minPt(p) >= kMinPlotLabelPt - 1e-9)) break;
+      // Fix round 3 (O3, 2026-11-13) — the chunks are FILLED in board
+      // order, not cut equal: each page takes the next sub-board (a typical
+      // node with all its members) while it still prints at the floor, so
+      // no page but the last is left near-empty (equal chunks of two left
+      // three tower pages holding two single boards each).
+      Set<String> expand(List<String> es) => {
+            for (final k in es) ...(typical[k] ?? [k]),
+          };
+      // First fit in board order: a page that cannot take the next board
+      // (a wide typical node) still takes a later one that fits, so the
+      // source-spine page is filled too.
+      final pages = <SldSheet>[];
+      final left = [...direct];
+      while (left.isNotEmpty) {
+        final cur = <String>[left.removeAt(0)];
+        var curPage = topPage(chunk: expand(cur), spine: pages.isEmpty);
+        var i = 0;
+        while (i < left.length) {
+          final trial = [...cur, left[i]];
+          final page = topPage(chunk: expand(trial), spine: pages.isEmpty);
+          if (legible(page)) {
+            cur.add(left.removeAt(i));
+            curPage = page;
+          } else {
+            i++;
+          }
+        }
+        pages.add(curPage);
       }
+      if (pages.isNotEmpty) tops = pages;
     }
     return [
       ...tops,

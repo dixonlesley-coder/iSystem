@@ -75,10 +75,28 @@ ApparentPower selectGeneratorKva(ApparentPower required) {
 
 /* ------------------------------ Genset dip -------------------------------- */
 
-/// Typical per-unit direct-axis sub-transient reactance Xd'' of a genset
-/// alternator on its own kVA base (real machines ~0.12–0.20 pu).
-/// // VERIFY — IEC 60034-4 / alternator datasheet.
-const double kGensetSubtransientReactancePu = 0.15;
+/// Backlog B-5 (2026-11-13) — THE ONE alternator reactance pair (per unit on
+/// the set's own kVA base). Two calculations need two different reactances
+/// of the SAME machine, so they are named, not merged:
+///
+///  * [kAlternatorSubtransientXdPu] — X''d, the direct-axis SUB-TRANSIENT
+///    reactance: it sets the first-cycles symmetrical fault current
+///    S / (√3·U·X''d) that breaking capacity, busbar withstand and the
+///    instantaneous (magnetic) release see — the genset fault level
+///    (`onSiteSourceFaultA`, `gensetFaultBasis`, `gensetAdsCheck`).
+///  * [kAlternatorTransientXdPu] — X'd, the direct-axis TRANSIENT reactance:
+///    a motor start draws its locked-rotor kVA for hundreds of milliseconds
+///    to seconds, past the sub-transient period, so the momentary terminal
+///    dip the AVR must recover from is the voltage divider on X'd
+///    (`_estimateDipPct`, the genset start floor).
+///
+/// X''d < X'd on every machine (typical LV alternators X''d 0.10–0.15,
+/// X'd 0.15–0.25). // VERIFY — secondarySource: IEC 60034-4 / the alternator
+/// datasheet governs both.
+const double kAlternatorSubtransientXdPu = 0.12;
+
+/// X'd — see [kAlternatorSubtransientXdPu]. // VERIFY — alternator datasheet.
+const double kAlternatorTransientXdPu = 0.15;
 
 /// Maximum permissible MOMENTARY terminal-voltage dip during motor starting
 /// (% of nominal). // VERIFY — ISO 8528-5 transient-deviation class.
@@ -370,6 +388,66 @@ class GensetMotor {
       this.lifeSafety = false});
 }
 
+/// Backlog B-3 (2026-11-13) — what governs an UNFORCED genset rating: the
+/// running load (kVA / kW at 0.8 pf, × the duty factor), the largest
+/// motor's start dip, or automatic disconnection on the alternator's own
+/// fault (`ElectricalSystemResult.gensetAdsFloorKva`).
+enum GensetSizingReason {
+  running('running'),
+  motorStart('motor start'),
+  disconnection('disconnection');
+
+  const GensetSizingReason(this.label);
+
+  /// The English report word ('running', 'motor start', 'disconnection').
+  final String label;
+}
+
+/// Backlog E-4 (2026-11-13) — the largest load a standby set may accept in
+/// ONE step (as a fraction of its rated kW at [kGeneratorPf]) and stay within
+/// its transient frequency / voltage band: 60 % for a turbocharged diesel
+/// set under ISO 8528-5 performance class G2 guidance (first load step).
+/// // VERIFY — secondary source (ISO 8528-5 class G2 load-acceptance
+/// guidance for turbocharged engines; the genset maker's load-acceptance
+/// curve for the chosen set governs).
+const double kGensetFirstStepFraction = 0.6;
+
+/// Backlog E-4 — the block-load (step) check of a standby set: on ATS
+/// transfer the set picks up [stepKw] (the backed boards' simultaneous
+/// non-motor demand plus their running motors) in ONE step, judged against
+/// [allowableKw] = [kGensetFirstStepFraction] x [ratedKw] (rated kVA x
+/// [kGeneratorPf]). Judge-only: it never changes a rating — an exceeded step
+/// is answered by STAGED pick-up (load-shed groups / timed starters).
+class GensetStepLoadResult {
+  final double stepKw;
+  final double ratedKw;
+  final double allowableKw;
+
+  const GensetStepLoadResult({
+    required this.stepKw,
+    required this.ratedKw,
+    required this.allowableKw,
+  });
+
+  /// True when the one-step pick-up is above the allowable first step.
+  bool get exceeded => stepKw > allowableKw + 1e-9;
+}
+
+/// Backlog E-4 — [GensetStepLoadResult] for a set of total rating
+/// [ratedKva] (all paralleled units) picking up [stepW] in one step. Null
+/// for a non-positive rating. Pure.
+GensetStepLoadResult? gensetStepLoadCheck(
+    {required ApparentPower ratedKva, required Power stepW}) {
+  final kva = ratedKva.inKilovoltAmperes;
+  if (!(kva > 0)) return null;
+  final ratedKw = kva * kGeneratorPf;
+  return GensetStepLoadResult(
+    stepKw: stepW.watts / 1000,
+    ratedKw: ratedKw,
+    allowableKw: kGensetFirstStepFraction * ratedKw,
+  );
+}
+
 /// Outcome of a genset motor-starting voltage-dip screen.
 class GensetStartResult {
   /// Genset continuous apparent-power rating assessed.
@@ -446,6 +524,15 @@ class GeneratorResult {
   final String note;
   final List<String> verifyItems;
 
+  /// Backlog B-3 — the floor that set an UNFORCED rating (null for a forced
+  /// nameplate, which is judged, never resized).
+  final GensetSizingReason? governing;
+
+  /// Backlog B-3 — the three floors (kVA) the unforced rating was the
+  /// smallest ladder rung at or above: running, motor start, disconnection
+  /// (0 when absent).
+  final ({double running, double start, double ads})? floorsKva;
+
   const GeneratorResult({
     required this.ratingKva,
     required this.backupKva,
@@ -457,6 +544,8 @@ class GeneratorResult {
     this.units = 1,
     required this.note,
     required this.verifyItems,
+    this.governing,
+    this.floorsKva,
   });
 }
 
@@ -573,21 +662,21 @@ String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
 /// Estimated momentary voltage-dip % for a starting kVA against a genset rating,
-/// via the voltage-divider model with Xd'' the alternator sub-transient
-/// reactance: dip = 100·z/(gen + z), z = startKva·Xd''.
+/// via the voltage-divider model with X'd the alternator TRANSIENT reactance
+/// ([kAlternatorTransientXdPu], B-5): dip = 100·z/(gen + z), z = startKva·X'd.
 double _estimateDipPct(double startKva, double genKva) {
   if (genKva <= 0) return 100;
   if (startKva <= 0) return 0;
-  final z = startKva * kGensetSubtransientReactancePu;
+  final z = startKva * kAlternatorTransientXdPu;
   return 100 * (z / (genKva + z));
 }
 
 /// Smallest genset kVA holding the dip from [startKva] within [limitPct].
-/// From dip ≤ limit ⇒ gen ≥ z·(100 − limit)/limit, z = startKva·Xd''.
+/// From dip ≤ limit ⇒ gen ≥ z·(100 − limit)/limit, z = startKva·X'd.
 double _minGensetKvaForDip(double startKva, double limitPct) {
   if (startKva <= 0) return 0;
   if (limitPct <= 0) return double.infinity;
-  final z = startKva * kGensetSubtransientReactancePu;
+  final z = startKva * kAlternatorTransientXdPu;
   return z * ((100 - limitPct) / limitPct);
 }
 
@@ -672,7 +761,7 @@ GensetStartResult assessGensetStart(
 /// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
 /// — the smallest genset kVA that starts the limiting motor of [motors]
 /// within [kMaxStartVoltageDipPct] (the [assessGensetStart] recommendation,
-/// `z·(100 − limit)/limit`, z = start kVA × Xd''). 0 with no motor.
+/// `z·(100 − limit)/limit`, z = start kVA × X'd). 0 with no motor.
 ApparentPower gensetStartFloorKva(List<GensetMotor> motors) =>
     assessGensetStart(const ApparentPower(1), motors: motors)
         .recommendedMinGensetKva;
@@ -724,6 +813,7 @@ GeneratorResult sizeGenerator(
   int forcedUnits = 1,
   Power? backupPower,
   ApparentPower? minKvaForStart,
+  ApparentPower? minKvaForAds,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
   final backupKw = backupPower?.inKiloWatts;
@@ -734,7 +824,20 @@ GeneratorResult sizeGenerator(
   final loadRequired =
       requiredGeneratorKva(backupDemand, backupPower: backupPower, mode: mode);
   final startRequired = minKvaForStart?.inKilovoltAmperes ?? 0;
-  final required = startRequired > loadRequired ? startRequired : loadRequired;
+  // Backlog B-3 — the disconnection floor (a ladder rung `computeSystem`
+  // found to hold ADS on the alternator fault); it governs only above the
+  // other two. Null ⇒ byte-identical.
+  final adsRequired = minKvaForAds?.inKilovoltAmperes ?? 0;
+  final runStart =
+      startRequired > loadRequired ? startRequired : loadRequired;
+  final required = adsRequired > runStart ? adsRequired : runStart;
+  final governing = forcedKva != null
+      ? null
+      : adsRequired > runStart
+          ? GensetSizingReason.disconnection
+          : startRequired > loadRequired
+              ? GensetSizingReason.motorStart
+              : GensetSizingReason.running;
   final sel = forcedKva != null
       ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
@@ -777,6 +880,14 @@ GeneratorResult sizeGenerator(
       'Genset kVA ladder + power factor (0.8) — confirm against the genset datasheet.',
       'Diesel SFC (0.25 l/kWh) + day-tank runtime target (8 h) — confirm against the engine spec.',
     ],
+    governing: governing,
+    floorsKva: forcedKva != null
+        ? null
+        : (
+            running: _round(loadRequired, 2),
+            start: _round(startRequired, 2),
+            ads: _round(adsRequired, 2),
+          ),
   );
 }
 

@@ -88,7 +88,12 @@ void main() {
         project: project, result: result, panelId: 'LP1');
     final total = sheetLabels(sheet).firstWhere((t) => t.startsWith('TOTAL'));
     expect(total, isNot(contains('imbalance')));
-    // Exact pre-H7 shape: 'TOTAL  <kW|W> / <A>A' and nothing after.
-    expect(total, matches(RegExp(r'^TOTAL  [\d.]+(kW|W) / [\d.]+A$')));
+    // Exact shape (drawing review F8 labels both figures): 'TOTAL
+    // TERPASANG / CONNECTED <n> WATT  ·  KEBUTUHAN / DEMAND <kW|W> / <A>A'
+    // and nothing after.
+    expect(
+        total,
+        matches(RegExp(r'^TOTAL  TERPASANG / CONNECTED [\d.]+ WATT  ·  '
+            r'KEBUTUHAN / DEMAND [\d.]+(kW|W) / [\d.]+A$')));
   });
 }

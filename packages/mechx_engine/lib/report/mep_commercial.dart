@@ -364,6 +364,8 @@ MechCostEstimate estimateMechanicalCost({
       legacyKey: mechPipeKey(p.service, p.kind, p.diameterMm),
       description: '${mechServiceLabel(p.service)} $kindWord ${p.sizeLabel}'
           '${p.material.isEmpty ? '' : ' ${p.material}'}'
+          // Backlog A-3 — a fire line's pressure class (PN16 / PN25).
+          '${p.pressureClass.isEmpty ? '' : ' ${p.pressureClass}'}'
           // Round 21 — never a measured-looking total over unmeasured runs.
           '${p.hasUnmeasured ? ' (${p.unmeasuredSegments} of '
               '${p.segmentCount} runs unmeasured - calibrate the sheet)' : ''}'
@@ -403,10 +405,19 @@ MechCostEstimate estimateMechanicalCost({
     // a design output: keying on it dropped the price on every small design
     // change) and says it is an assumption.
     priceLine(
+      // Backlog A-3 — a designated variant (a pressure-regulating hose
+      // valve) is a different purchasable part: keyed apart on its kind.
       key: mechComponentKey(
-          c.service, c.component, c.assumed ? '' : c.sizeLabel),
+          c.service,
+          c.component,
+          c.assumed
+              ? ''
+              : c.variant.isEmpty
+                  ? c.sizeLabel
+                  : '${c.sizeLabel}:${c.variant.split(',').first}'),
       description: '${mechComponentDescription(c.service, c.component)}'
           '${c.sizeLabel.isEmpty ? '' : ' ${c.sizeLabel}'}'
+          '${c.variant.isEmpty ? '' : ' (${c.variant})'}'
           '${c.assumed ? kMechAssumedSuffix : ''}',
       category: MechItemCategory.component,
       service: c.service,

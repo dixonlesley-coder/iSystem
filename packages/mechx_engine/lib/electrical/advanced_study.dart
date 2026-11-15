@@ -36,6 +36,7 @@ import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
+import 'connectivity.dart' show studyServiceRootIds;
 import 'containment.dart'
     show ConduitSpec, ContainmentResult, containmentFor, effectiveInstallMethod;
 import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
@@ -73,6 +74,7 @@ import 'genset_backup.dart'
     show
         alternatorBasis,
         effectiveGeneratorBackupFraction,
+        essentialDemandVa,
         serviceSystemOf,
         gensetBackedPanelIds,
         gensetBackupDemandVa,
@@ -98,7 +100,12 @@ import 'panel_results.dart'
         ElectricalWarning,
         WarningSeverity;
 import 'power_factor.dart'
-    show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
+    show
+        PowerFactorResult,
+        capacitorBanksToProcure,
+        installedCapacitorBanks,
+        isDriveFedCircuit,
+        powerFactorCorrection;
 import 'power_oneline.dart'
     show
         PowerOneLine,
@@ -108,22 +115,30 @@ import 'power_oneline.dart'
 import 'results.dart' show BusbarWithstand;
 import 'sources.dart'
     show
+        GeneratorTransfer,
         GensetMotor,
         gensetStartFloorKva,
+        kAlternatorSubtransientXdPu,
+        kAlternatorTransientXdPu,
+        kGeneratorPf,
+        kGensetFirstStepFraction,
         kMaxStartVoltageDipPct,
         sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
+        MvTransformerProtection,
         SupplyDesign,
         SupplyLevel,
         declaredServiceTransformer,
         determineSupply,
         isDeclaredMvService,
         minimalMaxSectionLoad,
+        mvTransformerProtection,
         recommendedDaya,
         sectionAssignment,
-        serviceSections;
+        serviceSections,
+        singlePhaseLvSupplyNote;
 import 'ups.dart' show kUpsInputFactor;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
@@ -602,6 +617,7 @@ AdvancedStudy computeAdvancedStudy(
   // Power one-line — only when the project carries energy sources. The motors
   // for the genset-start dip screen come from the sized motor/pump circuits.
   PowerOneLine? powerOneLine;
+  final arrangement = serviceArrangementOf(project, sys);
   if (project.sources != null) {
     powerOneLine = buildPowerOneLine(
       project.sources!,
@@ -618,6 +634,8 @@ AdvancedStudy computeAdvancedStudy(
       voltage: serviceSystemOf(project, sys).voltage,
       motors:
           gensetStartMotors(project, sys: sys, assemblies: controlAssemblies),
+      // Backlog B-3 — the disconnection floor.
+      minKvaForAds: gensetAdsFloorFor(sys),
       utilitySub: powerOneLineUtilitySub(project, sys,
           voltage: serviceSystemOf(project, sys).voltage),
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
@@ -627,6 +645,23 @@ AdvancedStudy computeAdvancedStudy(
       backupFraction: effectiveGeneratorBackupFraction(project),
       // Round 65 — a sectioned service's LV bus is split (coupler N.O.).
       lvSections: serviceSections(project),
+      // Fix round F7 — the SAME declared arrangement E-301's spine draws.
+      transformerLabel: arrangement.transformer,
+      // Backlog E-3 — the MV transformer feeder's device beside the MV main.
+      mvDevice: serviceMvProtection(project, sys)?.device,
+      // Backlog E-4 — the one-step pick-up on transfer: what the set backs
+      // (the SAME `gensetBackupDemandW` basis it is sized on).
+      stepLoad: gensetBackupDemandW(project, sys),
+      // Fix round 3 (S2) — the essential boards' solved demand, the figure
+      // E-301 / E-401 print on the essential board.
+      essentialDemand: ApparentPower(essentialDemandVa(project, sys)),
+      transferLabel: arrangement.transfer?.label,
+      capacitor: arrangement.capacitor == null
+          ? null
+          : (
+              head: arrangement.capacitor!.head,
+              sub: arrangement.capacitor!.sub
+            ),
     );
   }
 
@@ -678,6 +713,7 @@ AdvancedStudy computeAdvancedStudy(
   final verify = _aggregateVerify([
     if (onGenset.judged) [gensetSustainedFaultVerifyItem],
     if (powerOneLine?.gensetStart != null) [gensetStartDipVerifyItem],
+    if (powerOneLine?.gensetStepLoad != null) [gensetStepLoadVerifyItem],
     issued.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
@@ -726,6 +762,8 @@ AdvancedStudy computeAdvancedStudy(
       ...gensetBackupWarnings(project, sys),
       ...onGenset.warnings,
       ...gensetStartDipWarnings(project, powerOneLine,
+          rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
+      ...gensetStepLoadWarnings(powerOneLine,
           rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
       ...enclosureTempRiseWarnings(sys, enclosure),
       ...ttRcdTouchVoltageWarnings(project, sys, electrode),
@@ -841,10 +879,20 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
       mode: gen.mode,
       transfer: gen.transfer,
       backupPower: gensetBackupDemandW(project, sys),
-      minKvaForStart: gensetStartFloorFor(project, sys));
+      minKvaForStart: gensetStartFloorFor(project, sys),
+      minKvaForAds: gensetAdsFloorFor(sys));
   final v = r.ratingKva.voltAmperes * r.units;
   return v > 0 ? v : null;
 }
+
+/// Backlog B-3 (2026-11-13) — the disconnection floor every UNFORCED genset
+/// sizing passes to [sizeGenerator] (`minKvaForAds`), beside
+/// [gensetStartFloorFor]: `computeSystem`'s
+/// [ElectricalSystemResult.gensetAdsFloorKva]. Null ⇒ byte-identical.
+ApparentPower? gensetAdsFloorFor(ElectricalSystemResult sys) =>
+    sys.gensetAdsFloorKva == null
+        ? null
+        : ApparentPower.kilovoltAmperes(sys.gensetAdsFloorKva!);
 
 /// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
 /// — the ONE motor-start floor every UNFORCED genset sizing passes to
@@ -865,9 +913,46 @@ ApparentPower gensetStartFloorFor(
 /// sizes / judges the genset.
 const String gensetStartDipVerifyItem =
     'Genset motor-start dip: the 25 % momentary-dip limit and the '
-    "voltage-divider model on Xd'' = 0.15 pu (ISO 8528-5 practice) are "
-    'representative — confirm against the alternator datasheet. '
+    "voltage-divider model on the TRANSIENT reactance X'd = "
+    '${kAlternatorTransientXdPu} pu (ISO 8528-5 practice; the genset fault '
+    "level uses the sub-transient X''d = ${kAlternatorSubtransientXdPu} pu) "
+    'are representative — confirm both against the alternator datasheet. '
     '// VERIFY notAnSniClause';
+
+/// Backlog E-4 — the honesty item of the genset block-load (step) check.
+final String gensetStepLoadVerifyItem =
+    'Genset step load: the allowable first load step of '
+    '${(kGensetFirstStepFraction * 100).toStringAsFixed(0)} % of the rated '
+    'kW (at pf $kGeneratorPf) '
+    'is ISO 8528-5 class G2 guidance for a turbocharged set — confirm '
+    "against the genset maker's load-acceptance curve. // VERIFY "
+    'secondarySource';
+
+/// Backlog E-4 — INFO, JUDGE-ONLY: on ATS transfer the standby set picks up
+/// the backed load in one step above its allowable first step
+/// ([kGensetFirstStepFraction] of rated kW): stage the pick-up (load-shed
+/// groups, timed / sequenced starters). Never resizes the set. Placed on the
+/// root panel.
+List<ElectricalWarning> gensetStepLoadWarnings(PowerOneLine? oneLine,
+    {String? rootPanelId}) {
+  final st = oneLine?.gensetStepLoad;
+  if (st == null || !st.exceeded) return const [];
+  String kw(double v) => v.toStringAsFixed(1);
+  return [
+    ElectricalWarning(
+      code: 'genset-step-load-staged',
+      severity: WarningSeverity.info,
+      message: 'Genset step load: on ATS transfer the set picks up '
+          '${kw(st.stepKw)} kW in one step, above the allowable first step '
+          '${kw(st.allowableKw)} kW '
+          '(${(kGensetFirstStepFraction * 100).toStringAsFixed(0)} % of '
+          '${kw(st.ratedKw)} kW rated) — stage the pick-up: load-shed groups '
+          'on the ATS, timed / sequenced motor starters. The rating is not '
+          'changed.',
+      panelId: rootPanelId,
+    ),
+  ];
+}
 
 /// Round 70 — JUDGE-ONLY: the generator node of the power one-line failed
 /// its motor-start dip screen (a forced nameplate, or a declared primary
@@ -1083,7 +1168,9 @@ FaultStudyResult mergeGensetFaultStudy({
 /// Round 72 — the `// VERIFY` basis [mergeGensetFaultStudy] specifies
 /// genset-backed devices and judges their bus withstand on.
 const String gensetMaxFaultVerifyItem =
-    "standby genset alternator sub-transient fault (Xd'' 0.12 pu) also "
+    "standby genset alternator sub-transient fault (X''d "
+    '$kAlternatorSubtransientXdPu pu; the motor-start dip uses the transient '
+    "X'd $kAlternatorTransientXdPu pu) also "
     'governs device breaking capacity (Icu / Ics) and busbar withstand (Icw) '
     'on genset-backed boards';
 
@@ -1601,6 +1688,27 @@ double servicePerPhaseBasisVa(
           basisLabel: 'future-load (headroom) basis');
     }
   }
+  // Reference house M2 — an all-1φ PLN LV service whose recommended daya is
+  // a 1φ step (the SAME rule [computeAdvancedStudy] recommends on: the 1φ
+  // ladder on max(demand VA, worst-phase VA)) prints the plain note, never
+  // the 3φ worst-phase basis. Note text only.
+  final rootSystems = [
+    for (final id in originPanelIds)
+      project.panels.where((p) => p.id == id).firstOrNull?.system,
+  ];
+  if (rootSystems.isNotEmpty &&
+      rootSystems.every((s) => s == ElectricalSystem.singlePhase) &&
+      supply.lvOrMv == SupplyLevel.lv &&
+      !supply.declared &&
+      project.supplyKind == SupplyKind.pln) {
+    final daya = recommendedDaya(
+        ApparentPower(math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+        ElectricalSystem.singlePhase);
+    if (daya != null && daya.system == ElectricalSystem.singlePhase) {
+      supply = supply.withNote(singlePhaseLvSupplyNote(
+          demandKva: supply.demandKva, dayaVa: daya.va));
+    }
+  }
   return (
     supply: supply,
     worstPhaseVa: worstPhaseVa,
@@ -1634,6 +1742,19 @@ double servicePerPhaseBasisVa(
     return null;
   }
   return (kva: kva, units: s.units);
+}
+
+/// Backlog E-3 (2026-11-13) — the MV-side protection of the PRINTED service
+/// transformer ([serviceTransformer], each of its units on its own MV
+/// feeder): its 20 kV full-load current and the HV HRC fuse / MV breaker +
+/// relay CT ([mvTransformerProtection]). Null off a declared PLN MV service.
+/// Report-only: no LV figure reads it.
+MvTransformerProtection? serviceMvProtection(
+    ElectricalProject project, ElectricalSystemResult? sys) {
+  if (project.supplyKind != SupplyKind.pln) return null;
+  final t = serviceTransformer(project, sys);
+  if (t == null) return null;
+  return mvTransformerProtection(t.kva, units: t.units);
 }
 
 /// Round 52 — [studySupplyInputs]' supply design alone.
@@ -1692,9 +1813,16 @@ Set<String> originPanelIdsOf(
           c.feedsPanelId!,
   };
   final modelById = {for (final p in project.panels) p.id: p};
+  // Backlog E-1 — an un-fed board explicitly flagged NOT a service entrance
+  // is no root (its load on no line); unset boards keep the pre-E-1 study
+  // ([studyServiceRootIds]).
+  final service = studyServiceRootIds(project);
   final out = <String>{
     for (final id in sys.order)
-      if (!fed.contains(id) && modelById[id]?.fedByCircuitId == null) id,
+      if (!fed.contains(id) &&
+          modelById[id]?.fedByCircuitId == null &&
+          service.contains(id))
+        id,
   };
   if (out.isEmpty && sys.order.isNotEmpty) out.add(sys.order.first);
   return out;
@@ -1923,6 +2051,83 @@ Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
       for (final c in study.containment.values)
         for (final cc in c.conduits) cc.circuitId: cc.conduit,
     };
+
+/// Fix round F7 (2026-11-13) — the declared SOURCE ARRANGEMENT of the
+/// service, the ONE source both the building single-line's source spine
+/// (E-301) and the power one-line (E-501) draw from (golden rule 5):
+/// [transformer] is the rated transformer label on a declared, non-sectioned
+/// MV service (`TRANSFORMER 1600 kVA`; `TRANSFORMER` with no known rating),
+/// null otherwise; [capacitor] the LV-bus bank node — the INSTALLED bank
+/// (a single bank not on a board schedule) and/or the PF study's RECOMMENDED
+/// APFC bank, from the one [capacitorBanksToProcure] list the BOM buys —
+/// null when neither exists. Pure.
+///
+/// Fix round 3 (O3, 2026-11-13) — [transfer] is the standby genset's
+/// transfer switch (`ATS`, or `COS` for a manual changeover) and the
+/// topmost board(s) it transfers ([gensetBackedPanelIds]; empty = the whole
+/// building), on a utility service with a standby set; null otherwise. E-301
+/// / E-401 draw it on the genset tie and E-501 draws the same switch.
+({
+  String? transformer,
+  ({String head, String sub, String compact})? capacitor,
+  ({String label, List<String> boards})? transfer,
+}) serviceArrangementOf(ElectricalProject project, ElectricalSystemResult sys) {
+  String n(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+  String? tx;
+  if (isDeclaredMvService(project) && serviceSections(project) <= 1) {
+    final t = serviceTransformer(project, sys);
+    tx = (t != null && t.kva * t.units > 0)
+        ? 'TRANSFORMER ${t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva)} kVA'
+        : 'TRANSFORMER';
+  }
+  final banks = installedCapacitorBanks(project);
+  final installed = banks.length == 1 && banks.first.panelId == null;
+  final rec = capacitorBanksToProcure(project,
+          sys.supply.demandW > 0 ? powerFactorCorrection(sys, project) : null)
+      .where((b) => b.recommended)
+      .firstOrNull;
+  ({String head, String sub, String compact})? cap;
+  if (installed || rec != null) {
+    final recText = rec == null
+        ? null
+        : '${rec.units > 1 ? '${rec.units}x' : ''}${n(rec.kvar)} kvar';
+    if (installed) {
+      final inst = '${n(project.capacitorBankKvar!)} kvar';
+      cap = (
+        head: 'CAPACITOR BANK',
+        sub: recText == null ? inst : '$inst + $recText APFC rec.',
+        compact: recText == null ? 'CAP $inst' : 'CAP $inst + $recText rec.',
+      );
+    } else {
+      cap = (
+        head: 'APFC (RECOMMENDED)',
+        sub: recText!,
+        compact: 'APFC rec. $recText',
+      );
+    }
+  }
+  ({String label, List<String> boards})? transfer;
+  final gen = project.sources?.generator;
+  if (gen != null && project.supplyKind != SupplyKind.generator) {
+    final backed = gensetBackedPanelIds(project);
+    final parentOf = <String, String>{
+      for (final p in project.panels)
+        for (final c in p.circuits)
+          if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+            c.feedsPanelId!: p.id,
+    };
+    transfer = (
+      label: gen.transfer == GeneratorTransfer.manual ? 'COS' : 'ATS',
+      boards: [
+        for (final p in project.panels)
+          if (backed.contains(p.id) && !backed.contains(parentOf[p.id]))
+            p.name,
+      ],
+    );
+  }
+  return (transformer: tx, capacitor: cap, transfer: transfer);
+}
 
 /// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
 /// DECLARED MV service (an explicit transformer rating or a dual-transformer

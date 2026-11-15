@@ -208,6 +208,26 @@ class DesignSettings {
   /// file sizes byte-identically.
   final double drainageSlope;
 
+  /// Backlog W-2 — the available mains head at the water meter (m). Additive
+  /// — absent ⇒ `kDefaultMainsHeadM` (10 m, `// VERIFY`); written only when
+  /// it differs from the default, so an untouched project is byte-identical.
+  final double mainsHeadM;
+
+  /// Backlog W-4 — the building population (persons; null = unknown, no
+  /// default) and the per-person daily demand override (L/person/day; null ⇒
+  /// the occupancy default). Additive — written only when set.
+  final int? population;
+  final double? demandPerPersonL;
+
+  /// Backlog W-5 — the auto tank capacity targets (ground days, roof
+  /// fraction of the daily demand). Additive — written only off the default.
+  final double groundStorageDays;
+
+  /// Backlog T-3 — the SNI 03-7065 building-use preset name (null = none;
+  /// an unknown name loads as none). Additive.
+  final String? demandUse;
+  final double roofStorageFraction;
+
   /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
   /// allowable recirculation loop DROP ΔT (K). They set the recirc flow AND the
   /// modelled return temperature the anti-Legionella check judges. Additive —
@@ -297,6 +317,12 @@ class DesignSettings {
     this.fixtureLibrary = const [],
     this.coolingLoadMethod = 'simple',
     this.drainageSlope = 0.01,
+    this.mainsHeadM = kDefaultMainsHeadM,
+    this.population,
+    this.demandPerPersonL,
+    this.groundStorageDays = kGroundStorageDaysDefault,
+    this.demandUse,
+    this.roofStorageFraction = kRoofStorageFractionDefault,
     this.hotWaterFlowTempC = 60.0,
     this.hotWaterDeltaTK = 5.0,
     this.anthropicApiKey = '',
@@ -339,6 +365,14 @@ class DesignSettings {
         // M13/M14 design inputs (additive; absent → the engine defaults, so an
         // untouched project sizes exactly as before).
         'drainageSlope': drainageSlope,
+        if (mainsHeadM != kDefaultMainsHeadM) 'mainsHead_m': mainsHeadM,
+        if (population != null) 'population': population,
+        if (demandPerPersonL != null) 'demand_lpd': demandPerPersonL,
+        if (demandUse != null) 'demand_use': demandUse,
+        if (groundStorageDays != kGroundStorageDaysDefault)
+          'ground_storage_days': groundStorageDays,
+        if (roofStorageFraction != kRoofStorageFractionDefault)
+          'roof_storage_frac': roofStorageFraction,
         'hotWaterFlowTempC': hotWaterFlowTempC,
         'hotWaterDeltaTK': hotWaterDeltaTK,
         // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
@@ -421,6 +455,26 @@ class DesignSettings {
         // hand-edited file can never feed the sizer a nonsense gradient / ΔT.
         drainageSlope:
             _clampOr(json['drainageSlope'], 0.001, 0.1, 0.01),
+        mainsHeadM:
+            _clampOr(json['mainsHead_m'], 0.0, 100.0, kDefaultMainsHeadM),
+        // Backlog W-4 — tolerant: absent / non-numeric / non-positive ⇒ null.
+        population: switch (json['population']) {
+          final num v when v.isFinite && v >= 1 => v.round(),
+          _ => null,
+        },
+        demandUse: switch (json['demand_use']) {
+          final String n => dailyDemandUseNamed(n)?.name,
+          _ => null,
+        },
+        groundStorageDays: _clampOr(json['ground_storage_days'], 0.1, 30.0,
+            kGroundStorageDaysDefault),
+        roofStorageFraction: _clampOr(json['roof_storage_frac'], 0.05, 5.0,
+            kRoofStorageFractionDefault),
+        demandPerPersonL: switch (json['demand_lpd']) {
+          final num v when v.isFinite && v > 0 =>
+            v.toDouble().clamp(1.0, 2000.0).toDouble(),
+          _ => null,
+        },
         hotWaterFlowTempC:
             _clampOr(json['hotWaterFlowTempC'], 40.0, 90.0, 60.0),
         hotWaterDeltaTK: _clampOr(json['hotWaterDeltaTK'], 1.0, 20.0, 5.0),
@@ -567,6 +621,8 @@ Map<String, dynamic> _netNodeToJson(NetNode n) => {
       if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
       if (n.component != null) 'component': n.component!.name,
       if (n.tankCapacityLitres != null) 'tank_l': n.tankCapacityLitres,
+      // Backlog W-1 — the tank refill time (hours, additive).
+      if (n.tankRefillHours != null) 'tank_refill_h': n.tankRefillHours,
       if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
       if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
       if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
@@ -610,6 +666,8 @@ NetNode _netNodeFromJson(Map n) => NetNode(
           ? null
           : _enumOrNull(NodeComponent.values, n['component']),
       tankCapacityLitres: _decodeNonNegative(n['tank_l']),
+      // Backlog W-1 — tolerant: absent / non-positive ⇒ null ⇒ the default.
+      tankRefillHours: _decodePositive(n['tank_refill_h']),
       electricalLoadW: _decodeNonNegative(n['elec_w']),
       faceWidthMm: _decodePositive(n['face_w_mm']),
       faceHeightMm: _decodePositive(n['face_h_mm']),

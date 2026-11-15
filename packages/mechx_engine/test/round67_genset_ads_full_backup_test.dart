@@ -29,14 +29,22 @@ import 'package:test/test.dart';
 
 const _profile = PuilProfile();
 
-ElectricalProject _hospital({required bool essentialE, double? fraction}) =>
+// Backlog B-3 (2026-11-13): an UNFORCED set is now recommended large enough
+// to disconnect its auto-sized ways (the full-backup set grows 300 → 400 kVA
+// and passes), so the judge is exercised on the 300 kVA running-load set
+// typed as a nameplate (a forced set is judged, never resized); [kva] null
+// keeps the auto-sized set (the B-3 case at the end).
+ElectricalProject _hospital(
+        {required bool essentialE,
+        double? fraction,
+        ApparentPower? kva = const ApparentPower(300e3)}) =>
     ElectricalProject(
       id: 'h',
       name: 'Hospital',
       earthingSystem: EarthingSystem.tnS,
       transformerKva: const ApparentPower(1000e3),
       sources: ElectricalSources(
-          generator: GeneratorSource(backupFraction: fraction)),
+          generator: GeneratorSource(kva: kva, backupFraction: fraction)),
       panels: [
         const ElectricalPanel(
             id: 'MDP',
@@ -122,6 +130,20 @@ void main() {
     expect(_errs(st), undesignated.gensetAdsFailedCircuitIds);
   });
 
+  test('B-3: the auto-sized full-backup set is recommended at 400 kVA, '
+      'governed by disconnection, and no way fails', () {
+    final p = _hospital(essentialE: false, kva: null);
+    final sys = computeSystem(_profile, p);
+    // Running floor 300 kVA (the forced case above fails ADS on it); the
+    // first ladder rung holding every auto-sized way of P is 400 kVA.
+    expect(sys.gensetAdsFloorKva, 400);
+    expect(gensetPlantVa(p, sys), 400e3);
+    final st = computeAdvancedStudy(_profile, p, sys);
+    expect(st.gensetAdsFailedCircuitIds, isEmpty);
+    expect(st.powerOneLine!.gensetSizing!.governing,
+        GensetSizingReason.disconnection);
+  });
+
   for (final fr in [0.5, null]) {
     test('E essential + fraction $fr: only the essential sub-tree is judged',
         () {
@@ -131,3 +153,4 @@ void main() {
     });
   }
 }
+

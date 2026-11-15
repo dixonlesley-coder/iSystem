@@ -29,12 +29,15 @@ import '../units.dart';
 // helper is a pure function of the solved result).
 import 'advanced_study.dart'
     show
+        gensetAdsCheck,
         gensetFaultBasis,
+        gensetPlantVa,
         originPanelIdsOf,
         rootServiceBasisVa,
         serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
+import 'connectivity.dart' show studyServiceRootIds;
 import 'containment.dart' show effectiveInstallMethod;
 import 'control/starter.dart' show StarterType, effectiveStarterType;
 import 'diversity_library.dart' show DiversityLibrary;
@@ -51,6 +54,7 @@ import 'fault.dart'
         defaultLvUtilityFaultKa,
         faultBasisLineVoltageV,
         kMccbMagneticTripMultiple,
+        FaultStudyResult,
         faultStudy,
         feederNeutralImpedance,
         selectivityRatio,
@@ -73,6 +77,7 @@ import 'results.dart'
         VoltageDropResult,
         kStarDeltaInternalWiringM;
 import 'sizing.dart';
+import 'sources.dart' show kGeneratorKva;
 import 'supply_design.dart'
     show declaredServiceTransformer, plnDayaVa1ph, serviceSections;
 import 'ups.dart';
@@ -824,8 +829,7 @@ List<String> _rotationHolders(
     if (c.role != CircuitRole.branch) continue;
     final fed = c.feedsPanelId;
     if (fed != null) {
-      final fedSystem =
-          opts.panelSystems[fed] ?? opts.panelById[fed]?.system;
+      final fedSystem = opts.panelSystems[fed] ?? opts.panelById[fed]?.system;
       if (fedSystem == ElectricalSystem.singlePhase) {
         own = true;
       } else if (opts.feederLineCurrentsA.containsKey(fed)) {
@@ -882,8 +886,8 @@ double minimumPhaseSpreadA(
   // board's own L1 / L2 / L3): they shift the lines unequally, so they DO
   // change the achievable spread. Equal base lines (the default) reproduce
   // the original search exactly.
-  final baseEqual = (base[0] - base[1]).abs() < 1e-12 &&
-      (base[1] - base[2]).abs() < 1e-12;
+  final baseEqual =
+      (base[0] - base[1]).abs() < 1e-12 && (base[1] - base[2]).abs() < 1e-12;
   if (ways.isEmpty) {
     return baseEqual ? 0 : _spread3(base[0], base[1], base[2]);
   }
@@ -1002,7 +1006,9 @@ List<BusbarSectionResult> splitBusbarSections(
       sectionCurrent: Current(currentA),
       busbar: sizeBusbar(profile, Current(currentA),
           minAmpacityA: Current(deviceFloorA),
-          minCsaMm2: minCsaMm2, faultKa: faultKa, clearingTimeS: clearingTimeS),
+          minCsaMm2: minCsaMm2,
+          faultKa: faultKa,
+          clearingTimeS: clearingTimeS),
       manualBreak: groupManual,
     ));
     group = [];
@@ -1044,6 +1050,7 @@ List<BusbarSectionResult> splitBusbarSections(
 /// (`computeSystem`): at most this many section rungs above the load-sized
 /// cable …
 const int kAdsCsaGrowthMaxRungs = 6;
+
 
 /// … and never above this section (mm²): a final way needing more is a
 /// design to rethink (a sub-board nearer the load), so the
@@ -1147,6 +1154,28 @@ class ComputePanelOptions {
   /// user override). Empty ⇒ byte-identical.
   final Map<String, double> adsCsaFloorMm2;
 
+  /// Reference tower T3 — per FEEDER way id, a conductor-section floor (mm²)
+  /// `computeSystem` sets so the auto-sized ways of the board(s) the feeder
+  /// supplies meet their cumulative voltage-drop limit. Applied like a cable
+  /// minimum, flagged [ElectricalCircuitResult.cableRaisedForDownstreamVd].
+  /// Backlog B-2 — also keyed by a FINAL way id when the least-copper cure
+  /// raised the way itself ([ElectricalCircuitResult.cableRaisedForCumulativeVd]).
+  /// Empty ⇒ byte-identical.
+  final Map<String, double> feederVdCsaFloorMm2;
+
+  /// Backlog B-1 (2026-11-13) — per FEEDER way id, the smallest section (mm²)
+  /// the selectivity cable growth may start from. `computeSystem` raises it
+  /// one rung at a time when a feeder whose cable was grown for selectivity
+  /// fails automatic disconnection at the floored device (a larger cable
+  /// lowers the loop impedance). Empty ⇒ the growth starts at the load-sized
+  /// section ⇒ byte-identical.
+  final Map<String, double> selectivityCsaMinMm2;
+
+  /// Backlog B-1 — FEEDER way ids whose selectivity cable growth is REFUSED
+  /// (the ladder top could not hold ADS at the floored device): the load-sized
+  /// cable is kept and the Round-40 device cap applies as before.
+  final Set<String> selectivityRaiseRefusedIds;
+
   /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
   /// (root) panel — the line current of the declared connection capacity
   /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
@@ -1249,6 +1278,9 @@ class ComputePanelOptions {
     this.feederBreakerCapA = const {},
     this.mccbFrameRaiseRefusedIds = const {},
     this.adsCsaFloorMm2 = const {},
+    this.feederVdCsaFloorMm2 = const {},
+    this.selectivityCsaMinMm2 = const {},
+    this.selectivityRaiseRefusedIds = const {},
     this.serviceMinCurrentA,
     this.feederPowerFactor = const {},
   });
@@ -1833,8 +1865,7 @@ _CircuitComputation _computeCircuit(
   if (undiversifiedFlc != null) {
     // Motor / A5-FLA: device + conductor on the undiversified FLC (never below
     // the design current, so a demand factor above 1 cannot under-size it).
-    sizingCurrent =
-        Current(math.max(ib.amperes, undiversifiedFlc.amperes));
+    sizingCurrent = Current(math.max(ib.amperes, undiversifiedFlc.amperes));
   } else if (sizeOnUndiversifiedLoad) {
     final undiversified = loadCurrent(
       power: Power(c.loadW),
@@ -1859,8 +1890,7 @@ _CircuitComputation _computeCircuit(
   // Round 11 — a capacitor bank's switching device + conductor carry 1.43 ×
   // its rated current ([kCapacitorSwitchingFactor], IEC 60831-1 1.3 × 1.1).
   if (c.loadKind == LoadKind.capacitor) {
-    sizingCurrent =
-        Current(sizingCurrent.amperes * kCapacitorSwitchingFactor);
+    sizingCurrent = Current(sizingCurrent.amperes * kCapacitorSwitchingFactor);
   }
   // Round 13 (regression-capacitor-panel-feeder-zero) — a feeder to a board
   // holding capacitor ways carries that bank's current whenever it is switched
@@ -1982,7 +2012,8 @@ _CircuitComputation _computeCircuit(
   );
   final userMinSection = math.max(baseMin, c.cableOverrideMm2 ?? 0);
   final adsFloor = opts.adsCsaFloorMm2[c.id] ?? 0;
-  final minSection = math.max(userMinSection, adsFloor);
+  final vdFloor = opts.feederVdCsaFloorMm2[c.id] ?? 0;
+  final minSection = math.max(math.max(userMinSection, adsFloor), vdFloor);
 
   final installMethod = _effectiveInstallMethod(c, panel);
   // The cable family (NYY/NYM/NYA/NYAF/FRC) sets the insulation temperature
@@ -2029,6 +2060,74 @@ _CircuitComputation _computeCircuit(
       isLighting: c.isLighting,
     ),
   );
+
+  // Backlog B-1 (2026-11-13) — FEEDER DISCRIMINATION ON AN AUTO-SIZED
+  // CABLE. The selectivity floor below moves the device only as far as the
+  // cable's Iz protects (In ≤ Iz is inviolable). On an AUTO-sized feeder
+  // cable (no cable override, one run per phase) that cap would leave the
+  // app warning `non-selective` against its own pick, so the cable instead
+  // steps up the section ladder to the smallest section whose derated Iz
+  // carries the floor's rung (sized exactly as the load-sized cable, with the
+  // floor rung as its protective device), bounded at the ladder top. A
+  // user-fixed cable never grows; no single-run section reaching the rung ⇒
+  // the load-sized cable is kept and the warning stands. The ADS half is
+  // judged by `computeSystem` (see [ComputePanelOptions.selectivityCsaMinMm2]).
+  var raisedForSelectivity = false;
+  {
+    final selFloorA =
+        c.breakerOverrideA != null ? null : opts.feederBreakerFloorA[c.id];
+    if (selFloorA != null &&
+        isFeeder &&
+        c.cableOverrideMm2 == null &&
+        !opts.selectivityRaiseRefusedIds.contains(c.id) &&
+        (cable.runsPerPhase ?? 1) <= 1) {
+      final rung = selectBreaker(
+        profile,
+        designCurrent: sizingCurrent,
+        loadKind: c.loadKind,
+        minRatingA: selFloorA,
+        starterType: wayStarter,
+      ).ratingA;
+      final startMin =
+          math.max(minSection, opts.selectivityCsaMinMm2[c.id] ?? 0);
+      if (rung.amperes > cable.deratedIz.amperes + 1e-9 ||
+          startMin > cable.csaMm2 + 1e-9) {
+        final candidate = sizeCable(
+          profile,
+          designCurrent: sizingCurrent,
+          breakerRating: rung,
+          deratingFactor: df,
+          minSectionMm2: startMin,
+          insulation: cableInsulation,
+          material: panel.material,
+          method: installMethod,
+          threePhase: threePhase,
+          groupingCount: c.groupingCountOverride ?? panel.groupingCount,
+          vd: CableVoltageDropConstraint(
+            length: supplyLength,
+            cosPhi: cosPhi,
+            threePhase: threePhase,
+            voltage: Voltage(useVoltageV),
+            isLighting: c.isLighting,
+          ),
+        );
+        // Bounded: at most [kSelectivityGrowthMaxRungs] rungs above the
+        // cable the other rules need (`cable` here).
+        final sections = profile.standardSectionsMm2;
+        final rungsUp = sections.indexWhere(
+                (x) => (x - candidate.csaMm2).abs() < 1e-9) -
+            sections.indexWhere((x) => (x - cable.csaMm2).abs() < 1e-9);
+        if ((candidate.runsPerPhase ?? 1) <= 1 &&
+            candidate.ampacityReached &&
+            candidate.deratedIz.amperes + 1e-9 >= rung.amperes &&
+            candidate.csaMm2 > cable.csaMm2 + 1e-9 &&
+            rungsUp <= kSelectivityGrowthMaxRungs) {
+          cable = candidate;
+          raisedForSelectivity = true;
+        }
+      }
+    }
+  }
 
   // Round 37 (electrical-sim-4-feeder-neutral-ignores-fed-board-triplen-
   // oversize) — a 3φ feeder to a board whose 1φ non-linear load raises the
@@ -2235,7 +2334,8 @@ _CircuitComputation _computeCircuit(
         threePhase: false,
         voltage: Voltage(useVoltageV),
         isLighting: false,
-        limitPercent: math.max(0.0, supplyVd.limitPercent - supplyVd.dropPercent),
+        limitPercent:
+            math.max(0.0, supplyVd.limitPercent - supplyVd.dropPercent),
       ),
     );
   }
@@ -2249,8 +2349,7 @@ _CircuitComputation _computeCircuit(
     final leadRuns = motorLeads.runsPerPhase ?? 1;
     final leadVd = voltageDrop(
       profile,
-      current: Current(
-          feederRunCurrent.amperes / math.sqrt(3) / leadRuns),
+      current: Current(feederRunCurrent.amperes / math.sqrt(3) / leadRuns),
       length: effectiveLength,
       csaMm2: motorLeads.csaMm2,
       cosPhi: cosPhi,
@@ -2439,15 +2538,13 @@ _CircuitComputation _computeCircuit(
   if (!cable.ampacityReached) {
     final iz = roundTo(cable.deratedIz.amperes, 1);
     final inA = breaker.ratingA.amperes;
-    final f = cable.continuousLoadFactor ??
-        profile.continuousLoadFactor.value;
+    final f = cable.continuousLoadFactor ?? profile.continuousLoadFactor.value;
     final ibA = (cable.izBasisCurrent ?? designCurrent).amperes;
     final contA = roundTo(f * ibA, 1);
-    final reqA = roundTo(
-        cable.izRequired?.amperes ?? math.max(inA, f * ibA), 1);
+    final reqA =
+        roundTo(cable.izRequired?.amperes ?? math.max(inA, f * ibA), 1);
     final runs = cable.runsPerPhase ?? 1;
-    final section =
-        '${runs > 1 ? '${runs}x' : ''}${_num(cable.csaMm2)} mm2';
+    final section = '${runs > 1 ? '${runs}x' : ''}${_num(cable.csaMm2)} mm2';
     final inBelowCont = inA + 1e-9 < f * ibA;
     final inShort = inA > iz + 1e-9;
     warnings.add(ElectricalWarning(
@@ -2470,8 +2567,7 @@ _CircuitComputation _computeCircuit(
   // Each lead carries a PE (the way's PE, capped at the lead section).
   double? motorLeadsPe;
   if (motorLeads != null) {
-    final wayPe =
-        grounding.peCsaMm2 > 0 ? grounding.peCsaMm2 : cable.csaMm2;
+    final wayPe = grounding.peCsaMm2 > 0 ? grounding.peCsaMm2 : cable.csaMm2;
     // Round 58 — a lead grown past the link (override / ADS growth) carries
     // at least the PE its own section takes (IEC 60364-5-54 543.1), so the
     // loop the growth was for actually drops; un-grown leads are unchanged.
@@ -2501,12 +2597,17 @@ _CircuitComputation _computeCircuit(
     connectedW: isFeeder ? loadW : circuitUndiversifiedW(c),
     points: c.points,
     runCurrent: Current(roundTo(feederRunCurrent.amperes, 1)),
-    lineCurrentsA: fedLines == null
-        ? null
-        : [for (final l in fedLines) roundTo(l, 1)],
+    lineCurrentsA:
+        fedLines == null ? null : [for (final l in fedLines) roundTo(l, 1)],
     motorLeads: motorLeads,
     motorLeadsPeCsaMm2: motorLeadsPe,
     cableRaisedForAds: adsFloor > userMinSection + 1e-9,
+    cableRaisedForDownstreamVd:
+        isFeeder && vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
+    cableRaisedForSelectivity: raisedForSelectivity,
+    cableRaisedForCumulativeVd:
+        !isFeeder && vdFloor > math.max(userMinSection, adsFloor) + 1e-9,
+    vdCosPhi: cosPhi,
   );
   if (result.cableRaisedForAds) {
     warnings.add(ElectricalWarning(
@@ -2668,8 +2769,10 @@ ElectricalPanelResult computePanel(
   // re-assignment is an action the engineer could take: never "reducible".
   // Round 37 (edit-fuzz-3-2) — only a real input (a PIN) makes the
   // assignment the engineer's; the session prior seed is the engine's own.
-  final engineOwned = !branches.asMap().entries.any((e) =>
-      !comps[e.key].threePhase && e.value.phaseOverride != null);
+  final engineOwned = !branches
+      .asMap()
+      .entries
+      .any((e) => !comps[e.key].threePhase && e.value.phaseOverride != null);
   // Round 49 (elec-props-13-rounded-floor-phantom-unpin-warning) — the
   // floor is judged on EXACT line sums, never on the 0.1 A-rounded printed
   // lines (a 2.2 / 4.3 / 0.0 A board read 198.5 % 'achievable' against an
@@ -2772,8 +2875,7 @@ ElectricalPanelResult computePanel(
       // Accepted only when it never raises this board's worst line and cuts
       // the spread by more than the margin (both exact).
       bool accepted((double, double) s) =>
-          s.$1 <= actualWorstA + 1e-9 &&
-          actualSpreadA - s.$2 > marginA + 1e-9;
+          s.$1 <= actualWorstA + 1e-9 && actualSpreadA - s.$2 > marginA + 1e-9;
       final nEx = excesses.length;
       List<int>? bestPick;
       (double, double)? bestScore;
@@ -3091,8 +3193,7 @@ ElectricalPanelResult computePanel(
   // stays a warning.
   final overrideById = {for (final b in branches) b.id: b.breakerOverrideA};
   for (final cr in circuits) {
-    if (cr.breaker.ratingA.amperes >
-        incomerBreaker.ratingA.amperes + 1e-9) {
+    if (cr.breaker.ratingA.amperes > incomerBreaker.ratingA.amperes + 1e-9) {
       // Round 39 — any override-free inversion is the ENGINE's own device
       // pick (the selectivity floor, a motor / capacitor switching factor),
       // never an engineer error: INFO naming the incomer action. Only a way
@@ -3102,8 +3203,7 @@ ElectricalPanelResult computePanel(
       final engineFloor = overrideById[cr.circuitId] == null;
       warnings.add(ElectricalWarning(
         code: 'outgoing-exceeds-incomer',
-        severity:
-            engineFloor ? WarningSeverity.info : WarningSeverity.warning,
+        severity: engineFloor ? WarningSeverity.info : WarningSeverity.warning,
         message: engineFloor
             ? '${panel.name} / ${cr.name}: '
                 '${selectivityFloor ? 'the selectivity floor raised this feeder' : 'the engine sized this way'} '
@@ -3163,13 +3263,13 @@ ElectricalPanelResult computePanel(
   // exceed the phase current, so the neutral bar is oversized (IEC 60364-5-52
   // §523.6.3 / Annex E). A linear panel has no non-linear load ⇒ factor 1.0 ⇒
   // the neutral is byte-identical to the phase bar (the regression guard).
-  final triplenFraction = _singlePhaseNonLinearFraction(comps,
-      feederTriplenShare: {
-        for (final b in branches)
-          if (b.feedsPanelId != null &&
-              opts.feederNeutralLoad.containsKey(b.feedsPanelId))
-            b.id: opts.feederNeutralLoad[b.feedsPanelId]!.triplenFraction,
-      });
+  final triplenFraction =
+      _singlePhaseNonLinearFraction(comps, feederTriplenShare: {
+    for (final b in branches)
+      if (b.feedsPanelId != null &&
+          opts.feederNeutralLoad.containsKey(b.feedsPanelId))
+        b.id: opts.feederNeutralLoad[b.feedsPanelId]!.triplenFraction,
+  });
   final nFactor = roundTo(neutralOversizeFactor(triplenFraction), 2);
   final neutralPe = sizeNeutralPeBars(
     busbar.csaMm2,
@@ -3199,8 +3299,8 @@ ElectricalPanelResult computePanel(
           // admits: a bank at its SWITCHING current, a feeder to a capacitor
           // board at least that board's switching current (it adds no W, so
           // its Ib alone is 0 A).
-          _busbarWayCurrentA(comps[i].result, branches[i],
-              opts.feederCapacitorFloorA),
+          _busbarWayCurrentA(
+              comps[i].result, branches[i], opts.feederCapacitorFloorA),
           comps[i].threePhase,
           () {
             final a = balance.assignment[comps[i].result.circuitId];
@@ -3282,8 +3382,7 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'busbar-beyond-standard-table',
       severity: WarningSeverity.info,
-      message:
-          '$where: ${_num(b.totalCurrentA.amperes)} A exceeds the largest '
+      message: '$where: ${_num(b.totalCurrentA.amperes)} A exceeds the largest '
           'standard bar — specified as ${b.parallelBars} x ($bar) parallel '
           'bars (${_num(b.csaMm2)} mm2), rated ${_num(b.ampacityA.amperes)} A '
           'after the parallel-bar derating (x${parallelBarFactor(b.parallelBars)}); '
@@ -3401,6 +3500,10 @@ ElectricalSystemResult computeSystem(
   DiversityLibrary? diversityLibrary,
   Map<String, Map<String, PhaseAssignment>> priorAssignments = const {},
   double phaseReassignThresholdA = 0,
+  // Backlog B-3 — INTERNAL: the disconnection-floor candidate (kVA per set)
+  // the genset recommendation search re-solves with (see the end). Callers
+  // leave it null.
+  double? gensetAdsFloorKva,
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
@@ -3489,6 +3592,18 @@ ElectricalSystemResult computeSystem(
   }
 
   final roots = panels.where((p) => !parentOf.containsKey(p.id)).toList();
+  // Backlog E-1 (2026-11-13) — the SERVICE roots ([studyServiceRootIds]):
+  // every un-fed board except one the engineer flagged NOT a service
+  // entrance (`serviceEntrance: false`, `unfed-panel`, its load on no line).
+  // Unset flags keep the pre-E-1 study exactly. Every root is still walked
+  // (order, sizing); only the service roots form the service — the capacity
+  // floor, the supply demand and connected load, the governing root and the
+  // multi-root daya judge.
+  final serviceIds = studyServiceRootIds(project);
+  final serviceRoots = [
+    for (final r in roots)
+      if (serviceIds.contains(r.id)) r,
+  ];
   for (final r in roots) {
     dfs(r.id);
   }
@@ -3528,8 +3643,8 @@ ElectricalSystemResult computeSystem(
   // the 71.7 A the board's own 230 V basis gave — an 80 A incomer floor
   // under a limiter that trips at 23.8 A).
   var singlePhaseRootOnThreePhaseDaya = false;
-  if (serviceCapacityVa != null && serviceCapacityVa > 0 && roots.length == 1) {
-    final root = roots.first;
+  if (serviceCapacityVa != null && serviceCapacityVa > 0 && serviceRoots.length == 1) {
+    final root = serviceRoots.first;
     final v = root.voltage.volts;
     if (v > 0) {
       singlePhaseRootOnThreePhaseDaya =
@@ -3909,8 +4024,7 @@ ElectricalSystemResult computeSystem(
 
     // A sub-tree is labelled when any board it relabels carries DOCUMENT
     // labels (Round 50 — never the engine's own in-pass relabels).
-    bool labelled(String k) =>
-        rotationSubtree(k).any(docLabelled.contains);
+    bool labelled(String k) => rotationSubtree(k).any(docLabelled.contains);
     // Each candidate is judged on the PARENT's own solved balance (its
     // single-phase ways placed against the rotated feeder lines), never on
     // the feeder lines alone: the identity, the greedy that moves only
@@ -4076,8 +4190,7 @@ ElectricalSystemResult computeSystem(
             feederLinesByPanel.containsKey(fed) ||
             feederNeutralByPanel.containsKey(fed);
       }
-      if (c.loadKind == LoadKind.capacitor ||
-          c.loadKind == LoadKind.spare) {
+      if (c.loadKind == LoadKind.capacitor || c.loadKind == LoadKind.spare) {
         return false;
       }
       return c.phaseOverride != null ||
@@ -4114,8 +4227,7 @@ ElectricalSystemResult computeSystem(
         triplenFraction: nb.triplenFraction,
       );
     }
-    if (solved.capacitorCurrentA > 0 &&
-        capacitorFloorByPanel.containsKey(id)) {
+    if (solved.capacitorCurrentA > 0 && capacitorFloorByPanel.containsKey(id)) {
       capacitorFloorByPanel[id] = solved.capacitorCurrentA;
     }
   }
@@ -4186,8 +4298,27 @@ ElectricalSystemResult computeSystem(
     return f;
   }
 
+  // Backlog E-1 — the service's connected load is its service roots'
+  // sub-trees: a board under an un-fed board flagged NOT a service entrance
+  // (`serviceEntrance: false`) is on no service. A board with no reachable
+  // root (a feeder cycle) is kept, as before.
+  String? topOf(String id) {
+    final seen = <String>{};
+    var cur = id;
+    while (true) {
+      final parent = parentOf[cur];
+      if (parent == null) return cur;
+      if (!seen.add(cur)) return null;
+      cur = parent;
+    }
+  }
+
   var connectedLoadMicroW = 0;
   for (final p in panels) {
+    final top = topOf(p.id);
+    if (top != null && byId.containsKey(top) && !serviceIds.contains(top)) {
+      continue;
+    }
     final mult = upsChain(p.id);
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
@@ -4228,10 +4359,21 @@ ElectricalSystemResult computeSystem(
   // Round 56 — the per-way ADS conductor floors (see the growth loop at the
   // end); every [sizeAll] pass reads the current map.
   final adsCsaFloors = <String, double>{};
+  // Reference tower T3 — the per-feeder downstream-VD conductor floors.
+  final feederVdFloors = <String, double>{};
   // Round 73 — the on-genset prospective bus fault (A) of each genset-backed
   // board (filled after the first full solve, see the end); FOLD 1 sizes the
   // bar on max(utility, this). Empty ⇒ byte-identical.
   final gensetWithstandA = <String, double>{};
+  // Backlog B-1 — the selectivity cable-growth start sections and refusals of
+  // the CURRENT `solveAll` (reset at its start; see the Round-40 loop).
+  final selectivityCsaMin = <String, double>{};
+  final selectivityRefused = <String>{};
+  // Bounded B-1 — feeders whose floor rung sits above the incomer of the
+  // board they are on (the growth is refused, never an outgoing device
+  // above its own incomer), and those the ADS step refused.
+  final selectivityRefusedIncomer = <String>{};
+  final selectivityRefusedAds = <String>{};
 
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
       [Map<String, double> feederBreakerCapA = const {},
@@ -4336,11 +4478,14 @@ ElectricalSystemResult computeSystem(
           feederBreakerCapA: feederBreakerCapA,
           mccbFrameRaiseRefusedIds: mccbFrameRaiseRefusedIds,
           adsCsaFloorMm2: Map.of(adsCsaFloors),
+          feederVdCsaFloorMm2: Map.of(feederVdFloors),
+          selectivityCsaMinMm2: Map.of(selectivityCsaMin),
+          selectivityRaiseRefusedIds: Set.of(selectivityRefused),
           feederLineCurrentsA: feederLinesByPanel,
           feederNeutralLoad: feederNeutralByPanel,
           feederLargestRunA: largestRunByPanel,
           feederLargestRunLinesA: largestRunLinesByPanel,
-          serviceMinCurrentA: roots.length == 1 && id == roots.first.id
+          serviceMinCurrentA: serviceRoots.length == 1 && id == serviceRoots.first.id
               ? serviceMinCurrentA
               : null,
         ),
@@ -4409,8 +4554,7 @@ ElectricalSystemResult computeSystem(
         connectedW: pr.connectedW,
         demandW: pr.demandW,
         demandCurrent: pr.demandCurrent,
-        demandVa: roundTo(
-            math.max(panelDemandVa[id] ?? 0, pr.demandW), 0),
+        demandVa: roundTo(math.max(panelDemandVa[id] ?? 0, pr.demandW), 0),
         futureLoadW: pr.futureLoadW,
         headroomApplied: pr.headroomApplied,
         spareWaysReserved: pr.spareWaysReserved,
@@ -4460,9 +4604,8 @@ ElectricalSystemResult computeSystem(
         // Only offer "rebalance" when that board's imbalance is actually
         // reducible; an imbalance inherent to its single-phase loads leaves the
         // feeder rating (or splitting the load) as the honest fix.
-        final imbalance = upsInputA != null
-            ? 0.0
-            : childResult.phaseBalance.imbalancePercent;
+        final imbalance =
+            upsInputA != null ? 0.0 : childResult.phaseBalance.imbalancePercent;
         final cause = imbalance <= 0
             ? ' — raise the feeder rating'
             : childResult.phaseBalance.imbalanceReducible
@@ -4511,8 +4654,7 @@ ElectricalSystemResult computeSystem(
         final upsInputA = _upsInputCurrentA(child, childResult);
         final futureA = roundTo(
             (upsInputA ??
-                    childResult.demandCurrent.amperes *
-                        child.diversityFactor) *
+                    childResult.demandCurrent.amperes * child.diversityFactor) *
                 multiplier,
             1);
         final feederRatingA = feederResult.breaker.ratingA.amperes;
@@ -4520,8 +4662,7 @@ ElectricalSystemResult computeSystem(
         pr.warnings.add(ElectricalWarning(
           code: 'feeder-below-fed-headroom',
           severity: WarningSeverity.warning,
-          message:
-              '${c.name}: ${childResult.name} reserves future load to '
+          message: '${c.name}: ${childResult.name} reserves future load to '
               '${_num(futureA)} A on its worst-loaded phase, but its feeder '
               'breaker is ${_num(feederRatingA)} A — the reserved capacity '
               'cannot be drawn; raise the feeder rating (and the boards '
@@ -4544,7 +4685,7 @@ ElectricalSystemResult computeSystem(
     // conservative sizing is untouched. Never resizes; the honest fix is a
     // bigger subscription or shedding load.
     if (serviceMinCurrentA != null && singlePhaseRootOnThreePhaseDaya) {
-      final rootResult = results[roots.first.id];
+      final rootResult = results[serviceRoots.first.id];
       rootResult?.warnings.add(ElectricalWarning(
         code: 'service-single-phase-root-on-three-phase-daya',
         severity: WarningSeverity.warning,
@@ -4555,22 +4696,22 @@ ElectricalSystemResult computeSystem(
             '~${_num(roundTo(serviceMinCurrentA, 1))} A per phase — a '
             'single-phase root board loads only one of those phases. Make the '
             'root board 3-phase, or declare a single-phase daya step.',
-        panelId: roots.first.id,
+        panelId: serviceRoots.first.id,
       ));
     }
     if (serviceMinCurrentA != null) {
-      final rootId = roots.first.id;
+      final rootId = serviceRoots.first.id;
       final rootResult = results[rootId];
       // Round 77 (elec-convergence-28-ups-root-service-judges-on-output) —
       // a UPS-backed service-entrance board is supplied THROUGH its UPS: the
       // limiter carries the balanced UPS INPUT ([upsInputCurrentA], output /
       // efficiency + recharge), the basis the supply demand and the
       // recommended daya already use — never the output board's current.
-      final rootUps = roots.first.upsBacked;
+      final rootUps = serviceRoots.first.upsBacked;
       final rawDivA = rootResult == null
           ? 0.0
           : rootUps
-              ? (upsInputCurrentA(roots.first, rootResult) ?? 0.0)
+              ? (upsInputCurrentA(serviceRoots.first, rootResult) ?? 0.0)
               : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
       // Round 40 — the limiter must also pass the largest single machine on
       // the service at its UNDIVERSIFIED running current (the figure that
@@ -4724,8 +4865,8 @@ ElectricalSystemResult computeSystem(
     }
 
     // Supply summary from the diversified demand presented by the root panel(s).
-    final rootDemandW = roots.fold(
-        0.0, (s, p) => s + (panelDemandW[p.id] ?? 0) * upsIn(p.id));
+    final rootDemandW =
+        serviceRoots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0) * upsIn(p.id));
     // Round 13 (elec-props-2-multiroot-earthing-first-root) — with several
     // utility-fed roots the SERVICE (supply system / voltage, main cable,
     // main earthing + bonding conductors) is governed by the LARGEST root, not
@@ -4734,9 +4875,8 @@ ElectricalSystemResult computeSystem(
     // A 250 A 3φ root listed after a 1φ lighting board used to print a 16 mm²
     // main earthing conductor and a single-phase 230 V supply. One root ⇒ that
     // root ⇒ byte-identical.
-    final governingRoot = governingRootPanel(roots, results);
-    final supplySystem =
-        governingRoot?.system ?? ElectricalSystem.threePhase;
+    final governingRoot = governingRootPanel(serviceRoots, results);
+    final supplySystem = governingRoot?.system ?? ElectricalSystem.threePhase;
     final supplyVoltage = governingRoot?.voltage ?? const Voltage(400);
     // Round 14 (elec-building-sim-2) — the supply kVA (genset size, the
     // 'backs NN %' label, transformer + daya tiers) comes from the engine's
@@ -4748,7 +4888,7 @@ ElectricalSystemResult computeSystem(
     // used to print 89.4 kVA (W / 0.85) against ~103 kVA really drawn, so a
     // 100 kVA genset was labelled 'backs 100 %'. Never below the demand W.
     var rootDemandVa = 0.0;
-    for (final r in roots) {
+    for (final r in serviceRoots) {
       final w = (panelDemandW[r.id] ?? 0) * upsIn(r.id);
       final va0 = panelDemandVa[r.id];
       final va = va0 == null ? null : va0 * upsIn(r.id);
@@ -4766,8 +4906,7 @@ ElectricalSystemResult computeSystem(
     // Earthing system designed from the main incomer's PE conductor. The
     // service-capacity floor rides along (when it governs), so the service PE
     // tracks the entrance device the same floor sized.
-    final mainResult =
-        governingRoot != null ? results[governingRoot.id] : null;
+    final mainResult = governingRoot != null ? results[governingRoot.id] : null;
     // Round 12 (report-recompute-earthing-ignores-headroom) — with a future-
     // load HEADROOM on the root, the incomer is rated for the future load
     // (demand × multiplier), so the service cable — and the main earthing /
@@ -4789,12 +4928,12 @@ ElectricalSystemResult computeSystem(
     final rootHeadroomActive =
         (governingRoot?.headroom ?? HeadroomSpec.none).isActive;
     final incomerRating = mainResult?.incomer.breaker.ratingA;
-    final demandIb = serviceMinCurrentA != null &&
-            serviceMinCurrentA > mainDemandIb.amperes
-        ? Current(roundTo(serviceMinCurrentA, 1))
-        : mainDemandIb;
-    final demandBreaker =
-        selectBreaker(profile, designCurrent: demandIb, loadKind: LoadKind.feeder);
+    final demandIb =
+        serviceMinCurrentA != null && serviceMinCurrentA > mainDemandIb.amperes
+            ? Current(roundTo(serviceMinCurrentA, 1))
+            : mainDemandIb;
+    final demandBreaker = selectBreaker(profile,
+        designCurrent: demandIb, loadKind: LoadKind.feeder);
     final incomerFloored = incomerRating != null &&
         (rootHeadroomActive ||
             incomerRating.amperes > demandBreaker.ratingA.amperes + 1e-9);
@@ -4849,6 +4988,7 @@ ElectricalSystemResult computeSystem(
     // it here — rather than deep in `_computeCircuit` — keeps the per-circuit
     // sizing path untouched, and reads the SAME ladder + Iz the sizer used.
     final floorsCapped = <String>{};
+    final refusedWhy = <String, SelectivityRefusal>{};
     final ladder = profile.standardBreakerRatingsA;
     for (final entry in feederBreakerFloorA.entries) {
       final parentId = feederParentOf[entry.key];
@@ -4864,6 +5004,18 @@ ElectricalSystemResult computeSystem(
       final floorRung = ladder.firstWhere((x) => x + 1e-9 >= entry.value,
           orElse: () => ladder.last);
       if (floorRung > r.cable.deratedIz.amperes) floorsCapped.add(entry.key);
+      // Bounded B-1 — why an AUTO-sized feeder's growth did not reach it.
+      final model = byId[parentId]
+          ?.circuits
+          .where((x) => x.id == entry.key)
+          .firstOrNull;
+      if (model != null && model.cableOverrideMm2 == null) {
+        refusedWhy[entry.key] = selectivityRefusedIncomer.contains(entry.key)
+            ? SelectivityRefusal.upstreamIncomer
+            : selectivityRefusedAds.contains(entry.key)
+                ? SelectivityRefusal.disconnection
+                : SelectivityRefusal.cableSteps;
+      }
     }
 
     return ElectricalSystemResult(
@@ -4876,6 +5028,8 @@ ElectricalSystemResult computeSystem(
       warnings: warnings,
       feederFloorsApplied: floorsApplied,
       feederFloorsCapped: floorsCapped,
+      feederSelectivityRefused: refusedWhy,
+      gensetAdsFloorKva: gensetAdsFloorKva,
     );
   }
 
@@ -4883,6 +5037,10 @@ ElectricalSystemResult computeSystem(
   // device / coordination pipeline below, as one function of the current
   // [adsCsaFloors].
   ElectricalSystemResult solveAll() {
+    selectivityCsaMin.clear();
+    selectivityRefused.clear();
+    selectivityRefusedIncomer.clear();
+    selectivityRefusedAds.clear();
     // PASS 1 — size the system with no coordination floor (exactly the historic
     // single-pass behaviour).
     final pass1 = sizeAll(const {});
@@ -4922,6 +5080,22 @@ ElectricalSystemResult computeSystem(
         final floorA = selectivityRatio * childIncomerA;
         if (feederResult.breaker.ratingA.amperes + 1e-9 < floorA) {
           feederFloors[c.id] = floorA;
+          // Bounded B-1 — the growth never takes the feeder device above the
+          // incomer of the board it sits on.
+          final upstreamA =
+              pass1.panels[p.id]?.incomer.breaker.ratingA.amperes;
+          final ladder = profile.standardBreakerRatingsA;
+          final floorRung = ladder.firstWhere((x) => x + 1e-9 >= floorA,
+              orElse: () => ladder.last);
+          // No selectivity GROWTH may put an outgoing device above its own
+          // incomer: the auto-sized cable is not grown for such a floor
+          // (the device-only floor, capped at the cable's Iz, is unchanged).
+          if (c.cableOverrideMm2 == null &&
+              upstreamA != null &&
+              floorRung > upstreamA + 1e-9) {
+            selectivityRefused.add(c.id);
+            selectivityRefusedIncomer.add(c.id);
+          }
         }
       }
     }
@@ -5025,23 +5199,72 @@ ElectricalSystemResult computeSystem(
         serviceFaultEstimateFor(project, pass2) ??
         const Current(defaultLvUtilityFaultKa * 1000);
     final ladder = profile.standardBreakerRatingsA;
+    final selSections = profile.standardSectionsMm2;
     final caps = <String, double>{};
     var current = pass2;
-    for (var iter = 0; iter < ladder.length; iter++) {
+    for (var iter = 0; iter < ladder.length + selSections.length + 1; iter++) {
       final f =
           faultStudy(current, project, profile, originFaultLevel: faultOrigin);
+      // Backlog B-1 — a selectivity-grown feeder must hold ADS on EVERY
+      // source that can feed it (reference tower T4): on a genset-backed
+      // board it is judged on the alternator's fault too.
+      final gBasis = gensetFaultBasis(project, current);
+      final fg = gBasis == null
+          ? null
+          : faultStudy(current, project, profile,
+              originFaultLevel: Current(gBasis.iscA));
       var changed = false;
-      for (final id in feederFloors.keys) {
+      for (final id in (feederFloors.keys.toList()..sort())) {
         final now = f.circuits[id];
-        if (now == null || now.adsOk != false) continue;
+        if (now == null) continue;
         final parentId = feederParentOf[id];
         final rNow = current.panels[parentId]?.circuits
             .where((x) => x.circuitId == id)
             .firstOrNull;
+        // Eligible for the B-1 cable growth: an AUTO-sized single-run cable
+        // whose growth was not refused (the floored device is the engine's).
+        final model =
+            byId[parentId]?.circuits.where((x) => x.id == id).firstOrNull;
+        final selGrown = model != null &&
+            model.cableOverrideMm2 == null &&
+            !selectivityRefused.contains(id) &&
+            (rNow?.cable.runsPerPhase ?? 1) <= 1;
+        final failsGenset = selGrown &&
+            fg != null &&
+            gBasis!.backed.contains(parentId) &&
+            fg.circuits[id]?.adsOk == false;
+        if (now.adsOk != false && !failsGenset) continue;
         final rLoad = pass1.panels[parentId]?.circuits
             .where((x) => x.circuitId == id)
             .firstOrNull;
         if (rNow == null || rLoad == null) continue;
+        // Backlog B-1 — an AUTO-sized single-run feeder that fails ADS at
+        // its floored device grows one more section (a lower loop
+        // impedance) before its device is capped; at the ladder top the
+        // growth is refused — the load-sized cable and the Round-40 device
+        // cap below take over (never copper grown for nothing).
+        if (selGrown &&
+            rNow.breaker.ratingA.amperes >
+                rLoad.breaker.ratingA.amperes + 1e-9) {
+          final next = selSections
+              .where((x) => x > rNow.cable.csaMm2 + 1e-9)
+              .firstOrNull;
+          // Bounded B-1 — never more than [kSelectivityGrowthMaxRungs]
+          // above the cable the pass-1 (non-selectivity) rules need.
+          final base = selSections
+              .indexWhere((x) => (x - rLoad.cable.csaMm2).abs() < 1e-9);
+          if (next != null &&
+              selSections.indexOf(next) - base <=
+                  kSelectivityGrowthMaxRungs) {
+            selectivityCsaMin[id] = next;
+          } else {
+            selectivityCsaMin.remove(id);
+            selectivityRefused.add(id);
+            selectivityRefusedAds.add(id);
+          }
+          changed = true;
+          continue;
+        }
         final ratingNow = rNow.breaker.ratingA.amperes;
         final loadRating = rLoad.breaker.ratingA.amperes;
         if (ratingNow <= loadRating + 1e-9) continue;
@@ -5075,66 +5298,344 @@ ElectricalSystemResult computeSystem(
   // Round 73 — the ADS conductor-growth fixed point (wrapped so the genset
   // withstand pass below can follow it).
   ElectricalSystemResult grownSolve() {
-    var result = solveAll();
+    final result = solveAll();
     final tnGrow = result.earthing.system == EarthingSystem.tnS ||
         result.earthing.system == EarthingSystem.tnCs;
-    if (!tnGrow) return result;
     final sections = profile.standardSectionsMm2;
     final loadSized = <String, double>{};
     final circuitModelById = <String, ElectricalCircuit>{
       for (final p in panels)
         for (final c in p.circuits) c.id: c,
     };
-    for (var iter = 0; iter < kAdsCsaGrowthMaxRungs; iter++) {
-      final f = faultStudy(result, project, profile,
-          originFaultLevel: growOriginFor(result));
-      var grew = false;
-      for (final pr in result.panels.values) {
-        for (final w in pr.circuits) {
-          if (f.circuits[w.circuitId]?.adsOk != false) continue;
-          final m = circuitModelById[w.circuitId];
-          if (m == null ||
-              m.loadKind == LoadKind.feeder ||
-              m.loadKind == LoadKind.spare ||
-              m.feedsPanelId != null ||
-              m.cableOverrideMm2 != null ||
-              m.breakerOverrideA != null ||
-              (w.cable.runsPerPhase ?? 1) > 1 ||
-              (w.motorLeads?.runsPerPhase ?? 1) > 1) {
-            continue;
-          }
-          // Round 58 — a star-delta way grows its MOTOR LEADS (its field run
-          // and earth-fault loop), never the 2 m internal link.
-          final now = w.motorLeads?.csaMm2 ?? w.cable.csaMm2;
-          final base = loadSized.putIfAbsent(w.circuitId, () => now);
-          final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
-          final next = sections.where((x) => x > now + 1e-9).firstOrNull;
-          if (next == null ||
-              next > kAdsCsaGrowthMaxMm2 + 1e-9 ||
-              sections.indexOf(next) - baseIdx > kAdsCsaGrowthMaxRungs) {
-            continue;
-          }
-          adsCsaFloors[w.circuitId] = next;
-          grew = true;
+    // Reference tower T3 (2026-11-13) — an AUTO-SIZED feeder cable (no cable
+    // override, one run per phase) is raised one section rung at a time,
+    // the whole pipeline re-run each time, (a) while the feeder itself fails
+    // automatic disconnection for its device, and (b) while an auto-sized
+    // final way of a board it supplies exceeds its cumulative voltage-drop
+    // limit although its OWN drop is within it (the excess is upstream, so
+    // a bigger feeder cures it). The raise goes to the nearest auto-sized
+    // feeder up the way's chain that is below the ladder top. Up to the
+    // ladder top; a feeder still failing there keeps its load-sized cable
+    // and the warning stands (never copper grown for nothing). The device's
+    // selectivity floor follows the larger cable's Iz as before.
+    final feederParentPanel = <String, String>{}; // feeder id → parent panel
+    final feederOfPanel = <String, String>{}; // child panel → feeder id
+    for (final p in panels) {
+      for (final c in p.circuits) {
+        if (c.feedsPanelId != null) {
+          feederParentPanel[c.id] = p.id;
+          feederOfPanel[c.feedsPanelId!] = c.id;
         }
       }
-      if (!grew) break;
-      result = solveAll();
     }
-    if (adsCsaFloors.isEmpty) return result;
-    // A way the bounded ladder could not bring to compliance keeps its
-    // load-sized cable and its `ads-disconnection` error (Round 55: the MCCB
-    // and its one defect) — never copper grown under a note claiming it
-    // disconnects in time.
-    final fEnd = faultStudy(result, project, profile,
-        originFaultLevel: growOriginFor(result));
-    final hopeless = [
-      for (final id in adsCsaFloors.keys)
-        if (fEnd.circuits[id]?.adsOk == false) id,
-    ];
-    if (hopeless.isEmpty) return result;
-    hopeless.forEach(adsCsaFloors.remove);
-    return solveAll();
+    ElectricalCircuitResult? resultOf(
+            ElectricalSystemResult r, String feederId) =>
+        r.panels[feederParentPanel[feederId]]?.circuits
+            .where((x) => x.circuitId == feederId)
+            .firstOrNull;
+    bool growable(ElectricalSystemResult r, String feederId) {
+      final m = circuitModelById[feederId];
+      final w = resultOf(r, feederId);
+      if (m == null || w == null) return false;
+      if (m.cableOverrideMm2 != null) return false;
+      if ((w.cable.runsPerPhase ?? 1) > 1) return false;
+      return sections.any((x) => x > w.cable.csaMm2 + 1e-9);
+    }
+
+    // Reference tower T4 (2026-11-13) — on a genset-backed (essential) path
+    // automatic disconnection must hold on BOTH sources: the growth below
+    // judges each way / feeder on the utility fault AND, when its board is
+    // genset-backed ([gensetFaultBasis]), on the alternator's sub-transient
+    // fault — the SAME study `gensetAdsCheck` judges with — so the engine
+    // never hands the genset judge a cable it could have grown.
+    ({FaultStudyResult utility, FaultStudyResult? genset, Set<String> backed})
+        studies(ElectricalSystemResult r, {required bool withGenset}) {
+      final utility =
+          faultStudy(r, project, profile, originFaultLevel: growOriginFor(r));
+      if (!tnGrow || !withGenset) {
+        return (utility: utility, genset: null, backed: const {});
+      }
+      final g = gensetFaultBasis(project, r);
+      if (g == null) return (utility: utility, genset: null, backed: const {});
+      return (
+        utility: utility,
+        genset:
+            faultStudy(r, project, profile, originFaultLevel: Current(g.iscA)),
+        backed: g.backed,
+      );
+    }
+
+    final circuitPanel = <String, String>{
+      for (final p in panels)
+        for (final c in p.circuits) c.id: p.id,
+    };
+    bool adsFails(
+        ({
+          FaultStudyResult utility,
+          FaultStudyResult? genset,
+          Set<String> backed
+        }) st,
+        String id) {
+      if (st.utility.circuits[id]?.adsOk == false) return true;
+      final g = st.genset;
+      if (g == null || !st.backed.contains(circuitPanel[id])) return false;
+      return g.circuits[id]?.adsOk == false;
+    }
+
+    ElectricalCircuitResult? anyResultOf(
+            ElectricalSystemResult r, String id) =>
+        r.panels[circuitPanel[id]]?.circuits
+            .where((x) => x.circuitId == id)
+            .firstOrNull;
+    // Backlog B-2 — the next-section step of an auto-sized single-run cable
+    // (feeder or final way): the drop it saves and the copper it adds,
+    // scored Δ%VD / (Δmm² × m × loaded cores). The saving scales the solved
+    // drop by z(next) / z(now), z = R(csa)·cos φ + X·sin φ (the
+    // [voltageDrop] formula at the same current and length). Null when the
+    // cable is user-fixed, in parallel runs, a star-delta lead pair or at the
+    // ladder top.
+    ({double next, double score})? vdStep(
+        ElectricalSystemResult r, String id) {
+      final m = circuitModelById[id];
+      final w = anyResultOf(r, id);
+      if (m == null || w == null) return null;
+      if (m.cableOverrideMm2 != null) return null;
+      if ((w.cable.runsPerPhase ?? 1) > 1 || w.motorLeads != null) return null;
+      final now = w.cable.csaMm2;
+      final next = sections.where((x) => x > now + 1e-9).firstOrNull;
+      if (next == null) return null;
+      final cos = (w.vdCosPhi ?? m.cosPhi).clamp(0.0, 1.0);
+      final sin = math.sqrt(math.max(0, 1 - cos * cos));
+      final material =
+          byId[circuitPanel[id]]?.material ?? ConductorMaterial.copper;
+      final x = profile.conductorReactanceOhmPerKm;
+      double z(double csa) =>
+          profile.conductorResistanceOhmPerKm(csa, material: material) * cos +
+          x * sin;
+      final zNow = z(now);
+      if (zNow <= 0) return null;
+      final saved = w.voltageDrop.dropPercent * (1 - z(next) / zNow);
+      final loaded = math.max(1, w.grounding.cores - 1);
+      final copper = (next - now) * w.lengthM * loaded;
+      if (saved <= 0 || copper <= 0) return null;
+      return (next: next, score: saved / copper);
+    }
+
+    // Two passes (T4): the utility pass (Round 56 / T3), then the same
+    // growth judged on BOTH sources. A way / feeder the genset pass cannot
+    // bring to compliance goes back to its UTILITY-pass cable (its
+    // `ads-disconnection-on-genset` stands) — never below what the utility
+    // needed, never copper grown for nothing.
+    ElectricalSystemResult growPass(ElectricalSystemResult start,
+        {required bool withGenset}) {
+      var result = start;
+      final startAds = Map.of(adsCsaFloors);
+      final startVd = Map.of(feederVdFloors);
+      void restoreAds(String id) {
+        final v = startAds[id];
+        if (v == null) {
+          adsCsaFloors.remove(id);
+        } else {
+          adsCsaFloors[id] = v;
+        }
+      }
+
+      void restoreVd(String id) {
+        final v = startVd[id];
+        if (v == null) {
+          feederVdFloors.remove(id);
+        } else {
+          feederVdFloors[id] = v;
+        }
+      }
+
+      final adsFeeders = <String>{};
+      final vdFeeders = <String>{};
+      final grownFinals = <String>{};
+      // Backlog B-2 — the failing ways each VD-grown cable was picked for.
+      final vdGrownFor = <String, Set<String>>{};
+      for (var iter = 0; iter < 4 * sections.length; iter++) {
+        final st = studies(result, withGenset: withGenset);
+        final wantAds = <String>{};
+        final wantVd = <String>{};
+        for (final id in (feederParentPanel.keys.toList()..sort())) {
+          if (tnGrow && adsFails(st, id) && growable(result, id)) {
+            wantAds.add(id);
+          }
+        }
+        // Backlog B-2 (2026-11-13) — the LEAST-COPPER cure of a cumulative
+        // drop. Every auto-sized final way over its cumulative limit (its own
+        // drop within it) picks, among the auto-sized cables on its chain —
+        // itself and each feeder above it — the one whose next section saves
+        // the most drop per added copper: Δ%VD / (Δmm² × length × loaded
+        // cores). A feeder's saving is summed over every failing way below
+        // it. Ties go to the final way (then the nearer feeder). Every pick is
+        // applied at once, so the result is order-independent.
+        final failing = <String>[];
+        for (final pid in (result.panels.keys.toList()..sort())) {
+          final pr = result.panels[pid]!;
+          for (final w in pr.circuits) {
+            final m = circuitModelById[w.circuitId];
+            if (m == null ||
+                m.feedsPanelId != null ||
+                m.loadKind == LoadKind.feeder ||
+                m.loadKind == LoadKind.spare ||
+                m.cableOverrideMm2 != null) {
+              continue;
+            }
+            final lim = w.voltageDrop.limitPercent;
+            if (w.cumulativeDropPercent <= lim + 1e-9) continue;
+            if (w.voltageDrop.dropPercent > lim + 1e-9) continue;
+            failing.add(w.circuitId);
+          }
+        }
+        // The chain of feeders above each failing way (nearest first).
+        final chainOf = <String, List<String>>{};
+        final failingBelow = <String, int>{};
+        for (final id in failing) {
+          final chain = <String>[];
+          var at = circuitPanel[id]!;
+          final seen = <String>{};
+          while (seen.add(at)) {
+            final fid = feederOfPanel[at];
+            if (fid == null) break;
+            chain.add(fid);
+            failingBelow[fid] = (failingBelow[fid] ?? 0) + 1;
+            final up = feederParentPanel[fid];
+            if (up == null) break;
+            at = up;
+          }
+          chainOf[id] = chain;
+        }
+        for (final id in failing) {
+          final own = vdStep(result, id);
+          var best = own == null ? null : (id: id, score: own.score);
+          for (final fid in chainOf[id]!) {
+            final step = vdStep(result, fid);
+            if (step == null) continue;
+            final score = step.score * (failingBelow[fid] ?? 1);
+            if (best == null || score > best.score * (1 + 1e-9) + 1e-15) {
+              best = (id: fid, score: score);
+            }
+          }
+          if (best == null) continue;
+          wantVd.add(best.id);
+          (vdGrownFor[best.id] ??= <String>{}).add(id);
+        }
+        if (wantAds.isEmpty && wantVd.isEmpty) break;
+        for (final id in {...wantAds, ...wantVd}) {
+          final now = anyResultOf(result, id)!.cable.csaMm2;
+          final next = sections.firstWhere((x) => x > now + 1e-9);
+          if (wantAds.contains(id)) {
+            adsCsaFloors[id] = next;
+            adsFeeders.add(id);
+          } else {
+            feederVdFloors[id] = next;
+            vdFeeders.add(id);
+          }
+        }
+        result = solveAll();
+      }
+      if (adsFeeders.isNotEmpty || vdFeeders.isNotEmpty) {
+        // A feeder the ladder could not bring to compliance keeps its
+        // load-sized cable (its warning stands).
+        final stEnd = studies(result, withGenset: withGenset);
+        var reverted = false;
+        for (final id in adsFeeders) {
+          if (adsFails(stEnd, id)) {
+            restoreAds(id);
+            reverted = true;
+          }
+        }
+        // Backlog B-2 — a VD-grown cable (feeder or final way) whose every
+        // failing way is STILL over its limit at the end bought nothing: it
+        // returns to its earlier floor (never copper grown for nothing).
+        final stillFailing = <String>{};
+        for (final pr in result.panels.values) {
+          for (final w in pr.circuits) {
+            final m = circuitModelById[w.circuitId];
+            if (m == null ||
+                m.feedsPanelId != null ||
+                m.loadKind == LoadKind.feeder ||
+                m.loadKind == LoadKind.spare ||
+                m.cableOverrideMm2 != null) {
+              continue;
+            }
+            final lim = w.voltageDrop.limitPercent;
+            if (w.voltageDrop.dropPercent <= lim + 1e-9 &&
+                w.cumulativeDropPercent > lim + 1e-9) {
+              stillFailing.add(w.circuitId);
+            }
+          }
+        }
+        for (final id in (vdFeeders.toList()..sort())) {
+          final forWays = vdGrownFor[id] ?? const <String>{};
+          if (forWays.isNotEmpty && stillFailing.containsAll(forWays)) {
+            restoreVd(id);
+            reverted = true;
+          }
+        }
+        if (reverted) result = solveAll();
+      }
+      if (!tnGrow) return result;
+      for (var iter = 0; iter < kAdsCsaGrowthMaxRungs; iter++) {
+        final st = studies(result, withGenset: withGenset);
+        var grew = false;
+        for (final pr in result.panels.values) {
+          for (final w in pr.circuits) {
+            if (!adsFails(st, w.circuitId)) continue;
+            final m = circuitModelById[w.circuitId];
+            if (m == null ||
+                m.loadKind == LoadKind.feeder ||
+                m.loadKind == LoadKind.spare ||
+                m.feedsPanelId != null ||
+                m.cableOverrideMm2 != null ||
+                m.breakerOverrideA != null ||
+                (w.cable.runsPerPhase ?? 1) > 1 ||
+                (w.motorLeads?.runsPerPhase ?? 1) > 1) {
+              continue;
+            }
+            // Round 58 — a star-delta way grows its MOTOR LEADS (its field run
+            // and earth-fault loop), never the 2 m internal link.
+            final now = w.motorLeads?.csaMm2 ?? w.cable.csaMm2;
+            final base = loadSized.putIfAbsent(w.circuitId, () => now);
+            final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
+            final next = sections.where((x) => x > now + 1e-9).firstOrNull;
+            if (next == null ||
+                next > kAdsCsaGrowthMaxMm2 + 1e-9 ||
+                sections.indexOf(next) - baseIdx > kAdsCsaGrowthMaxRungs) {
+              continue;
+            }
+            adsCsaFloors[w.circuitId] = next;
+            grownFinals.add(w.circuitId);
+            grew = true;
+          }
+        }
+        if (!grew) break;
+        result = solveAll();
+      }
+      if (grownFinals.isEmpty) return result;
+      // A way the bounded ladder could not bring to compliance keeps its
+      // load-sized cable and its `ads-disconnection` error (Round 55: the MCCB
+      // and its one defect) — never copper grown under a note claiming it
+      // disconnects in time.
+      final stFinal = studies(result, withGenset: withGenset);
+      final hopeless = [
+        for (final id in grownFinals)
+          if (adsFails(stFinal, id)) id,
+      ];
+      if (hopeless.isEmpty) return result;
+      hopeless.forEach(restoreAds);
+      return solveAll();
+    }
+
+    // Round 56 / T3: the utility pass (verbatim behaviour). T4: the same
+    // growth on both sources, only when a standby genset backs a board.
+    final utilityPass = growPass(result, withGenset: false);
+    if (!tnGrow || gensetFaultBasis(project, utilityPass) == null) {
+      return utilityPass;
+    }
+    return growPass(utilityPass, withGenset: true);
   }
 
   ElectricalSystemResult withstandSolve() {
@@ -5170,7 +5671,70 @@ ElectricalSystemResult computeSystem(
 
   final fin = withstandSolve();
   // Round 79 — the declared daya judged with SEVERAL service-entrance boards.
-  if (roots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
+  if (serviceRoots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
+  if (gensetAdsFloorKva != null) return fin;
+
+  // Backlog B-3 (2026-11-13) — THE GENSET RECOMMENDATION HOLDS
+  // DISCONNECTION. An UNFORCED standby set is sized on its running load and
+  // its motor-start floor; on TN a backed board must also disconnect on the
+  // set's own (smaller) alternator fault. When an AUTO-sized way or feeder
+  // (no cable / breaker override, not spare) of a genset-backed board still
+  // fails `gensetAdsCheck` after the T4 cable growth, the ladder ratings
+  // above the recommendation are tried in ascending order, each a full
+  // re-solve (its own T4 growth on that set's fault): the first at which no
+  // such way fails becomes the disconnection floor every genset sizing
+  // reads (`ElectricalSystemResult.gensetAdsFloorKva`, governing reason
+  // `disconnection`). No ladder rating cures it ⇒ the running / start
+  // rating and the `ads-disconnection-on-genset` error stand. A forced
+  // nameplate is judged, never resized.
+  final gen = project.sources?.generator;
+  final tnFin = fin.earthing.system == EarthingSystem.tnS ||
+      fin.earthing.system == EarthingSystem.tnCs;
+  if (gen == null ||
+      gen.kva != null ||
+      project.supplyKind == SupplyKind.generator ||
+      !tnFin) {
+    return fin;
+  }
+  final modelById = <String, ElectricalCircuit>{
+    for (final p in panels)
+      for (final c in p.circuits) c.id: c,
+  };
+  Set<String> autoFailing(ElectricalSystemResult r) {
+    final utility =
+        faultStudy(r, project, profile, originFaultLevel: growOriginFor(r));
+    final check = gensetAdsCheck(profile, project, r, utility);
+    return {
+      for (final id in check.failedIds)
+        if (modelById[id] case final m?
+            when m.cableOverrideMm2 == null &&
+                m.breakerOverrideA == null &&
+                m.loadKind != LoadKind.spare)
+          id,
+    };
+  }
+
+  if (autoFailing(fin).isEmpty) return fin;
+  final plantVa = gensetPlantVa(project, fin);
+  if (plantVa == null) return fin;
+  // Paralleled sets (the ladder already exceeded) are left as sized.
+  if (plantVa / 1000 > kGeneratorKva.last + 1e-6) return fin;
+  for (final kva in kGeneratorKva) {
+    if (kva * 1000 <= plantVa + 1e-6) continue;
+    final r = computeSystem(
+      profile,
+      project,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      originFaultLevel: originFaultLevel,
+      busbarClearingTimeS: busbarClearingTimeS,
+      diversityLibrary: diversityLibrary,
+      priorAssignments: priorAssignments,
+      phaseReassignThresholdA: phaseReassignThresholdA,
+      gensetAdsFloorKva: kva,
+    );
+    if (autoFailing(r).isEmpty) return r;
+  }
   return fin;
 }
 

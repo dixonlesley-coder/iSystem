@@ -34,6 +34,9 @@ import 'drawing_chrome.dart'
         dxfTablesSection,
         dxfText,
         kHelveticaCapHeightEm,
+        kSldLegendWrapEm,
+        sldLegendEntryLines,
+        sldLegendLineCount,
         serviceAciColorFor,
         wrapTitleLines;
 import 'electrical_sld_drawing.dart';
@@ -230,7 +233,14 @@ class SldDxfLayers {
 class _Dxf {
   final StringBuffer b = StringBuffer();
 
+  /// Drawing-review D6 — the model-space X offset of the page being written
+  /// (a paginated set lays its pages side by side, one frame each).
+  double dx = 0;
+
   void g(int code, Object value) {
+    if (dx != 0 && (code == 10 || code == 11) && value is num) {
+      value = value + dx;
+    }
     b.writeln(code);
     // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
     b.writeln(value is String ? dxfText(value) : value);
@@ -248,8 +258,7 @@ class _Dxf {
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
   /// [color] is an optional ACI override (62) — null = inherit the layer colour.
-  void box(String layer, double x, double y, double w, double h,
-      {int? color}) {
+  void box(String layer, double x, double y, double w, double h, {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
@@ -334,6 +343,96 @@ String electricalSldToDxf({
           ? buildElectricalOverview(
               project: project!, result: result!, sourceChain: sourceChain)
           : buildElectricalSld(project: project!, result: result!));
+  // [projectName] overrides the derived name — a prebuilt sheet (mechanical
+  // riser) carries no [project], so the app passes the live name to avoid the
+  // `Untitled project` placeholder (N2). Null / empty ⇒ the derived name.
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : (project?.name.isNotEmpty ?? false)
+          ? project!.name
+          : 'Untitled project';
+  final sheetResolved = _emitSldPage(d, built,
+      diagramTitle: diagramTitle, chrome: chrome, pname: pname, layers: layers);
+  d.end();
+  return _sldDxfDocument(d, [sheetResolved], layers);
+}
+
+/// Drawing-review D6 (2026-11-13) — the DXF twin of a PAGINATED PDF set: every
+/// page of [sheets] is written as its OWN frame (drawing + title block +
+/// legend) side by side in model space, page i stamping `SHEET i of n` like
+/// the PDF page, so the PDF and DXF of one drawing carry the same content
+/// (continuation marks, counters, per-page legibility notes). One page ⇒ the
+/// single-sheet [electricalSldToDxf] output.
+String sldSheetsToDxfSet(
+  List<SldSheet> sheets, {
+  String diagramTitle = 'SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  String? projectName,
+  SldDxfLayers layers = SldDxfLayers.electrical,
+}) {
+  if (sheets.length <= 1) {
+    return electricalSldToDxf(
+        sheet: sheets.isEmpty
+            ? const SldSheet(
+                prims: [],
+                minX: 0,
+                minY: 0,
+                maxX: 1,
+                maxY: 1,
+                legend: [],
+                supplyNote: '')
+            : sheets.single,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        projectName: projectName,
+        layers: layers);
+  }
+  final d = _Dxf()..begin();
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : 'Untitled project';
+  final resolved = <SldSheet>[];
+  var x = 0.0;
+  for (var i = 0; i < sheets.length; i++) {
+    final base = chrome ?? const DrawingChrome();
+    final pageChrome = DrawingChrome(
+      drawingNumber: base.drawingNumber,
+      revisionNumber: base.revisionNumber,
+      sheetIndex: i + 1,
+      sheetTotal: sheets.length,
+      clientName: base.clientName,
+      drawnBy: base.drawnBy,
+      checkedBy: base.checkedBy,
+      approvedBy: base.approvedBy,
+      dateString: base.dateString,
+      scaleText: base.scaleText,
+    );
+    d.dx = x - sheets[i].minX;
+    final r = _emitSldPage(d, sheets[i],
+        diagramTitle: diagramTitle,
+        chrome: pageChrome,
+        pname: pname,
+        layers: layers);
+    resolved.add(r);
+    // The frame spans the drawing and the title block + legend row below it.
+    final w = math.max(r.maxX - r.minX, 720.0);
+    x += w + 240;
+  }
+  d.dx = 0;
+  d.end();
+  return _sldDxfDocument(d, resolved, layers);
+}
+
+/// Write ONE SLD page (plot-fitted drawing, warnings, model-space title block
+/// + legend) into [d]; returns the fitted sheet (its prims feed the TABLES).
+SldSheet _emitSldPage(
+  _Dxf d,
+  SldSheet built, {
+  required String diagramTitle,
+  required DrawingChrome? chrome,
+  required String pname,
+  required SldDxfLayers layers,
+}) {
   // drafting-6: the SAME plot fit the PDF applies — labels grown in place to
   // the minimum plotted size for an A3 fit-to-sheet plot, bounds covering each
   // label's text — so the DXF and the PDF print the same label sizes.
@@ -398,8 +497,8 @@ String electricalSldToDxf({
   // builder could only place some tags fused into others.
   final overlapNote = planOverlapWarning(sheetResolved.overlapCount);
   if (overlapNote != null) {
-    d.text(layers.frame, sheetResolved.minX, sheetResolved.minY - 16,
-        overlapNote,
+    d.text(
+        layers.frame, sheetResolved.minX, sheetResolved.minY - 16, overlapNote,
         size: 8);
   }
   // Round 43 — the page-legibility warning (see [SldSheet.belowMinLabelPt]).
@@ -433,21 +532,18 @@ String electricalSldToDxf({
   final tbH =
       (rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0) + noteExtra;
   final frameTop = sheetResolved.maxY + 60;
-  // [projectName] overrides the derived name — a prebuilt sheet (mechanical
-  // riser) carries no [project], so the app passes the live name to avoid the
-  // `Untitled project` placeholder (N2). Null / empty ⇒ the derived name.
-  final pname = (projectName != null && projectName.isNotEmpty)
-      ? projectName
-      : (project?.name.isNotEmpty ?? false)
-          ? project!.name
-          : 'Untitled project';
   d.box(layers.frame, sheetResolved.minX, frameTop, tbW, tbH);
+  // Drawing-review D6 — the PROJECT / TITLE cell labels the PDF title block
+  // prints, so both formats carry the same strings.
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 10, 'PROJECT',
+      size: 5);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 32, 'TITLE', size: 5);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
   for (var i = 0; i < noteLines.length; i++) {
-    d.text(layers.frame, sheetResolved.minX + 8,
-        frameTop + 66 + i * noteLineH, noteLines[i],
+    d.text(layers.frame, sheetResolved.minX + 8, frameTop + 66 + i * noteLineH,
+        noteLines[i],
         size: noteSize);
   }
   if (rows.isNotEmpty) {
@@ -470,21 +566,39 @@ String electricalSldToDxf({
   }
 
   if (sheetResolved.legend.isNotEmpty) {
+    // F8 follow-up (2026-11-13) — the SAME wrap as the PDF legend
+    // ([sldLegendEntryLines] at [kSldLegendWrapEm]); the box is as wide as
+    // that wrap at the written text's em (size 9 is the cap height) and grows
+    // a row per printed line, so no entry runs out through its border.
+    const em = 9 / kHelveticaCapHeightEm;
     final lx = sheetResolved.minX + 400;
-    d.box(layers.frame, lx, frameTop, 300,
-        math.max(96, 22.0 + sheetResolved.legend.length * 14));
+    final lines = sldLegendLineCount(sheetResolved.legend);
+    d.box(
+        layers.frame,
+        lx,
+        frameTop,
+        math.max(300.0, 16 + kSldLegendWrapEm * em),
+        math.max(96, 22.0 + lines * 14));
     d.text(layers.frame, lx + 8, frameTop + 16, 'LEGEND', size: 11);
     var row = 0;
     for (final e in sheetResolved.legend) {
-      d.text(layers.frame, lx + 8, frameTop + 32 + row * 14,
-          '${e.code}  -  ${e.meaning}',
-          size: 9);
-      row++;
+      final w = sldLegendEntryLines(e);
+      for (var k = 0; k < w.lines.length; k++) {
+        d.text(layers.frame, lx + 8 + (k == 0 ? 0 : w.indentEm * em),
+            frameTop + 32 + row * 14, w.lines[k],
+            size: 9);
+        row++;
+      }
     }
   }
 
-  d.end();
+  return sheetResolved;
+}
 
+/// The R12 document around the written ENTITIES of [d]: HEADER + TABLES over
+/// every layer the [pages] reference.
+String _sldDxfDocument(_Dxf d, List<SldSheet> pages, SldDxfLayers layers) {
+  final allPrims = [for (final pg in pages) ...pg.prims];
   // TABLES precede ENTITIES: the shared CONTINUOUS/DASHED/DASHDOT line-types
   // + one LAYER record per class layer of the ACTIVE namespace (electrical:
   // E-ESSENTIAL red, feeder cyan mirroring the reference drawings' cyan-normal,
@@ -494,7 +608,7 @@ String electricalSldToDxf({
   final classLayers = layers.classLayers();
   final classNames = {for (final (name, _) in classLayers) name};
   final explicit = <String>{
-    for (final p in sheetResolved.prims)
+    for (final p in allPrims)
       if (p is SldLine &&
           p.layer != null &&
           _serviceLayerFor(p.layer) == null &&
@@ -506,7 +620,7 @@ String electricalSldToDxf({
   // resolves to the SAME AIA layer + ACI colour + linetype the plan DXF uses
   // (`P-DOM-CWS` ACI 5 …), so riser and plan DXFs share one layer vocabulary.
   final serviceLayers = <(String, int, String)>{
-    for (final p in sheetResolved.prims)
+    for (final p in allPrims)
       if (p is SldLine && _serviceLayerFor(p.layer) != null)
         _serviceLayerFor(p.layer)!,
   }.toList()
@@ -581,7 +695,8 @@ String powerOneLineToDxf(PowerOneLine oneLine) {
     final z = centre(edge.to);
     d.connector('oneline', a.x, a.y, z.x, z.y);
     if (edge.label != null) {
-      d.text('oneline', (a.x + z.x) / 2, (a.y + z.y) / 2, edge.label!, size: 10);
+      d.text('oneline', (a.x + z.x) / 2, (a.y + z.y) / 2, edge.label!,
+          size: 10);
     }
   }
 

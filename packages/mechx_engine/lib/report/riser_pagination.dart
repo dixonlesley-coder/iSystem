@@ -48,8 +48,44 @@ List<SldSheet> paginatedRiserSheets({
   DrawingChrome? chrome,
   String projectName = 'Untitled project',
   String diagramTitle = 'SINGLE-LINE DIAGRAM',
+  SldSheet Function(({int lo, int hi}) range)? buildWithoutExtras,
+  SldSheet Function()? buildExtrasOnly,
+  SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
+      buildColumnPart,
+  SldSheet Function(({int lo, int hi}) range, bool withoutExtras)?
+      buildPlantRow,
+  SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
+      buildPlantPart,
 }) {
-  double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
+  // Fix round 6 (2026-11-14) — every builder is PURE in its arguments, and
+  // the passes below ask for the same range again (the single-floor sizes,
+  // the greedy chunks, the S2 singles, the plant row / parts): each distinct
+  // call is built once per pagination. Same sheets, byte for byte.
+  final buildMemo = <({int lo, int hi})?, SldSheet>{};
+  final rawBuild = build;
+  build = (r) => buildMemo[r] ??= rawBuild(r);
+  if (buildWithoutExtras != null) {
+    final raw = buildWithoutExtras;
+    final memo = <({int lo, int hi}), SldSheet>{};
+    buildWithoutExtras = (r) => memo[r] ??= raw(r);
+  }
+  if (buildColumnPart != null) {
+    final raw = buildColumnPart;
+    final memo = <(({int lo, int hi}), int, bool), SldSheet>{};
+    buildColumnPart = (r, k, bare) => memo[(r, k, bare)] ??= raw(r, k, bare);
+  }
+  if (buildPlantRow != null) {
+    final raw = buildPlantRow;
+    final memo = <(({int lo, int hi}), bool), SldSheet>{};
+    buildPlantRow = (r, bare) => memo[(r, bare)] ??= raw(r, bare);
+  }
+  if (buildPlantPart != null) {
+    final raw = buildPlantPart;
+    final memo = <(({int lo, int hi}), int, bool), SldSheet>{};
+    buildPlantPart = (r, k, bare) => memo[(r, k, bare)] ??= raw(r, k, bare);
+  }
+  final minPtMemo = Map<SldSheet, double>.identity();
+  double minPt(SldSheet s) => minPtMemo[s] ??= sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
   // Round 43 (electrical-sim-8-riser-floor-band-illegible) — a page whose
   // floors are WIDTH-bound (17 boards side by side on one storey) cannot
@@ -58,52 +94,159 @@ List<SldSheet> paginatedRiserSheets({
   // printing ~1.7 pt tags.
   SldSheet flagged(SldSheet p) {
     final pt = minPt(p);
-    return pt < kMinPlotLabelPt - 1e-9 ? p.withBelowMinLabelPt(pt) : p;
+    return sldPrintsBelowMinPt(pt, minPt: kMinPlotLabelPt)
+        ? p.withBelowMinLabelPt(pt)
+        : p;
   }
 
   final whole = build(null);
   if (levelCount <= 1 || minPt(whole) >= kMinPlotLabelPt - 1e-9) {
+    if (levelCount == 1 &&
+        buildWithoutExtras != null &&
+        buildExtrasOnly != null &&
+        minPt(whole) < kMinPlotLabelPt - 1e-9) {
+      final bare = buildWithoutExtras((lo: 0, hi: 0));
+      if (minPt(bare) > minPt(whole)) {
+        return [flagged(bare), flagged(buildExtrasOnly())];
+      }
+    }
     return [flagged(whole)];
   }
+  // Drawing review R2 — the 7 pt floor is EXACT: when the page carrying the
+  // building's lowest floor cannot reach it WITH the extras (plant detail,
+  // callouts, notes) but prints larger without them, every page holding
+  // floor 0 is built without them and the extras follow on a continuation
+  // sheet of their own. Only a page that cannot reach 7 pt even then is
+  // flagged with the size it really prints at.
+  var shed = false;
+  if (buildWithoutExtras != null && buildExtrasOnly != null) {
+    final withX = minPt(build((lo: 0, hi: 0)));
+    shed = withX < kMinPlotLabelPt - 1e-9 &&
+        minPt(buildWithoutExtras((lo: 0, hi: 0))) > withX;
+  }
+  SldSheet page(({int lo, int hi}) r) =>
+      shed && r.lo == 0 ? buildWithoutExtras!(r) : build(r);
+
   // Round 40 (elec-drawings-5-riser-pagination-global-cap-shrinks-all-
   // pages) — paginate GREEDILY per chunk from floor 0 upward. Each floor's
-  // own best size is `min(kMinPlotLabelPt, 0.95 × its single-floor page)`;
+  // own best size is `min(kMinPlotLabelPt, its single-floor page)`;
   // a page may hold a run of floors only while it prints at the LARGEST of
   // those targets among its floors, so a width-limited band (a ground band
   // with the source spine + several boards) shrinks ITS OWN page only —
   // never every page of the set (one global floors-per-page used to print
   // the upper pages at ~6 pt where 5-floor chunks print at 7 pt).
   final singleMin = [
-    for (var f = 0; f < levelCount; f++) minPt(build((lo: f, hi: f))),
+    for (var f = 0; f < levelCount; f++) minPt(page((lo: f, hi: f))),
   ];
   // Round 45 — a floor whose own page REACHES the floor targets the floor
   // itself: the plot fit caps labels at [kMinPlotLabelPt], so a legible
   // floor reads exactly 7.0 and the 0.95 relaxation (meant only for a floor
   // that cannot reach it alone) let a multi-floor page print at 6.65 pt.
-  double floorTarget(int f) {
-    if (singleMin[f] >= kMinPlotLabelPt - 1e-9) return kMinPlotLabelPt - 1e-9;
-    final cap = singleMin[f] * 0.95;
-    return (cap < kMinPlotLabelPt ? cap : kMinPlotLabelPt) - 1e-9;
-  }
+  // Drawing review R2 — EXACT, no relaxation: a floor that cannot reach the
+  // floor alone targets its own single-floor size (the 0.95 slack let a
+  // multi-floor page print at 6.78 pt where the floor alone printed larger).
+  double floorTarget(int f) =>
+      (singleMin[f] < kMinPlotLabelPt ? singleMin[f] : kMinPlotLabelPt) - 1e-9;
 
   final pages = <SldSheet>[];
+  final ranges = <({int lo, int hi})>[];
   var lo = 0;
   while (lo < levelCount) {
     var hi = lo;
-    var sheet = build((lo: lo, hi: lo));
+    var sheet = page((lo: lo, hi: lo));
     var target = floorTarget(lo);
     while (hi + 1 < levelCount) {
       final t = math.max(target, floorTarget(hi + 1));
-      final next = build((lo: lo, hi: hi + 1));
+      final next = page((lo: lo, hi: hi + 1));
       if (minPt(next) < t) break;
       hi++;
       sheet = next;
       target = t;
     }
     pages.add(sheet);
+    ranges.add((lo: lo, hi: hi));
     lo = hi + 1;
   }
+  // Drawing review S2 — a page whose key circles still overprint (the
+  // placer's unresolved count) gives each of its floors a page of its own
+  // when that clears more: the re-spacing then has the sheet's full width
+  // and the band its full height. Never fewer floors than legible (a
+  // single-floor page prints at least at its own target).
+  for (var i = pages.length - 1; i >= 0; i--) {
+    final r = ranges[i];
+    if (pages[i].overlapCount == 0 || r.hi == r.lo) continue;
+    final singles = [for (var f = r.lo; f <= r.hi; f++) page((lo: f, hi: f))];
+    final left = singles.fold<int>(0, (a, p) => a + p.overlapCount);
+    if (left < pages[i].overlapCount) {
+      pages.replaceRange(i, i + 1, singles);
+      ranges.replaceRange(
+          i, i + 1, [for (var f = r.lo; f <= r.hi; f++) (lo: f, hi: f)]);
+    }
+  }
+  // Drawing review S4 — a ONE-floor page still overprinting after the pitch
+  // escalation is width-bound: its fixture columns split over two pages
+  // ('BAGIAN 1/2', 'BAGIAN 2/2'; [buildColumnPart] part 1 keeps the risers
+  // and plant), kept only when the two parts overprint strictly less and
+  // neither prints smaller than the page it replaces.
+  if (buildColumnPart != null) {
+    for (var i = pages.length - 1; i >= 0; i--) {
+      final r = ranges[i];
+      if (pages[i].overlapCount == 0 || r.hi != r.lo) continue;
+      final bare = shed && r.lo == 0;
+      final parts = [
+        for (final k in [1, 2]) buildColumnPart(r, k, bare)
+      ];
+      final left = parts.fold<int>(0, (a, p) => a + p.overlapCount);
+      final floorPt = math.min(minPt(pages[i]), kMinPlotLabelPt) - 1e-9;
+      if (left < pages[i].overlapCount &&
+          parts.every((p) => minPt(p) >= floorPt)) {
+        // Pages run bottom-up here (reversed below): part 2 then part 1
+        // lists part 1 first on the issued set.
+        pages.replaceRange(i, i + 1, parts.reversed);
+        ranges.replaceRange(i, i + 1, [r, r]);
+      }
+    }
+  }
+  // Drawing backlog I-2 — a ONE-floor page still KEYING plant items (tanks,
+  // pumps, booster, PRV, meter) or the trunks between them draws its plant
+  // group in its own row under the fixture band when that page still prints
+  // at its size (capped at the floor); else the plant row takes a page of its
+  // own ('<floor> - PLANT', [buildPlantPart] part 2, part 1 the floor without
+  // it) when both parts print at that size. Each is kept only when it keys
+  // strictly fewer plant items and overprints no more; a page already
+  // tagging every plant item directly is untouched.
+  if (buildPlantRow != null || buildPlantPart != null) {
+    for (var i = pages.length - 1; i >= 0; i--) {
+      final r = ranges[i];
+      final p0 = pages[i];
+      if (p0.plantKeyCount == 0 || r.hi != r.lo) continue;
+      if (i + 1 < ranges.length && ranges[i + 1] == r) continue; // S4 part
+      if (i > 0 && ranges[i - 1] == r) continue;
+      final bare = shed && r.lo == 0;
+      final floorPt = math.min(minPt(p0), kMinPlotLabelPt) - 1e-9;
+      bool better(Iterable<SldSheet> ps) =>
+          ps.fold<int>(0, (a, p) => a + p.plantKeyCount) < p0.plantKeyCount &&
+          ps.fold<int>(0, (a, p) => a + p.overlapCount) <= p0.overlapCount &&
+          ps.every((p) => minPt(p) >= floorPt);
+      final row = buildPlantRow?.call(r, bare);
+      if (row != null && better([row])) {
+        pages[i] = row;
+        continue;
+      }
+      if (buildPlantPart == null) continue;
+      final parts = [for (final k in [1, 2]) buildPlantPart(r, k, bare)];
+      if (better(parts)) {
+        // Bottom-up here (reversed below): the PLANT page lists after the
+        // floor page.
+        pages.replaceRange(i, i + 1, parts.reversed);
+        ranges.replaceRange(i, i + 1, [r, r]);
+      }
+    }
+  }
   // One chunk spanning every floor IS the whole sheet.
-  if (pages.length == 1) return [flagged(whole)];
-  return [for (final p in pages.reversed) flagged(p)];
+  final out = pages.length == 1 && !shed ? [whole] : pages.reversed.toList();
+  return [
+    for (final p in out) flagged(p),
+    if (shed) flagged(buildExtrasOnly!()),
+  ];
 }

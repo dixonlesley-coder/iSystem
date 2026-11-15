@@ -244,11 +244,24 @@ void main() {
           backupPower: gensetBackupDemandW(p, sys));
       expect(g.ratingKva.inKilovoltAmperes, 25);
       expect(_perPhase(g.ratingKva.voltAmperes), greaterThanOrEqualTo(iEp));
+      // Backlog B-3 (2026-11-13): 25 kVA is the RUNNING floor, but the set
+      // must also disconnect EP's way on its own alternator fault: 25 000 /
+      // (√3 × 400 × 0.12) = 300.7 A ⇒ the EP heater's 32 A C MCB (10 × In ⇒
+      // Zs_max 0.95 × 230 / 320 = 0.683 Ω) sees a 0.790 Ω loop ⇒ fails. The
+      // next rung, 33 kVA (396.9 A), brings it to 0.604 Ω ⇒ holds: the
+      // recommendation is 33 kVA, governed by disconnection.
+      expect(sys.gensetAdsFloorKva, 33);
+      final rec = sizeGenerator(gensetBackupDemandVa(p, sys),
+          backupPower: gensetBackupDemandW(p, sys),
+          minKvaForAds: gensetAdsFloorFor(sys));
+      expect(rec.ratingKva.inKilovoltAmperes, 33);
+      expect(rec.governing, GensetSizingReason.disconnection);
       // Every printed surface reads the same basis — the power one-line's
-      // generator node prints the corrected rung.
+      // generator node prints the recommended rung.
       final study = computeAdvancedStudy(_p, p, sys);
       final genNode = study.powerOneLine!.nodeOfKind(PowerNodeKind.generator)!;
-      expect(genNode.sub, startsWith('25 kVA'));
+      expect(genNode.sub, startsWith('33 kVA'));
+      expect(study.gensetAdsFailedCircuitIds, isEmpty);
     });
 
     test('a forced 10 kVA nameplate (14.4 A per phase) raises '
@@ -484,3 +497,4 @@ void main() {
     });
   });
 }
+

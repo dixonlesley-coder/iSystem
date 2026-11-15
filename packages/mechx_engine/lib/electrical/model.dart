@@ -92,6 +92,13 @@ class ElectricalCircuit {
   /// derived from the panel. A label / BOM concern; sizing is unaffected.
   final String? cableType;
 
+  /// Backlog E-2 (2026-11-13) — true when [cableType] was set by the APP
+  /// (the MEP sync's life-safety FRC feeder, reference office O4), not by
+  /// the engineer: only such a type may be reverted by the sync, after a
+  /// reload too. A hand cable-type edit clears it. Additive + tolerant in
+  /// `.mechx` (written only when true).
+  final bool cableTypeAuto;
+
   /// Per-run laying override: `air` (above ground) or `ground` (buried). Absent
   /// = follow the panel's install method.
   final String? laying;
@@ -210,6 +217,7 @@ class ElectricalCircuit {
     this.phases,
     this.lifeSafety = false,
     this.cableType,
+    this.cableTypeAuto = false,
     this.laying,
     this.cableOverrideMm2,
     this.breakerOverrideA,
@@ -255,6 +263,7 @@ class ElectricalCircuit {
     bool? lifeSafety,
     String? cableType,
     bool clearCableType = false,
+    bool? cableTypeAuto,
     String? laying,
     bool clearLaying = false,
     double? cableOverrideMm2,
@@ -299,6 +308,7 @@ class ElectricalCircuit {
         phases: clearPhases ? null : (phases ?? this.phases),
         lifeSafety: lifeSafety ?? this.lifeSafety,
         cableType: clearCableType ? null : (cableType ?? this.cableType),
+        cableTypeAuto: cableTypeAuto ?? this.cableTypeAuto,
         laying: clearLaying ? null : (laying ?? this.laying),
         cableOverrideMm2: clearCableOverrideMm2
             ? null
@@ -349,6 +359,7 @@ class ElectricalCircuit {
         if (phases != null) 'phases': phases,
         'lifeSafety': lifeSafety,
         if (cableType != null) 'cableType': cableType,
+        if (cableTypeAuto) 'cableTypeAuto': true,
         if (laying != null) 'laying': laying,
         if (cableOverrideMm2 != null) 'cableOverrideMm2': cableOverrideMm2,
         if (breakerOverrideA != null)
@@ -392,6 +403,7 @@ class ElectricalCircuit {
         phases: (json['phases'] as num?)?.toInt(),
         lifeSafety: json['lifeSafety'] == true,
         cableType: json['cableType'] as String?,
+        cableTypeAuto: json['cableTypeAuto'] == true,
         laying: json['laying'] as String?,
         cableOverrideMm2: (json['cableOverrideMm2'] as num?)?.toDouble(),
         breakerOverrideA: json['breakerOverrideA'] == null
@@ -474,6 +486,16 @@ class ElectricalPanel {
   /// generator backup. Carried for the A8 sources / power-one-line pass.
   final bool essential;
 
+  /// Backlog E-1 (2026-11-13) — an explicit SERVICE-ENTRANCE flag for an
+  /// unfed board: `true` = the board takes its own utility meter (a
+  /// legitimate service root for the supply study AND the connectivity
+  /// judge), `false` = it is not one (an unfed board then reads
+  /// `unfed-panel` and its load is not allocated to the service). Null = the
+  /// default rule (`serviceEntrancePanelIds`: the FIRST unfed board), which
+  /// is exactly the pre-E-1 judge for old files. Meaningless on a fed board.
+  /// Additive + tolerant in `.mechx` (written only when set).
+  final bool? serviceEntrance;
+
   /// Critical / UPS-backed board, supplied THROUGH a UPS. Round 44: its
   /// feeder (and every board upstream) carries the UPS INPUT — the board's
   /// diversified demand × `kUpsInputFactor` (÷ 0.94 efficiency × 1.10
@@ -505,6 +527,13 @@ class ElectricalPanel {
   /// engine core never reads it; the geo resolver / Layout wave do. Null = the
   /// panel is not placed on the layout.
   final LayoutPos? layoutPos;
+
+  /// Drawing backlog C-2 (2026-11-13) — the building floor (0 = lowest) the
+  /// board stands on when it is NOT placed on the layout ([layoutPos] wins).
+  /// Read only by the drawing layer (the electrical riser places the board
+  /// on this floor's band); never by the sizing. Null ⇒ unchanged (the riser's
+  /// feeder-depth tier). Additive + tolerant in `.mechx`.
+  final int? floorIndex;
 
   /// Spare-ways / future-load HEADROOM for this panel (a % spare on the demand +
   /// N reserved outgoing ways). When set, `computePanel` sizes the incomer +
@@ -541,12 +570,14 @@ class ElectricalPanel {
     this.sourceType = PanelSource.utility,
     this.fedByCircuitId,
     this.essential = false,
+    this.serviceEntrance,
     this.upsBacked = false,
     this.submeter = false,
     this.heatW,
     this.x,
     this.y,
     this.layoutPos,
+    this.floorIndex,
     this.headroom,
     this.diversityLibraryId,
     this.circuits = const [],
@@ -574,6 +605,8 @@ class ElectricalPanel {
     String? fedByCircuitId,
     bool clearFedByCircuitId = false,
     bool? essential,
+    bool? serviceEntrance,
+    bool clearServiceEntrance = false,
     bool? upsBacked,
     bool? submeter,
     Power? heatW,
@@ -582,6 +615,8 @@ class ElectricalPanel {
     bool clearPosition = false,
     LayoutPos? layoutPos,
     bool clearLayoutPos = false,
+    int? floorIndex,
+    bool clearFloorIndex = false,
     HeadroomSpec? headroom,
     bool clearHeadroom = false,
     String? diversityLibraryId,
@@ -607,12 +642,17 @@ class ElectricalPanel {
         fedByCircuitId:
             clearFedByCircuitId ? null : (fedByCircuitId ?? this.fedByCircuitId),
         essential: essential ?? this.essential,
+        serviceEntrance: clearServiceEntrance
+            ? null
+            : (serviceEntrance ?? this.serviceEntrance),
         upsBacked: upsBacked ?? this.upsBacked,
         submeter: submeter ?? this.submeter,
         heatW: heatW ?? this.heatW,
         x: clearPosition ? null : (x ?? this.x),
         y: clearPosition ? null : (y ?? this.y),
         layoutPos: clearLayoutPos ? null : (layoutPos ?? this.layoutPos),
+        floorIndex:
+            clearFloorIndex ? null : (floorIndex ?? this.floorIndex),
         headroom: clearHeadroom ? null : (headroom ?? this.headroom),
         diversityLibraryId: clearDiversityLibraryId
             ? null
@@ -640,12 +680,14 @@ class ElectricalPanel {
         'sourceType': sourceType.name,
         if (fedByCircuitId != null) 'fedByCircuitId': fedByCircuitId,
         'essential': essential,
+        if (serviceEntrance != null) 'serviceEntrance': serviceEntrance,
         'upsBacked': upsBacked,
         'submeter': submeter,
         if (heatW != null) 'heatW': heatW!.watts,
         if (x != null) 'x': x,
         if (y != null) 'y': y,
         if (layoutPos != null) 'layoutPos': layoutPos!.toJson(),
+        if (floorIndex != null) 'floorIndex': floorIndex,
         if (headroom != null) 'headroom': headroom!.toJson(),
         if (diversityLibraryId != null)
           'diversityLibraryId': diversityLibraryId,
@@ -691,6 +733,9 @@ class ElectricalPanel {
         ),
         fedByCircuitId: json['fedByCircuitId'] as String?,
         essential: json['essential'] == true,
+        serviceEntrance: json['serviceEntrance'] is bool
+            ? json['serviceEntrance'] as bool
+            : null,
         upsBacked: json['upsBacked'] == true,
         submeter: json['submeter'] == true,
         heatW: json['heatW'] == null
@@ -700,6 +745,9 @@ class ElectricalPanel {
         y: (json['y'] as num?)?.toDouble(),
         layoutPos: json['layoutPos'] is Map<String, dynamic>
             ? LayoutPos.fromJson(json['layoutPos'] as Map<String, dynamic>)
+            : null,
+        floorIndex: (json['floorIndex'] is num && (json['floorIndex'] as num) >= 0)
+            ? (json['floorIndex'] as num).toInt()
             : null,
         headroom: json['headroom'] is Map<String, dynamic>
             ? HeadroomSpec.fromJson(json['headroom'] as Map<String, dynamic>)

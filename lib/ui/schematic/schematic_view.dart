@@ -32,13 +32,16 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
     show flowFromBySizing, kPumpSetValveTrain, plantMoverCaptions;
+import 'package:mechx_engine/report/number_format.dart' show formatTankCapacity;
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../../store/app_state.dart';
 import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
+import '../../store/fire_store.dart' show fireBreakTankIdsProvider;
 import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
 import '../../store/layer_store.dart'
     show DisciplineLayer, DisciplineLayerInfo, servicesFor;
@@ -90,6 +93,32 @@ export 'riser_tags.dart' show equipmentDetail;
 /// F7: the mode / filter / toggles / viewports are held in the transient
 /// [schematicViewProvider] so they survive a hop to another workspace and back.
 /// Only the ephemeral Export / Show popover-open flags stay widget-local.
+/// Backlog Z-5 — the ONE node label both riser painters (Auto and Edit)
+/// print: a fire zone break tank ([fireBreakTankIds], the zone chain's
+/// `fireBreakTankIdsProvider`) reads [kFireBreakTankLabel]; any other
+/// component its [NodeComponent.label]; a fixture its type; a junction null.
+String? schematicNodeLabel(NetNode node,
+    {Set<String> fireBreakTankIds = const {}}) {
+  if (fireBreakTankIds.contains(node.id)) return kFireBreakTankLabel;
+  final c = node.component;
+  if (c != null) return c.label;
+  final f = node.fixture;
+  if (f != null) return _schematicFixtureLabel(f);
+  return null;
+}
+
+String _schematicFixtureLabel(PlumbingFixture f) => switch (f) {
+      PlumbingFixture.waterClosetFlushValve => 'WC',
+      PlumbingFixture.waterClosetFlushTank => 'WC',
+      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.urinalFlushValve => 'Urinal',
+      PlumbingFixture.lavatory => 'Lavatory',
+      PlumbingFixture.shower => 'Shower',
+      PlumbingFixture.bathtub => 'Bathtub',
+      PlumbingFixture.kitchenSink => 'Sink',
+      PlumbingFixture.hoseBibb => 'Hose bibb',
+    };
+
 class SchematicView extends ConsumerStatefulWidget {
   const SchematicView({super.key});
 
@@ -1052,6 +1081,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     required Map<String, String> riserTagsById,
     required Map<String, String> detailByNode,
     required Set<String> transferPumpNodeIds,
+    required Set<String> fireBreakTankIds,
     required bool hotWaterRecirc,
     required double rightOverlayWidth,
     required double labelZoom,
@@ -1067,6 +1097,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       riserTagsById,
       detailByNode,
       transferPumpNodeIds,
+      fireBreakTankIds,
       widget.showDetails,
       hotWaterRecirc,
       rightOverlayWidth,
@@ -1086,6 +1117,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       riserTagsById: riserTagsById,
       detailByNode: detailByNode,
       transferPumpNodeIds: transferPumpNodeIds,
+      fireBreakTankIds: fireBreakTankIds,
       showDetails: widget.showDetails,
       hotWaterRecirc: hotWaterRecirc,
       rightOverlayWidth: rightOverlayWidth,
@@ -1148,6 +1180,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     // riser + the panel feed read), never one system duty on every unit.
     final detailByNode = ref.watch(riserEquipmentDetailsProvider);
     final transferPumps = ref.watch(transferPumpNodeIdsProvider);
+    final fireBreakTanks = ref.watch(fireBreakTankIdsProvider);
     // G2: the hot-water recirculation loop exists when the engine sizes one
     // (the provider is non-null) — draw the HWR return.
     final hotWaterRecirc = ref.watch(hotWaterAssumedReturnProvider);
@@ -1174,6 +1207,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
               riserTagsById: tags,
               detailByNode: detailByNode,
               transferPumpNodeIds: transferPumps,
+              fireBreakTankIds: fireBreakTanks,
               hotWaterRecirc: hotWaterRecirc,
               // Round 26 — the bottom-right notes / title block are kept clear
               // of the band diagram.
@@ -2184,6 +2218,7 @@ class _EditElevationState extends ConsumerState<_EditElevation>
                       sizing: sizing,
                       building: building,
                       mounting: ref.watch(mountingProvider),
+                      fireBreakTankIds: ref.watch(fireBreakTankIdsProvider),
                       colors: colors,
                       transform: vt,
                       selectedEdgeIds: selection.edgeIds,
@@ -3036,6 +3071,7 @@ class _AutoSchematicPainter extends CustomPainter {
     this.riserTagsById = const {},
     this.detailByNode = const {},
     this.transferPumpNodeIds = const {},
+    this.fireBreakTankIds = const {},
     this.showDetails = true,
     this.hotWaterRecirc = false,
     this.rightOverlayWidth = 0,
@@ -3061,6 +3097,9 @@ class _AutoSchematicPainter extends CustomPainter {
   /// TRANSFER PUMP in the plant detail; every other mover reads BOOSTER PUMP.
   /// The kW comes from each node's own duty in [detailByNode].
   final Set<String> transferPumpNodeIds;
+
+  /// Backlog Z-4 — fire zone break tanks, labelled 'Fire break tank'.
+  final Set<String> fireBreakTankIds;
 
   /// G2: true when the engine's hot-water RECIRCULATION loop exists (the
   /// `hotWaterRecircProvider` result is non-null). When set — and the network
@@ -3441,24 +3480,9 @@ class _AutoSchematicPainter extends CustomPainter {
 
   /// A human label for [node] on the single-line — its equipment name
   /// ([NodeComponent.label]) or fixture type — or null for a plain junction.
-  String? _nodeLabel(NetNode node) {
-    final c = node.component;
-    if (c != null) return c.label;
-    final f = node.fixture;
-    if (f != null) return _fixtureLabel(f);
-    return null;
-  }
+  String? _nodeLabel(NetNode node) =>
+      schematicNodeLabel(node, fireBreakTankIds: fireBreakTankIds);
 
-  String _fixtureLabel(PlumbingFixture f) => switch (f) {
-        PlumbingFixture.waterClosetFlushValve => 'WC',
-        PlumbingFixture.waterClosetFlushTank => 'WC',
-        PlumbingFixture.urinalFlushTank => 'Urinal',
-        PlumbingFixture.lavatory => 'Lavatory',
-        PlumbingFixture.shower => 'Shower',
-        PlumbingFixture.bathtub => 'Bathtub',
-        PlumbingFixture.kitchenSink => 'Sink',
-        PlumbingFixture.hoseBibb => 'Hose bibb',
-      };
 
   /// Dashed connectors between floors that share a service but have NO drawn
   /// riser of that service between them — a "you haven't routed this vertical
@@ -4129,9 +4153,8 @@ class _AutoSchematicPainter extends CustomPainter {
       if (n.component != component) continue;
       final litres = n.tankCapacityLitres;
       if (litres == null || litres <= 0) continue;
-      final m3 = litres / 1000.0;
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      // Backlog W-7 — the ONE capacity formatter (unit included).
+      return formatTankCapacity(litres);
     }
     return null;
   }
@@ -4253,7 +4276,7 @@ class _AutoSchematicPainter extends CustomPainter {
       final m3 = _tankM3(NodeComponent.roofTank);
       _drawText(
         canvas,
-        m3 != null ? 'ROOF TANK $m3 m3' : 'ROOF TANK',
+        m3 != null ? 'ROOF TANK $m3' : 'ROOF TANK',
         Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
@@ -4390,7 +4413,7 @@ class _AutoSchematicPainter extends CustomPainter {
         final m3 = _tankM3(NodeComponent.groundTank);
         _drawText(
           canvas,
-          m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+          m3 != null ? 'GROUND TANK $m3' : 'GROUND TANK',
           Offset(cx + glyph / 2 + 8, gy + glyph / 2 - 6),
           fontSize: 9,
           color: colors.textSecondary,
@@ -4408,7 +4431,7 @@ class _AutoSchematicPainter extends CustomPainter {
       final m3 = _tankM3(NodeComponent.groundTank);
       _drawText(
         canvas,
-        m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+        m3 != null ? 'GROUND TANK $m3' : 'GROUND TANK',
         Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
@@ -4824,6 +4847,7 @@ class _AutoSchematicPainter extends CustomPainter {
       old.riserTagsById != riserTagsById ||
       old.detailByNode != detailByNode ||
       old.transferPumpNodeIds != transferPumpNodeIds ||
+      old.fireBreakTankIds != fireBreakTankIds ||
       old.showDetails != showDetails ||
       old.hotWaterRecirc != hotWaterRecirc ||
       old.rightOverlayWidth != rightOverlayWidth ||
@@ -4857,11 +4881,15 @@ class _EditSchematicPainter extends CustomPainter {
     this.marquee,
     this.marqueeWindow = true,
     this.mounting = const MountingHeights(),
+    this.fireBreakTankIds = const {},
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
+
+  /// Backlog Z-5 — fire zone break tanks, labelled 'Fire break tank'.
+  final Set<String> fireBreakTankIds;
 
   /// The project mounting heights — the SAME value the solve sizes on, so the
   /// riser length label equals the solved length (audit water-drainage-8).
@@ -5165,7 +5193,8 @@ class _EditSchematicPainter extends CustomPainter {
         // BOM / report / exported riser), so a gravity stack never prints
         // its old ceiling-datum length here.
         final lengthM =
-            riserElevationDelta(edge, a, b, building, mounting).meters;
+            riserElevationDelta(edge, a, b, building, mounting, network)
+                .meters;
         final s = sizing[edge.id];
         final lenStr = '${lengthM.toStringAsFixed(1)} m';
         final label = s != null ? '${_sizeLabel(s)} · $lenStr' : lenStr;
@@ -5244,24 +5273,9 @@ class _EditSchematicPainter extends CustomPainter {
 
   /// A human label for [node] — its equipment name or fixture type — or null for
   /// a plain junction. Mirrors the Auto painter.
-  String? _nodeLabel(NetNode node) {
-    final c = node.component;
-    if (c != null) return c.label;
-    final f = node.fixture;
-    if (f != null) return _fixtureLabel(f);
-    return null;
-  }
+  String? _nodeLabel(NetNode node) =>
+      schematicNodeLabel(node, fireBreakTankIds: fireBreakTankIds);
 
-  String _fixtureLabel(PlumbingFixture f) => switch (f) {
-        PlumbingFixture.waterClosetFlushValve => 'WC',
-        PlumbingFixture.waterClosetFlushTank => 'WC',
-        PlumbingFixture.urinalFlushTank => 'Urinal',
-        PlumbingFixture.lavatory => 'Lavatory',
-        PlumbingFixture.shower => 'Shower',
-        PlumbingFixture.bathtub => 'Bathtub',
-        PlumbingFixture.kitchenSink => 'Sink',
-        PlumbingFixture.hoseBibb => 'Hose bibb',
-      };
 
   /// Nodes carry their schematic symbol (equipment glyph / fixture drop-triangle
   /// / plain junction) + a label — reusing the Auto painter's treatment (B6), so
@@ -5349,6 +5363,7 @@ class _EditSchematicPainter extends CustomPainter {
   @override
   bool shouldRepaint(_EditSchematicPainter old) =>
       old.network != network ||
+      old.fireBreakTankIds != fireBreakTankIds ||
       old.sizing != sizing ||
       old.building != building ||
       old.mounting != mounting ||
@@ -5636,9 +5651,8 @@ class _SystemNotes extends ConsumerWidget {
       if (n.component != component) continue;
       final litres = n.tankCapacityLitres;
       if (litres == null || litres <= 0) continue;
-      final m3 = litres / 1000.0;
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      // Backlog W-7 — the ONE capacity formatter (unit included).
+      return formatTankCapacity(litres);
     }
     return null;
   }
@@ -5817,7 +5831,8 @@ class RiserSystemSummary extends ConsumerWidget {
       final b = network.nodeById(e.toId);
       if (a == null || b == null) continue;
       riserEdgeCount++;
-      totalRiserM += riserElevationDelta(e, a, b, building, mounting).meters;
+      totalRiserM +=
+          riserElevationDelta(e, a, b, building, mounting, network).meters;
     }
 
     return Column(

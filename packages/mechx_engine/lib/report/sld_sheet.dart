@@ -111,6 +111,18 @@ class SldSheet {
   /// byte-identical.
   final double? belowMinLabelPt;
 
+  /// Drawing backlog C-4 — tags the builder could only print as numbered KEY
+  /// circles (read through the sheet's pipe-key table). Lets a lone-floor
+  /// riser page prefer the band height that tags most elements directly.
+  /// 0 (the default) ⇒ byte-identical.
+  final int keyCount;
+
+  /// Drawing backlog I-2 — of [keyCount], the keys that name a PLANT item
+  /// (tank, pump, booster, PRV, water meter) or a trunk pipe between two plant
+  /// items: a plant-level riser page re-draws its plant group in its own row
+  /// while this is non-zero. 0 (the default) ⇒ byte-identical.
+  final int plantKeyCount;
+
   const SldSheet({
     required this.prims,
     required this.minX,
@@ -121,6 +133,8 @@ class SldSheet {
     required this.supplyNote,
     this.overlapCount = 0,
     this.belowMinLabelPt,
+    this.keyCount = 0,
+    this.plantKeyCount = 0,
   });
 
   /// This sheet flagged as printing at [pt] (below the plotted floor).
@@ -134,6 +148,8 @@ class SldSheet {
         supplyNote: supplyNote,
         overlapCount: overlapCount,
         belowMinLabelPt: pt,
+        keyCount: keyCount,
+        plantKeyCount: plantKeyCount,
       );
 
   bool get isEmpty => prims.isEmpty;
@@ -141,8 +157,20 @@ class SldSheet {
 
 /// Round 43 — the legibility warning a sheet carrying
 /// [SldSheet.belowMinLabelPt] prints (EN + ID, ASCII). Null ⇒ nothing.
-String? sldLegibilityWarning(double? pt, {double minPt = 7}) => pt == null
+///
+/// Fix round F3 (2026-11-13) — the stamp fires only when the size it PRINTS
+/// (one decimal) is strictly below [minPt]: a page fitted to 6.9995 pt reads
+/// "7.0 pt", which is the floor, never "7.0 pt (< 7 pt)".
+String? sldLegibilityWarning(double? pt, {double minPt = 7}) =>
+    pt == null || !sldPrintsBelowMinPt(pt, minPt: minPt)
     ? null
     : 'PERHATIAN: label tercetak ${pt.toStringAsFixed(1)} pt (< ${minPt.toStringAsFixed(0)} pt) / '
         'labels print below ${minPt.toStringAsFixed(0)} pt - gunakan kertas lebih besar '
         'atau pecah lembar / use a larger sheet or split';
+
+/// Fix round F3 (2026-11-13) — true when [pt], rounded to the one decimal
+/// [sldLegibilityWarning] prints, is strictly below [minPt]. The one test
+/// every pagination flag and the stamp share, so a sheet is never stamped
+/// with a size that reads as the floor itself.
+bool sldPrintsBelowMinPt(double pt, {double minPt = 7}) =>
+    double.parse(pt.toStringAsFixed(1)) < minPt;

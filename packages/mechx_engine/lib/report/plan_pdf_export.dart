@@ -26,6 +26,8 @@ import '../sizing/network_sizing.dart';
 import '../units.dart';
 import 'drawing_chrome.dart';
 import 'plan_annotation_layout.dart';
+import 'plan_detail.dart';
+import 'plan_detail_sheet.dart' show planDetailCaptionMm, planDetailSheetPlot;
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
@@ -118,6 +120,7 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
   required PaperSize paper,
   required ReferenceGrid? grid,
   int? minScaleDenominator,
+  PlanFixedFit? fixedFit,
 }) {
   final pageW = paper.widthPt; // landscape sheet width, points
   final pageH = paper.heightPt; // landscape sheet height, points
@@ -204,9 +207,9 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
       hasContent: hasContent,
       paperLabel: paper.label,
       minDenominator: minScaleDenominator);
-  scale = snap.scale;
-  final scaleRow = snap.scaleRow;
-  final pointsPerMeter = snap.pointsPerMeter;
+  scale = fixedFit != null ? 1 / kPlanPaperMmPerPt : snap.scale;
+  final scaleRow = fixedFit?.scaleRow ?? snap.scaleRow;
+  final pointsPerMeter = fixedFit != null ? null : snap.pointsPerMeter;
   final scaleBarBox = pointsPerMeter == null
       ? null
       : pdfScaleBarBox(
@@ -218,8 +221,8 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
     pageW: pageW,
     pageH: pageH,
     margin: margin,
-    minX: minX,
-    minY: minY,
+    minX: fixedFit != null ? 0.0 : minX,
+    minY: fixedFit != null ? 0.0 : minY,
     maxX: maxX,
     maxY: maxY,
     hasContent: hasContent,
@@ -237,8 +240,12 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
     scaleRow: scaleRow,
     pointsPerMeter: pointsPerMeter,
     // The grid-bubble strip sits LEFT of and ABOVE the fitted extent.
-    offX: margin + gridPad + (availW - spanX * scale) / 2,
-    offY: margin + gridPad + (availH - spanY * scale) / 2,
+    offX: fixedFit != null
+        ? 0.0
+        : margin + gridPad + (availW - spanX * scale) / 2,
+    offY: fixedFit != null
+        ? 0.0
+        : margin + gridPad + (availH - spanY * scale) / 2,
     // Frame discipline (audit 2026-10 drawing-output-5): everything outside
     // the frame (four strips) plus the title-block box is occupied, so every
     // tag picks an in-frame slot.
@@ -259,6 +266,14 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
       if (northBox != null) northBox,
       if (legendBox != null) legendBox,
       if (scaleBarBox != null) scaleBarBox,
+      // Drawing-review D5 — the top-left line the overlap stamp prints on
+      // (when it prints) is kept free, so a key table never lands under it.
+      (
+        minX: margin,
+        minY: pageH - margin - 26,
+        maxX: margin + 520,
+        maxY: pageH - margin,
+      ),
     ],
   );
 }
@@ -286,6 +301,8 @@ PlanSheetPlot? planSheetPlot({
   PaperSize paper = PaperSize.a3Landscape,
   int? minScaleDenominator,
   ReferenceGrid? grid,
+  PlanFixedFit? fixedFit,
+  List<LabelBox> extraOccupiedPx = const [],
 }) {
   final f = _planSheetFit(
       net: net,
@@ -299,8 +316,12 @@ PlanSheetPlot? planSheetPlot({
       underlay: underlay,
       paper: paper,
       grid: grid,
-      minScaleDenominator: minScaleDenominator);
-  if (f.pointsPerMeter == null || metersPerPixel == null) return null;
+      minScaleDenominator: minScaleDenominator,
+      fixedFit: fixedFit);
+  if ((f.pointsPerMeter == null && fixedFit == null) ||
+      metersPerPixel == null) {
+    return null;
+  }
   // Page points → sheet pixels (the inverse of planToPdf's tx / ty).
   double px(double x) => (x - f.offX) / f.scale + f.minX;
   double py(double y) => (f.pageH - f.offY - y) / f.scale + f.minY;
@@ -315,7 +336,33 @@ PlanSheetPlot? planSheetPlot({
           maxX: px(o.maxX),
           maxY: math.max(py(o.minY), py(o.maxY)),
         ),
+      ...extraOccupiedPx,
     ],
+    // Drawing backlog L-1 — the PDF's own page frame, so the DXF can lay its
+    // annotations out in exactly the PDF's frame (one placement result).
+    frame: PlanPageFrame(
+      offX: f.offX,
+      offY: f.offY,
+      minX: f.minX,
+      minY: f.minY,
+      scale: f.scale,
+      pageH: f.pageH,
+      pointsPerMeter: f.pointsPerMeter,
+      extent: (minX: f.minX, minY: f.minY, maxX: f.maxX, maxY: f.maxY),
+      occupiedPt: [
+        ...f.occupied,
+        // The same mapping `_planPdfBuild` gives its extraOccupiedPx.
+        for (final o in extraOccupiedPx)
+          (
+            minX: f.offX + (o.minX - f.minX) * f.scale,
+            minY: math.min((f.pageH - f.offY) - (o.minY - f.minY) * f.scale,
+                (f.pageH - f.offY) - (o.maxY - f.minY) * f.scale),
+            maxX: f.offX + (o.maxX - f.minX) * f.scale,
+            maxY: math.max((f.pageH - f.offY) - (o.minY - f.minY) * f.scale,
+                (f.pageH - f.offY) - (o.maxY - f.minY) * f.scale),
+          ),
+      ],
+    ),
   );
 }
 
@@ -405,6 +452,430 @@ Uint8List planToPdf({
   Map<String, String>? edgeTags,
   Map<String, String>? nodeTags,
   double? gravitySlope,
+  List<PlanDetailCallout> details = const [],
+  PlanMarks extraMarks = PlanMarks.empty,
+  List<LabelBox> extraOccupiedPx = const [],
+  Set<String> hiddenNodeIds = const {},
+  PlanFixedFit? fixedFit,
+  Set<String> unlabelledIds = const {},
+}) =>
+    _planPdfBuild(
+      net: net,
+      sizing: sizing,
+      edgeLengths: edgeLengths,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+      paper: paper,
+      minScaleDenominator: minScaleDenominator,
+      edgeElevationLabels: edgeElevationLabels,
+      grid: grid,
+      edgeTags: edgeTags,
+      nodeTags: nodeTags,
+      gravitySlope: gravitySlope,
+      details: details,
+      extraMarks: extraMarks,
+      extraOccupiedPx: extraOccupiedPx,
+      hiddenNodeIds: hiddenNodeIds,
+      fixedFit: fixedFit,
+      unlabelledIds: unlabelledIds,
+    ).bytes;
+
+/// Drawing review R1 — the detail callouts the plan sheet needs so it is
+/// issued WITHOUT the overlap stamp (empty when it already places every
+/// label clear, or when it is NTS). Lays the sheet out exactly as [planToPdf]
+/// does; while annotations still overprint, the anchors of those that do
+/// seed [planDetailClusterRects] (link 20 paper mm, margin 6 paper mm), their
+/// labels move to the detail and the sheet is laid out again — at most six
+/// passes. Each callout names [detailSheetRef] (the detail sheet's drawing
+/// number). Same inputs as [planToPdf]; pure.
+List<PlanDetailCallout> planSheetDetails({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required Map<String, Length> edgeLengths,
+  required String sheetId,
+  required int floorIndex,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  required String detailSheetRef,
+  String Function(int k)? detailSheetRefOf,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+  int? minScaleDenominator,
+  Map<String, String>? edgeElevationLabels,
+  ReferenceGrid? grid,
+  Map<String, String>? edgeTags,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
+}) {
+  if (metersPerPixel == null || metersPerPixel <= 0) return const [];
+  final area = planDetailDrawingAreaMm(
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      paper: paper);
+  ({List<PlanDetailCallout> d, int mainOverlap}) run(List<double> factors) {
+    var details = <PlanDetailCallout>[];
+    for (var pass = 0; pass < 6; pass++) {
+      final r = _planPdfBuild(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        projectName: projectName,
+        sheetName: sheetName,
+        dateString: dateString,
+        chrome: chrome,
+        metersPerPixel: metersPerPixel,
+        underlay: underlay,
+        paper: paper,
+        minScaleDenominator: minScaleDenominator,
+        edgeElevationLabels: edgeElevationLabels,
+        grid: grid,
+        edgeTags: edgeTags,
+        nodeTags: nodeTags,
+        gravitySlope: gravitySlope,
+        details: details,
+        layoutOnly: true,
+      );
+      final ann = r.ann;
+      final n = r.scaleDenominator;
+      if (ann.overlapCount == 0 || n == null) {
+        return (d: details, mainOverlap: ann.overlapCount);
+      }
+      final seeds = ann.unresolvedAnchorsPx;
+      if (seeds.isEmpty) return (d: details, mainOverlap: ann.overlapCount);
+      // Paper millimetres → sheet pixels at the plotted 1 : n.
+      final pxPerMm = n / (metersPerPixel * 1000);
+      // The cluster link is tightened (1, 1/2, 1/4) when that lets the detail
+      // sheet plot at a larger scale ([planDetailPack]): a plant room beside a
+      // toilet core boxes as two details at 1:25 / 1:50, not one at 1:100.
+      List<LabelBox>? rects;
+      var bestN = 0;
+      for (final f in factors) {
+        final r = planDetailClusterRects(
+          seeds: seeds,
+          elements: ann.elementAnchorsPx,
+          linkPx: kPlanDetailLinkMm * pxPerMm * f,
+          marginPx: kPlanDetailMarginMm * pxPerMm * f,
+          existing: [for (final d in details) d.rectPx],
+        );
+        final n = planDetailPack(sizesM: [
+          for (final b in r)
+            (
+              w: (b.maxX - b.minX) * metersPerPixel,
+              h: (b.maxY - b.minY) * metersPerPixel
+            ),
+        ], area: area)
+            .n;
+        if (rects == null || n < bestN) {
+          rects = r;
+          bestN = n;
+        }
+      }
+      details = [
+        for (var i = 0; i < rects!.length; i++)
+          PlanDetailCallout(
+              letter: planDetailLetter(i),
+              rectPx: rects[i],
+              sheetRef: detailSheetRef),
+      ];
+    }
+    return (d: details, mainOverlap: -1);
+  }
+
+  // The overlap count of the detail sheet drawing [ds] (and its scale).
+  ({int overlap, int n}) detailEval(List<PlanDetailCallout> ds) {
+    final plot = planDetailSheetPlot(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        metersPerPixel: metersPerPixel,
+        details: ds,
+        areaMm: area,
+        edgeTags: edgeTags,
+        edgeElevationLabels: edgeElevationLabels);
+    final overlap = _planPdfBuild(
+      net: plot.net,
+      sizing: plot.sizing,
+      edgeLengths: plot.edgeLengths,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: 0.001,
+      edgeElevationLabels: plot.edgeElevationLabels,
+      edgeTags: plot.edgeTags,
+      nodeTags: nodeTags,
+      gravitySlope: gravitySlope,
+      extraMarks: plot.marks,
+      extraOccupiedPx: plot.occupiedMm,
+      hiddenNodeIds: plot.hiddenNodeIds,
+      unlabelledIds: plot.unlabelledIds,
+      fixedFit: const PlanFixedFit(),
+      layoutOnly: true,
+    ).ann.overlapCount;
+    return (
+      overlap: overlap,
+      n: plot.details.isEmpty ? 0 : plot.details.first.scaleDenominator
+    );
+  }
+
+  // Each candidate link schedule is laid out to the end; the one whose plan
+  // AND detail sheet place the most labels clear wins (then the larger
+  // detail scale, then the earlier schedule) — deterministic.
+  ({List<PlanDetailCallout> d, int cost, int n, int main})? best;
+  for (final factors in const [
+    [1.0, 0.5, 0.25],
+    [1.0],
+    [0.5],
+    [0.25],
+  ]) {
+    final r = run(factors);
+    if (r.d.isEmpty) return r.d;
+    final main = r.mainOverlap < 0 ? 1 << 20 : r.mainOverlap;
+    final e = detailEval(r.d);
+    final cost = main + e.overlap;
+    if (best == null || cost < best.cost || (cost == best.cost && e.n < best.n)) {
+      best = (d: r.d, cost: cost, n: e.n, main: main);
+    }
+    if (cost == 0) break;
+  }
+  final b = best!;
+  if (detailSheetRefOf == null) return b.d;
+
+  // Drawing backlog I-3 — the plan's details, each at the scale it was laid
+  // out and checked at: (a) a cluster whose detail would not plot at least
+  // twice as large as the plan is KEYED on the plan instead (no detail
+  // sheet) when the plan then overprints no more; (b) the rest are packed
+  // as many to a sheet as fit at their own scales (largest first), a sheet
+  // whose packed details would overprint splitting back into one per
+  // detail; letters, drawing numbers and match lines follow.
+  final base = _planPdfBuild(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    projectName: projectName,
+    sheetName: sheetName,
+    dateString: dateString,
+    chrome: chrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay,
+    paper: paper,
+    minScaleDenominator: minScaleDenominator,
+    edgeElevationLabels: edgeElevationLabels,
+    grid: grid,
+    edgeTags: edgeTags,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    layoutOnly: true,
+  );
+  final planN = base.scaleDenominator;
+  int mainOverlap(List<PlanDetailCallout> ds) => _planPdfBuild(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        projectName: projectName,
+        sheetName: sheetName,
+        dateString: dateString,
+        chrome: chrome,
+        metersPerPixel: metersPerPixel,
+        underlay: underlay,
+        paper: paper,
+        minScaleDenominator: minScaleDenominator,
+        edgeElevationLabels: edgeElevationLabels,
+        grid: grid,
+        edgeTags: edgeTags,
+        nodeTags: nodeTags,
+        gravitySlope: gravitySlope,
+        details: ds,
+        layoutOnly: true,
+      ).ann.overlapCount;
+  ({double w, double h}) sizeOf(PlanDetailCallout d) => (
+        w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
+        h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
+      );
+  List<PlanDetailCallout> finalize(List<PlanDetailCallout> ds) {
+    // (a) keyed clusters.
+    var cur = [...ds];
+    final cand = [
+      for (var i = 0; i < cur.length; i++)
+        if (planN != null && cur[i].scale! * 2 > planN) i
+    ];
+    if (cand.isNotEmpty) {
+      final baseline = mainOverlap(cur);
+      final all = [
+        for (var i = 0; i < cur.length; i++)
+          cand.contains(i) ? cur[i].asKeyed() : cur[i]
+      ];
+      if (mainOverlap(all) <= baseline) {
+        cur = all;
+      } else {
+        for (final i in cand) {
+          final trial = [...cur]..[i] = cur[i].asKeyed();
+          if (mainOverlap(trial) <= baseline) cur = trial;
+        }
+      }
+    }
+    final kept = [for (final d in cur) if (!d.keyed) d];
+    final keyed = [for (final d in cur) if (d.keyed) d];
+    if (kept.isEmpty) return keyed;
+    // (b) as many to a sheet as fit, each at its own scale.
+    var bins = planDetailBins(
+        sizesM: [for (final d in kept) sizeOf(d)],
+        scales: [for (final d in kept) d.scale!],
+        area: area,
+        captionMm: planDetailCaptionMm(kept));
+    bins = [
+      for (final bin in bins)
+        if (bin.length > 1 &&
+            detailEval([for (final i in bin) kept[i]]).overlap > 0)
+          for (final i in bin) [i]
+        else
+          bin
+    ]..sort((p, q) => p.first.compareTo(q.first));
+    final sheetOf = <int, int>{
+      for (var s = 0; s < bins.length; s++)
+        for (final i in bins[s]) i: s,
+    };
+    final split = kept.any((d) => d.matches.isNotEmpty);
+    final cuts =
+        split ? planDetailSharedCuts([for (final d in kept) d.rectPx]) : null;
+    return [
+      for (var i = 0; i < kept.length; i++)
+        kept[i].renamed(planDetailLetter(i), detailSheetRefOf(sheetOf[i]!),
+            matches: cuts == null
+                ? const []
+                : [
+                    for (final c in cuts[i])
+                      PlanDetailMatch(c.x1, c.y1, c.x2, c.y2,
+                          letter: planDetailLetter(c.other),
+                          sheetRef: detailSheetRefOf(sheetOf[c.other]!)),
+                  ]),
+      ...keyed,
+    ];
+  }
+
+  if (b.cost == b.main) {
+    // One sheet, one shared scale: every detail at that scale.
+    final n = detailEval(b.d).n;
+    return finalize([for (final d in b.d) d.atScale(n)]);
+  }
+
+  // Drawing review S1 — the shared detail sheet still overprints: ONE
+  // cluster per detail sheet (each at the largest standard scale that fits
+  // it alone), and a cluster that still overprints alone is split in two
+  // along its longer side ([planDetailSplitRect], elements by anchor) until
+  // every piece clears or plots at 1:10 (depth <= 4). Pieces with no element
+  // anchor are dropped (nothing of theirs would be labelled). Each piece gets
+  // its own drawing number ([detailSheetRefOf]) and the pieces of a split
+  // name each other with a MATCH LINE.
+  final anchors = _planPdfBuild(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    projectName: projectName,
+    sheetName: sheetName,
+    dateString: dateString,
+    chrome: chrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay,
+    paper: paper,
+    minScaleDenominator: minScaleDenominator,
+    edgeElevationLabels: edgeElevationLabels,
+    grid: grid,
+    edgeTags: edgeTags,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    layoutOnly: true,
+  ).ann.elementAnchorsPx;
+  bool holds(LabelBox r) => anchors.any((a) =>
+      a.x >= r.minX && a.x <= r.maxX && a.y >= r.minY && a.y <= r.maxY);
+  List<LabelBox> refine(LabelBox r, int depth) {
+    final e = detailEval([
+      PlanDetailCallout(letter: 'A', rectPx: r, sheetRef: detailSheetRef)
+    ]);
+    if (e.overlap == 0 || e.n <= kDetailScaleLadder.first || depth >= 4) {
+      return [r];
+    }
+    final (p, q) = planDetailSplitRect(r, anchors);
+    return [
+      for (final h in [p, q])
+        if (holds(h)) ...refine(h, depth + 1)
+    ];
+  }
+
+  final pieces = [for (final d in b.d) ...refine(d.rectPx, 0)];
+  final cuts = planDetailSharedCuts(pieces);
+  final s1 = [
+    for (var i = 0; i < pieces.length; i++)
+      PlanDetailCallout(
+        letter: planDetailLetter(i),
+        rectPx: pieces[i],
+        sheetRef: detailSheetRefOf(i),
+        matches: [
+          for (final c in cuts[i])
+            PlanDetailMatch(c.x1, c.y1, c.x2, c.y2,
+                letter: planDetailLetter(c.other),
+                sheetRef: detailSheetRefOf(c.other)),
+        ],
+      ),
+  ];
+  // Each piece at the scale it was checked at alone.
+  return finalize([for (final d in s1) d.atScale(detailEval([d]).n)]);
+}
+
+/// Drawing review R1 — the cluster link distance and the boundary margin of
+/// a detail, in paper millimetres at the plan's plotted scale.
+const double kPlanDetailLinkMm = 8;
+const double kPlanDetailMarginMm = 4;
+
+({Uint8List bytes, PlanAnnotations ann, int? scaleDenominator}) _planPdfBuild({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required Map<String, Length> edgeLengths,
+  required String sheetId,
+  required int floorIndex,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+  int? minScaleDenominator,
+  Map<String, String>? edgeElevationLabels,
+  ReferenceGrid? grid,
+  Map<String, String>? edgeTags,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
+  List<PlanDetailCallout> details = const [],
+  PlanMarks extraMarks = PlanMarks.empty,
+  List<LabelBox> extraOccupiedPx = const [],
+  Set<String> hiddenNodeIds = const {},
+  PlanFixedFit? fixedFit,
+  bool layoutOnly = false,
+  Set<String> unlabelledIds = const {},
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
@@ -420,7 +891,8 @@ Uint8List planToPdf({
       underlay: underlay,
       paper: paper,
       grid: grid,
-      minScaleDenominator: minScaleDenominator);
+      minScaleDenominator: minScaleDenominator,
+      fixedFit: fixedFit);
   final pageW = fit0.pageW, pageH = fit0.pageH, margin = fit0.margin;
   final minX = fit0.minX, minY = fit0.minY, maxX = fit0.maxX, maxY = fit0.maxY;
   final hasGrid = fit0.hasGrid;
@@ -474,13 +946,17 @@ Uint8List planToPdf({
   void circle(double cx, double cy, double r, {bool fill = false}) {
     const k = 0.5523;
     cs.writeln('${_n(cx + r)} ${_n(cy)} m');
-    cs.writeln('${_n(cx + r)} ${_n(cy + k * r)} ${_n(cx + k * r)} ${_n(cy + r)} '
+    cs.writeln(
+        '${_n(cx + r)} ${_n(cy + k * r)} ${_n(cx + k * r)} ${_n(cy + r)} '
         '${_n(cx)} ${_n(cy + r)} c');
-    cs.writeln('${_n(cx - k * r)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + k * r)} '
+    cs.writeln(
+        '${_n(cx - k * r)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + k * r)} '
         '${_n(cx - r)} ${_n(cy)} c');
-    cs.writeln('${_n(cx - r)} ${_n(cy - k * r)} ${_n(cx - k * r)} ${_n(cy - r)} '
+    cs.writeln(
+        '${_n(cx - r)} ${_n(cy - k * r)} ${_n(cx - k * r)} ${_n(cy - r)} '
         '${_n(cx)} ${_n(cy - r)} c');
-    cs.writeln('${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
+    cs.writeln(
+        '${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
         '${_n(cx + r)} ${_n(cy)} c');
     cs.writeln(fill ? 'f' : 'S');
   }
@@ -496,8 +972,10 @@ Uint8List planToPdf({
     final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
     final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
     final backx = tipx - dirx * arm, backy = tipy - diry * arm;
-    final w1x = backx + perpx * (arm * 0.75), w1y = backy + perpy * (arm * 0.75);
-    final w2x = backx - perpx * (arm * 0.75), w2y = backy - perpy * (arm * 0.75);
+    final w1x = backx + perpx * (arm * 0.75),
+        w1y = backy + perpy * (arm * 0.75);
+    final w2x = backx - perpx * (arm * 0.75),
+        w2y = backy - perpy * (arm * 0.75);
     final (r, g, b) = _serviceColor(service);
     cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
     cs.writeln('1.60 w');
@@ -546,7 +1024,16 @@ Uint8List planToPdf({
   // Frame discipline (audit 2026-10 drawing-output-5): the layout is SEEDED
   // with the whole region outside the frame (four strips) plus the title-block
   // box as occupied space, so every tag picks an in-frame slot.
-  final occupied = fit0.occupied;
+  final occupied = [
+    ...fit0.occupied,
+    for (final o in extraOccupiedPx)
+      (
+        minX: tx(o.minX),
+        minY: math.min(ty(o.minY), ty(o.maxY)),
+        maxX: tx(o.maxX),
+        maxY: math.max(ty(o.minY), ty(o.maxY)),
+      ),
+  ];
 
   // Compose every edge's label up front (size · length · CL · fall) through
   // the ONE composer pair the plan DXF uses, so both print the same text.
@@ -582,6 +1069,10 @@ Uint8List planToPdf({
 
   final ann = layoutPlanAnnotations(
     runHalfWidths: ductHalfPt,
+    flowFromIds: {
+      for (final MapEntry(:key, :value) in sizing.entries)
+        if (value.flowFromId case final f?) key: f,
+    },
     net: net,
     sheetId: sheetId,
     floorIndex: floorIndex,
@@ -594,7 +1085,16 @@ Uint8List planToPdf({
     // Tie dimensions only with a real scale (an unscaled one is fabricated).
     metersPerPixel: metersPerPixel,
     occupied: occupied,
+    details: details,
+    extraMarks: extraMarks,
+    unlabelledIds: unlabelledIds,
   );
+  final scaleDenominator = (pointsPerMeter == null || metersPerPixel == null)
+      ? null
+      : (metersPerPixel * 1000 / (scale * kPlanPaperMmPerPt)).round();
+  if (layoutOnly) {
+    return (bytes: Uint8List(0), ann: ann, scaleDenominator: scaleDenominator);
+  }
 
   // N4: the reference setting-out grid — thin chain column/row lines with bubble
   // labels — is drawn BENEATH the network (the MEP strokes overprint it).
@@ -697,10 +1197,11 @@ Uint8List planToPdf({
     final col = svc == null ? (0.20, 0.20, 0.20) : _serviceColor(svc);
     final comp = n.component;
     if (comp != null) {
-      strokePrims(planComponentPrims(comp, cx: px, cy: py, size: glyph), py, col);
+      strokePrims(
+          planComponentPrims(comp, cx: px, cy: py, size: glyph), py, col);
     } else if (n.role == NodeRole.fixture) {
       strokePrims(planFixturePrims(cx: px, cy: py, size: glyph), py, col);
-    } else {
+    } else if (!hiddenNodeIds.contains(n.id)) {
       cs.writeln('0.20 0.20 0.20 rg');
       circle(px, py, 2, fill: true);
     }
@@ -723,6 +1224,24 @@ Uint8List planToPdf({
         '(${_pdfText(t.text)}) Tj ET');
   }
 
+  // Drawing review R1 — detail boundaries (dashed) + bubbles + captions, and
+  // a detail sheet's viewport frames / captions / scale bars.
+  final mk = ann.marks;
+  for (final l in mk.lines) {
+    cs.writeln('0.10 0.10 0.10 RG ${l.heavy ? '1.2' : '0.7'} w');
+    if (l.dashed) cs.writeln('[6 3] 0 d');
+    cs.writeln('${_n(l.x1)} ${_n(l.y1)} m ${_n(l.x2)} ${_n(l.y2)} l S');
+    if (l.dashed) cs.writeln('[] 0 d');
+  }
+  for (final c in mk.circles) {
+    cs.writeln('0.10 0.10 0.10 RG 0.10 0.10 0.10 rg 0.8 w');
+    circle(c.cx, c.cy, c.r, fill: c.filled);
+  }
+  for (final t in mk.texts) {
+    cs.writeln('BT /F1 ${_fs(t.size)} Tf 0 0 0 rg '
+        '${_n(t.x)} ${_n(t.y)} Td (${_pdfText(t.text)}) Tj ET');
+  }
+
   // Every tag (runs, equipment G1, risers N13) LAST, over all the linework.
   for (final l in ann.labels) {
     final p = l.placement;
@@ -733,12 +1252,30 @@ Uint8List planToPdf({
       cs.writeln('0.30 0.30 0.30 RG 0.5 w');
       cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
     }
+    // Drawing-review D5 — a KEYED element: its numbered circle.
+    final kc = p.keyCircle;
+    if (kc != null) {
+      cs.writeln('0.20 0.20 0.20 RG 0.6 w');
+      circle(kc.x, kc.y, kc.r);
+    }
     final rad = p.angleDeg * math.pi / 180;
     final pc = math.cos(rad), ps = math.sin(rad);
     for (final line in p.lines) {
       cs.writeln('BT /F1 ${_fs(l.textSize)} Tf 0 0 0 rg '
           '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
           '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
+    }
+  }
+  // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table.
+  final kt = ann.keyTable;
+  if (kt != null) {
+    cs.writeln('0.20 0.20 0.20 RG 0.5 w');
+    for (final r in kt.rules) {
+      cs.writeln('${_n(r.x1)} ${_n(r.y1)} m ${_n(r.x2)} ${_n(r.y2)} l S');
+    }
+    for (final t in kt.texts) {
+      cs.writeln('BT /F1 ${_fs(kt.textSize)} Tf 0 0 0 rg '
+          '${_n(t.x)} ${_n(t.y)} Td (${_pdfText(t.text)}) Tj ET');
     }
   }
 
@@ -765,7 +1302,8 @@ Uint8List planToPdf({
         .ops);
     cs.write(pdfLegend(chrome,
         originX: margin + kLegendFrameInset, originY: margin + 28));
-    cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
+    cs.write(pdfNorthArrow(chrome,
+        cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
   // The honest divided scale bar rides the calibration (A3): drawn ONLY when a
   // real points-per-metre exists — never at an arbitrary auto-fit ratio.
@@ -781,10 +1319,47 @@ Uint8List planToPdf({
   // ── Object assembly with a byte-accurate cross-reference table ──────────────
   // A1: a raster underlay adds one image XObject (object 6); the shared
   // assembler keeps the plain object sequence + xref byte-accurate.
-  return assemblePlanPdfDocument(
-    content: cs.toString(),
-    pageW: pageW,
-    pageH: pageH,
-    raster: underlay is RasterPlanUnderlay ? underlay : null,
+  return (
+    bytes: assemblePlanPdfDocument(
+      content: cs.toString(),
+      pageW: pageW,
+      pageH: pageH,
+      raster: underlay is RasterPlanUnderlay ? underlay : null,
+    ),
+    ann: ann,
+    scaleDenominator: scaleDenominator,
+  );
+}
+
+/// Drawing review R1 — the drawing area of a detail sheet in paper
+/// millimetres from the page's top-left (y-down): inside the frame, clear of
+/// the north arrow, the legend / title-block band and the top stamp line.
+LabelBox planDetailDrawingAreaMm({
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  PaperSize paper = PaperSize.a3Landscape,
+}) {
+  final f = _planSheetFit(
+      net: const Network(),
+      sheetId: '',
+      floorIndex: 0,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: null,
+      underlay: null,
+      paper: paper,
+      grid: null,
+      fixedFit: const PlanFixedFit());
+  const k = kPlanPaperMmPerPt;
+  final top = f.margin + 26;
+  return (
+    minX: f.margin * k,
+    minY: top * k,
+    maxX: (f.margin + f.availW) * k,
+    maxY: (f.pageH - f.margin - (f.pageH - 2 * f.margin - f.availH)) * k,
   );
 }

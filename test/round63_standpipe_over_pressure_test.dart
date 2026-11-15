@@ -143,11 +143,20 @@ void main() {
     );
     // Round 76 — the HOSE VALVES are judged on their own (175 psi static,
     // NFPA 14 7.2.3.2): ~1855 kPa churn less the 4.7 m lift to L1 is
-    // ~1810 kPa > 1207, so this riser still raises the outlet warning.
+    // ~1810 kPa > 1207. Backlog A-3 — they are DESIGNATED pressure-
+    // regulating hose valves (an info, no longer a warning) and the system
+    // is classed PN25 (1600 < churn <= 2413).
+    final issues = c.read(designIssuesProvider);
     expect(
-      c.read(designIssuesProvider).any(
-          (i) => i.kind.startsWith('standpipe-outlet-over-pressure:FP:')),
+      issues.any((i) => i.kind.startsWith('standpipe-prv-hose-valves:FP:')),
       isTrue,
     );
+    expect(
+      issues.any((i) => i.kind.startsWith('standpipe-outlet-over-pressure')),
+      isFalse,
+    );
+    expect(c.read(prvHoseValvesProvider), isNotEmpty);
+    expect(c.read(firePressureClassesProvider).single.pressureClass,
+        firePressureClassFor(_churnKpa(b)));
   });
 }

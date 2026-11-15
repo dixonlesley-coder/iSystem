@@ -19,6 +19,8 @@ import 'package:flutter/widgets.dart' show immutable, Offset, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/connectivity.dart'
+    show serviceEntrancePanelIds, unfedPanelsOf;
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart'
@@ -1535,6 +1537,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? laying,
     bool clearLaying = false,
   }) {
+    // Reference office O4 / backlog E-2 — a cable type the engineer types by
+    // hand is theirs: the edit clears the persisted `cableTypeAuto` record,
+    // so the MEP sync never reverts it.
+    final handCableType = cableType != null || clearCableType;
     // Round 11 — the store is the last gate before the solver: a negative /
     // non-finite load, length or override (typed, pasted or scripted) is not a
     // design input. A negative W gave a NEGATIVE Ib that was subtracted from
@@ -1720,6 +1726,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
                 : null),
         cableType: cableType,
         clearCableType: clearCableType,
+        cableTypeAuto: handCableType ? false : null,
         starterType: starterType,
         clearStarterType: clearStarterType || starterDropped,
         breakerOverrideA: breakerOverrideA,
@@ -2146,6 +2153,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           ? p.copyWith(clearTag: true)
           : p.copyWith(tag: tag));
 
+  /// Drawing backlog C-2 — set (or clear, with null / a negative index) the
+  /// building floor an UNPLACED board stands on (0 = lowest): the electrical
+  /// riser draws it on that floor's band. A placed board's layout floor still
+  /// wins. Drawing-only — never read by the sizing. Undoable.
+  void setPanelFloor(String id, int? floorIndex) => _replacePanel(
+      id,
+      (p) => (floorIndex == null || floorIndex < 0)
+          ? p.copyWith(clearFloorIndex: true)
+          : p.copyWith(floorIndex: floorIndex));
+
   /// Set a panel's diversity factor (clamped 0–1).
   void setPanelDiversity(String id, double factor) => _replacePanel(
       id, (p) => p.copyWith(diversityFactor: factor.clamp(0.0, 1.0)));
@@ -2164,6 +2181,23 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Toggle the essential (genset-backed) flag.
   void setPanelEssential(String id, bool value) =>
       _replacePanel(id, (p) => p.copyWith(essential: value));
+
+  /// Backlog E-1 — mark an UN-FED board as a service entrance (its own
+  /// utility meter) or not. The explicit flag decides both the connectivity
+  /// judge (`unfed-panel`) and the supply study's service roots
+  /// (`serviceEntrancePanelIds`). Undoable; persisted additively.
+  void setPanelServiceEntrance(String id, bool value) =>
+      _replacePanel(id, (p) => p.copyWith(serviceEntrance: value));
+
+  /// Backlog E-1 — true when no way's `feedsPanelId` points at [panelId]
+  /// (the board takes no feeder: a service-entrance candidate).
+  bool isUnfedPanel(String panelId) =>
+      unfedPanelsOf(state).any((p) => p.id == panelId);
+
+  /// Backlog E-1 — true when [panelId] is a legitimate service root
+  /// ([serviceEntrancePanelIds]: the explicit flag, else the default rule).
+  bool isServiceEntrance(String panelId) =>
+      serviceEntrancePanelIds(state).contains(panelId);
 
   /// Toggle the UPS / critical-backed flag.
   void setPanelUpsBacked(String id, bool value) =>
@@ -2969,6 +3003,65 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
 
   void syncMepEquipment(List<ElectricalCircuit> derived) {
+    _syncMepEquipmentBoard(derived);
+    _syncMepFeederCable();
+  }
+
+  /// Reference office O4 — the feeder way that feeds the MEP board carries
+  /// the fire-pump / life-safety supply whenever the board holds a
+  /// life-safety way: the sync specifies it fire-resistant (`FRC`, sized on
+  /// the FRC table like the fire-pump way itself) so the app never raises
+  /// `life-safety-feeder-cable` against its own feeder. Only a feeder with
+  /// NO cable type is set; when the life-safety way goes away the sync
+  /// clears only the FRC it set itself. A cable type the engineer chose is
+  /// never touched. Writes nothing when nothing changes.
+  void _syncMepFeederCable() {
+    final board =
+        state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
+    final feederId = board?.fedByCircuitId;
+    if (board == null || feederId == null) return;
+    final life = board.circuits
+        .any((c) => c.lifeSafety && c.loadKind != LoadKind.spare);
+    ElectricalCircuit? update(ElectricalCircuit c) {
+      if (c.id != feederId || c.feedsPanelId != kMepEquipmentPanelId) {
+        return null;
+      }
+      final type = c.cableType;
+      // Backlog E-2 — the record is the PERSISTED `cableTypeAuto` flag
+      // (it was an in-memory set, lost on reopen), so the sync reverts its
+      // own FRC after a reload too.
+      if (life && (type == null || type.isEmpty)) {
+        return c.copyWith(cableType: 'FRC', cableTypeAuto: true);
+      }
+      if (!life && type == 'FRC' && c.cableTypeAuto) {
+        return c.copyWith(clearCableType: true, cableTypeAuto: false);
+      }
+      return null;
+    }
+
+    var changed = false;
+    final panels = [
+      for (final p in state.panels)
+        () {
+          var touched = false;
+          final circuits = [
+            for (final c in p.circuits)
+              () {
+                final u = update(c);
+                if (u == null) return c;
+                touched = true;
+                return u;
+              }(),
+          ];
+          if (!touched) return p;
+          changed = true;
+          return p.copyWith(circuits: circuits);
+        }(),
+    ];
+    if (changed) state = _withProject(panels: panels);
+  }
+
+  void _syncMepEquipmentBoard(List<ElectricalCircuit> derived) {
     final existing =
         state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
     // Strict no-op when there is nothing to sync AND no MEP panel to touch — so

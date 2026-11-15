@@ -27,7 +27,6 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
-import 'package:mechx_engine/sizing/fire_standpipe.dart' show kHoseOutletHeightM;
 import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 import 'package:mechx_engine/units.dart';
 

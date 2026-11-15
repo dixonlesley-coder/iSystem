@@ -47,14 +47,24 @@ void main() {
       // The recirculating FCU build-up is internal 50 + duct + supply 30 +
       // return 20 Pa; the exhaust fan drops the FCU internal and the supply
       // terminal: static_ex = static_rec − 50 − 30 (same duct, same airflow).
+      // Backlog F-1 — the trunk friction reads each service's default duct
+      // product (BJLS 0.09 mm for the extract trunk, PU 0.03 mm for the
+      // recirculating supply trunk), so the duct term differs by
+      // (Δp/L_bjls − Δp/L_pu) × 15 m × 1.3.
       expect(
         ex.equipment.totalStaticPressure.pascals,
         closeTo(
             rec.equipment.totalStaticPressure.pascals -
                 defaultInternalStatic(AirEquipmentKind.fcu).pascals -
-                30.0,
+                30.0 +
+                (ex.supplyDuctRound!.frictionPerMetrePa -
+                        rec.supplyDuctRound!.frictionPerMetrePa) *
+                    15 *
+                    1.3,
             1e-9),
       );
+      expect(ex.supplyDuctRound!.frictionPerMetrePa,
+          greaterThan(rec.supplyDuctRound!.frictionPerMetrePa));
       expect(ex.supplyDuctDiameter.meters, rec.supplyDuctDiameter.meters);
     });
 

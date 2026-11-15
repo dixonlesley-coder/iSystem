@@ -256,7 +256,7 @@ void main() {
               e['1']!.first,
         ];
         expect(ttlb, containsAll(['PROJECT', 'Menara', 'TITLE', 'PLAN - Ground',
-            'SCALE', '1 : $n', 'DRAWN', 'CHECKED', 'APPROVED']));
+            'SCALE', '1 : $n @ A3', 'DRAWN', 'CHECKED', 'APPROVED']));
         // No legacy unprefixed chrome layers.
         for (final e in ents) {
           expect(const {'title', 'legend', 'scale', 'north'}

@@ -153,6 +153,49 @@ class DrawingChrome {
         scaleText: scaleText,
       );
 
+  /// Drawing-review D1 — a copy stamping [number] as the drawing number
+  /// (every other field kept): one PAGE of a front-matter set carries its own
+  /// `G-00x` number.
+  DrawingChrome withDrawingNumber(String? number) => DrawingChrome(
+        drawingNumber: number,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
+  /// Drawing review R1 — a copy stamping SHEET [index] of [total] (every
+  /// other field kept).
+  DrawingChrome withSheetCounter(int index, int total) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: index,
+        sheetTotal: total,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
   /// Round 33 — a copy with [notes] appended to [legendNotes] (every other
   /// field kept); no notes ⇒ this same object (byte-identical).
   DrawingChrome withLegendNotes(List<String> notes) => notes.isEmpty
@@ -175,6 +218,61 @@ class DrawingChrome {
           dateString: dateString,
           scaleText: scaleText,
         );
+
+  /// Fix round 3 (O1, 2026-11-13) — a copy whose [legendNotes] are
+  /// REPLACED by [notes] (every other field kept).
+  DrawingChrome withLegendNotesReplaced(List<String> notes) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: notes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
+  /// Fix round F6 (2026-11-13) — a copy whose legend keeps only the
+  /// [services] and [symbols] for which [keepService] / [keepSymbol] hold
+  /// (order kept; notes and every other field kept). A detail sheet keys
+  /// only what its windows draw.
+  DrawingChrome withLegendNarrowedTo({
+    required bool Function(ServiceType) keepService,
+    required bool Function(NodeComponent) keepSymbol,
+    List<String> Function(List<String> notes)? narrowNotes,
+  }) =>
+      DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: [
+          for (final s in legendServices)
+            if (keepService(s)) s,
+        ],
+        legendNotes: narrowNotes == null ? legendNotes : narrowNotes(legendNotes),
+        legendSymbols: [
+          for (final c in legendSymbols)
+            if (keepSymbol(c)) c,
+        ],
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
 
   /// Round 34 — a copy with [symbols] as [legendSymbols] (every other field
   /// kept); empty ⇒ this same object (byte-identical).
@@ -233,13 +331,27 @@ class DrawingChrome {
 /// detail `E-2xx`, the building overview single-line `E-3xx`, the floor-by-floor
 /// riser `E-4xx`, the power one-line `E-5xx`.
 enum DrawingSeries {
+  /// Drawing-review D1 (2026-11-13) — the GENERAL front matter (cover, Daftar
+  /// Gambar, general notes + legend): `G-001`..`G-003`.
+  general('G', 0),
   mechanicalPlan('M', 1),
   mechanicalRiser('M', 2),
   electricalLayout('E', 1),
   electricalDetail('E', 2),
   electricalOverview('E', 3),
   electricalRiser('E', 4),
-  electricalPowerOneLine('E', 5);
+  electricalPowerOneLine('E', 5),
+
+  /// Drawing review R1 — the enlarged DETAIL sheet of a dense plan
+  /// (`M-5nn`, numbered by its plan's rail position: M-104 → M-504).
+  mechanicalDetail('M', 5),
+
+  /// Drawing-review D2 — the equipment schedule (`M-601`).
+  equipmentSchedule('M', 6),
+
+  /// Drawing-review D3 — the per-board panel-schedule set (`E-601`), its own
+  /// drawing, never the electrical SLD's `E-201`.
+  panelSchedule('E', 6);
 
   const DrawingSeries(this.disciplinePrefix, this.hundreds);
 
@@ -261,7 +373,11 @@ String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
   final name = sheetName?.trim() ?? '';
   String withName(String t) => name.isEmpty ? t : '$t - $name';
   return switch (series) {
+    // The front-matter sheet's own title IS its [sheetName] (kFrontMatter-
+    // DiagramTitles), so register == title block.
+    DrawingSeries.general => name.isEmpty ? 'GENERAL' : name,
     DrawingSeries.mechanicalPlan => withName('PLAN'),
+    DrawingSeries.mechanicalDetail => withName('DETAIL'),
     DrawingSeries.mechanicalRiser =>
       'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
     DrawingSeries.electricalLayout => withName('DENAH INSTALASI LISTRIK'),
@@ -270,6 +386,8 @@ String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
       'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
     DrawingSeries.electricalRiser => 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
     DrawingSeries.electricalPowerOneLine => 'DIAGRAM DAYA / POWER ONE-LINE',
+    DrawingSeries.equipmentSchedule => 'JADWAL PERALATAN / EQUIPMENT SCHEDULE',
+    DrawingSeries.panelSchedule => 'JADWAL PANEL / PANEL SCHEDULES',
   };
 }
 
@@ -352,8 +470,11 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
 /// Supply/return/exhaust air previously disagreed across canvas / PDF / DXF —
 /// they now derive from the canvas lavender / steel-blue / slate-grey.
 (double, double, double) serviceChromeColor(ServiceType s) => switch (s) {
-      ServiceType.coldWater =>
-        (0x1E / 255, 0x4F / 255, 0xC4 / 255), // #1E4FC4 (deep cobalt, E3)
+      ServiceType.coldWater => (
+          0x1E / 255,
+          0x4F / 255,
+          0xC4 / 255
+        ), // #1E4FC4 (deep cobalt, E3)
       ServiceType.hotWater => (0xE5 / 255, 0x67 / 255, 0x3A / 255), // #E5673A
       ServiceType.drainage => (0x8A / 255, 0x6D / 255, 0x3B / 255), // #8A6D3B
       ServiceType.vent => (0x2B / 255, 0xB6 / 255, 0xA3 / 255), // #2BB6A3
@@ -361,8 +482,16 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
       ServiceType.duct => (0x8A / 255, 0x7B / 255, 0xD8 / 255), // #8A7BD8
       ServiceType.returnAir => (0x6F / 255, 0x8F / 255, 0xC0 / 255), // #6F8FC0
       ServiceType.exhaust => (0x5B / 255, 0x64 / 255, 0x70 / 255), // #5B6470
-      ServiceType.fireSprinkler => (0xD9 / 255, 0x38 / 255, 0x38 / 255), // #D93838
-      ServiceType.fireHydrant => (0xB0 / 255, 0x25 / 255, 0x25 / 255), // #B02525
+      ServiceType.fireSprinkler => (
+          0xD9 / 255,
+          0x38 / 255,
+          0x38 / 255
+        ), // #D93838
+      ServiceType.fireHydrant => (
+          0xB0 / 255,
+          0x25 / 255,
+          0x25 / 255
+        ), // #B02525
     };
 
 String _n(double v) => v.toStringAsFixed(2);
@@ -485,7 +614,9 @@ String pdfLegend(
       final y = originY + (symbols.length - 1 - i) * _kLegendSymbolRowH;
       final cy = y + 3;
       for (final pr in planComponentPrims(symbols[i],
-          cx: originX + _kLegendSymbolGlyph / 2, cy: cy, size: _kLegendSymbolGlyph)) {
+          cx: originX + _kLegendSymbolGlyph / 2,
+          cy: cy,
+          size: _kLegendSymbolGlyph)) {
         switch (pr) {
           case final SldLine l:
             cs.writeln('${_n(l.x1)} ${_n(2 * cy - l.y1)} m '
@@ -604,7 +735,8 @@ const List<int> _helveticaWidths = [
 ];
 
 /// Width of [s] at [size] pt in Helvetica (the title block's `/F1` font).
-double _helveticaTextWidth(String s, double size) => helveticaTextWidth(s, size);
+double _helveticaTextWidth(String s, double size) =>
+    helveticaTextWidth(s, size);
 
 /// Width of [s] at [size] (points, or any drawing unit — it is linear) in
 /// base-14 Helvetica, the `/F1` font every vector PDF sheet prints with. Public
@@ -734,7 +866,8 @@ const double kPdfTitleBlockWidth = 190.0;
     if (label == 'TITLE' && value.trim().isNotEmpty) {
       final w = wrapTitleLines(value, titleCellW);
       titleWrap = w;
-      rowHeights.add(math.max(rowH, w.lines.length * w.size * titleLineGap + 4));
+      rowHeights
+          .add(math.max(rowH, w.lines.length * w.size * titleLineGap + 4));
     } else {
       rowHeights.add(rowH);
     }
@@ -754,7 +887,8 @@ const double kPdfTitleBlockWidth = 190.0;
     final rowBot = rowTop - rowHeights[i];
     // Horizontal rule between rows (the outer box already draws top + bottom).
     if (i > 0) {
-      cs.writeln('${_n(x0)} ${_n(rowTop)} m ${_n(x0 + blockW)} ${_n(rowTop)} l S');
+      cs.writeln(
+          '${_n(x0)} ${_n(rowTop)} m ${_n(x0 + blockW)} ${_n(rowTop)} l S');
     }
     // Vertical divider between the label + value cells.
     cs.writeln('${_n(x0 + labelW)} ${_n(rowBot)} m '
@@ -807,6 +941,16 @@ const _pdfScaleLadderM = <double>[1, 2, 5, 10, 20, 50, 100];
 /// when [pointsPerMeter] is not finite/positive (nothing honest to draw).
 /// The ladder length (metres) [pdfScaleBarReal] draws at [pointsPerMeter] —
 /// the one whose drawn width lands nearest 120 pt.
+/// Drawing-review D6 — the scale-bar rung (metres) the plan PDF draws at
+/// [pointsPerMeter], public so every DXF twin draws the SAME bar.
+double planScaleBarMetres(double pointsPerMeter) =>
+    _pdfScaleBarMetres(pointsPerMeter);
+
+/// Drawing-review D6 — the scale-bar figure text (`0` / `1.5 m` / `3 m`)
+/// exactly as the PDF bar prints it, shared by the DXF bars.
+String planScaleBarFigure(double m) =>
+    m == m.roundToDouble() ? '${m.round()} m' : '${_n(m)} m';
+
 double _pdfScaleBarMetres(double pointsPerMeter) {
   const targetPt = 120.0;
   var bestM = _pdfScaleLadderM.first;
@@ -885,7 +1029,12 @@ LabelBox pdfNorthArrowBox({
   double r = 16,
 }) {
   final reach = r + 7 + 9; // the tip, the 'N' offset, its glyph
-  return (minX: cx - reach, minY: cy - reach, maxX: cx + reach, maxY: cy + reach);
+  return (
+    minX: cx - reach,
+    minY: cy - reach,
+    maxX: cx + reach,
+    maxY: cy + reach
+  );
 }
 
 String pdfScaleBarReal({
@@ -911,8 +1060,7 @@ String pdfScaleBarReal({
   // Whole-bar outline (so open divisions read as a bar).
   cs.writeln('${_n(x0)} ${_n(baseY)} ${_n(barLen)} ${_n(barH)} re S');
   // Metre figures at 0 / mid / end.
-  String fig(double m) =>
-      m == m.roundToDouble() ? m.round().toString() : _n(m);
+  String fig(double m) => m == m.roundToDouble() ? m.round().toString() : _n(m);
   cs.writeln('BT /F1 8 Tf 0 0 0 rg '
       '${_n(x0 - 2)} ${_n(baseY - 10)} Td (${_pdfText('0')}) Tj ET');
   cs.writeln('BT /F1 8 Tf 0 0 0 rg '
@@ -1062,8 +1210,11 @@ String dxfChrome(
   _g(b, 10, minX);
   _g(b, 20, sbY - txt * 1.4);
   _g(b, 40, txt);
-  _g(b, 1, _dxfText(
-      'SCALE${chrome.scaleBarLabel != null ? '  ${chrome.scaleBarLabel}' : ''}'));
+  _g(
+      b,
+      1,
+      _dxfText(
+          'SCALE${chrome.scaleBarLabel != null ? '  ${chrome.scaleBarLabel}' : ''}'));
 
   // North arrow — a LINE shaft + an 'N' on layer 'north', at the drawing's
   // bottom-RIGHT, rotated by the bearing. World Y is y-up here.
@@ -1125,6 +1276,8 @@ String dxfPlanChrome(
   required double unitsPerPaperMm,
   required int? plotDenominator,
   required String projectName,
+  String paperLabel = 'A3',
+  String? scaleRowOverride,
 }) {
   if (chrome.isEmpty) return '';
   final b = StringBuffer();
@@ -1161,9 +1314,8 @@ String dxfPlanChrome(
       line(kDxfLayerLegend, minX, ly + txt / 2, minX + 12 * u, ly + txt / 2,
           // Round 17 — the swatch in the service's own linetype (declared by
           // [dxfTablesSection]); CONTINUOUS stays the layer default.
-          linetype: dxfLinetypeFor(svc) == 'CONTINUOUS'
-              ? null
-              : dxfLinetypeFor(svc));
+          linetype:
+              dxfLinetypeFor(svc) == 'CONTINUOUS' ? null : dxfLinetypeFor(svc));
       text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
       ly -= 6 * u;
     }
@@ -1172,7 +1324,8 @@ String dxfPlanChrome(
     for (final c in chrome.legendSymbols) {
       final cy = ly + txt / 2;
       final g = 5 * u;
-      for (final pr in planComponentPrims(c, cx: minX + 6 * u, cy: cy, size: g)) {
+      for (final pr
+          in planComponentPrims(c, cx: minX + 6 * u, cy: cy, size: g)) {
         switch (pr) {
           case final SldLine l:
             line(kDxfLayerLegend, l.x1, 2 * cy - l.y1, l.x2, 2 * cy - l.y2);
@@ -1213,12 +1366,10 @@ String dxfPlanChrome(
       final x = minX + barLen * i / 4;
       line(kDxfLayerScale, x, y0, x, y0 + barH);
     }
-    String fig(double v) =>
-        v == v.roundToDouble() ? v.round().toString() : v.toString();
     final fy = y0 - txt * 1.5;
     text(kDxfLayerScale, minX, fy, txt, '0');
-    text(kDxfLayerScale, minX + barLen / 2, fy, txt, '${fig(m / 2)} m');
-    text(kDxfLayerScale, minX + barLen, fy, txt, '${fig(m)} m');
+    text(kDxfLayerScale, minX + barLen / 2, fy, txt, planScaleBarFigure(m / 2));
+    text(kDxfLayerScale, minX + barLen, fy, txt, planScaleBarFigure(m));
     text(kDxfLayerScale, minX + barLen + 6 * u, y0, txt, '1 : $n');
   }
 
@@ -1234,7 +1385,10 @@ String dxfPlanChrome(
   text(kDxfLayerNorth, tipX, tipY + txt / 2, txt, 'N');
 
   // The shared ISO title block, hung below the extent at the right.
-  final scaleRow = n != null && n > 0 ? '1 : $n' : 'NTS';
+  // Drawing-review D6 — the SAME scale row the plan PDF stamps
+  // (`1 : N @ A3`), so the two formats of one sheet agree.
+  final scaleRow =
+      scaleRowOverride ?? (n != null && n > 0 ? '1 : $n @ $paperLabel' : 'NTS');
   final rows = _titleBlockRows(chrome, projectName, scaleRow);
   if (rows.isNotEmpty) {
     final unit = txt / 1.2; // dxfTitleBlock: value text = unit × 1.2
@@ -1266,7 +1420,9 @@ const double kHelveticaCapHeightEm = 0.718;
 /// as `Â·` in AutoCAD; every writer routes its string group values through
 /// here so the output is pure printable ASCII (no byte > 0x7E) while carrying
 /// the same information as the PDF:
-///   `·` (U+00B7)  → `-`   (the label separator)
+///   `·` (U+00B7)  → `%%183` (drawing-review D6: the AutoCAD `%%nnn`
+///                   character-code escape — the ANSI_1252 middle dot, so the
+///                   DXF prints the SAME separator as the PDF instead of `-`)
 ///   `Ø` / `ø`     → `%%c` (the AutoCAD diameter control code)
 ///   `°`           → `%%d` (the AutoCAD degree control code)
 ///   `²` / `³`     → `2` / `3`
@@ -1285,7 +1441,7 @@ String dxfText(String raw) {
   for (final code in raw.runes) {
     switch (code) {
       case 0xB7:
-        b.write('-');
+        b.write('%%183');
       case 0xD8 || 0xF8:
         b.write('%%c');
       case 0xB0:
@@ -1347,7 +1503,8 @@ int serviceAciColorFor(ServiceType s) => switch (s) {
       ServiceType.vent => 3, // green/teal (#2BB6A3)
       ServiceType.rainwater => 4, // cyan      (#3AA0E5)
       ServiceType.duct => 6, // violet    (#8A7BD8 supply-air lavender)
-      ServiceType.returnAir => 150, // azure  (#6F8FC0 steel-blue, distinct from 5)
+      ServiceType.returnAir =>
+        150, // azure  (#6F8FC0 steel-blue, distinct from 5)
       ServiceType.exhaust => 8, // grey      (#5B6470 slate)
       ServiceType.fireSprinkler => 1, // red       (#D93838)
       ServiceType.fireHydrant => 12, // dark red  (#B02525)
@@ -1357,9 +1514,12 @@ int serviceAciColorFor(ServiceType s) => switch (s) {
 /// solid line. Vent + return air read DASHED; sprinkler + hydrant dash-dot.
 List<double>? serviceDashPatternPdf(ServiceType s) => switch (s) {
       ServiceType.vent || ServiceType.returnAir => const [6, 4],
-      ServiceType.fireSprinkler ||
-      ServiceType.fireHydrant =>
-        const [10, 3, 2, 3],
+      ServiceType.fireSprinkler || ServiceType.fireHydrant => const [
+          10,
+          3,
+          2,
+          3
+        ],
       _ => null,
     };
 
@@ -1600,8 +1760,8 @@ PlottedScale snapPlottedScale({
       // Re-fit at the snapped scale — a denominator >= the raw fit's, so the
       // drawing never draws larger than the honest snap.
       scale = metersPerPixel * 1000 / (snappedN * mmPerPoint);
-      return PlottedScale(scale, '1 : $snappedN @ $paperLabel',
-          scale / metersPerPixel);
+      return PlottedScale(
+          scale, '1 : $snappedN @ $paperLabel', scale / metersPerPixel);
     }
     // else: too large even for 1:1000 — keep the honest auto-fit, stay NTS.
   }
@@ -1712,8 +1872,18 @@ EdgeLabelPlacement? placeEdgeLabel({
       final x0 = cx - sa * d - ca * w / 2;
       final y0 = cy + ca * d - sa * w / 2;
       // Axis-aligned bounds of the rotated w × textSize text rect.
-      final xs = [x0, x0 + ca * w, x0 - sa * textSize, x0 + ca * w - sa * textSize];
-      final ys = [y0, y0 + sa * w, y0 + ca * textSize, y0 + sa * w + ca * textSize];
+      final xs = [
+        x0,
+        x0 + ca * w,
+        x0 - sa * textSize,
+        x0 + ca * w - sa * textSize
+      ];
+      final ys = [
+        y0,
+        y0 + sa * w,
+        y0 + ca * textSize,
+        y0 + sa * w + ca * textSize
+      ];
       final box = (
         minX: xs.reduce(math.min),
         minY: ys.reduce(math.min),
@@ -2070,7 +2240,13 @@ String dxfUnderlayEntities(
     maxX = 1;
     maxY = 1;
   }
-  return (minX: minX, minY: minY, maxX: maxX, maxY: maxY, hasContent: hasContent);
+  return (
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    hasContent: hasContent
+  );
 }
 
 /// Assemble the finished single-page plan PDF from its already-built content
@@ -2128,3 +2304,51 @@ Uint8List assemblePlanPdfDocument({
   w('startxref\n$xref\n%%EOF\n');
   return out.toBytes();
 }
+
+/// Drawing review F8 follow-up (2026-11-13) — the width (in em of the printed
+/// size) a single-line LEGEND row may run before it wraps. The PDF legend box
+/// is 240 pt wide (228 pt of text at 7.5 pt = 30.4 em); the DXF box is sized
+/// from the same figure, so both formats wrap every entry at the same words.
+const double kSldLegendWrapEm = 30.0;
+
+/// One SLD legend entry as printed lines: `CODE  -  meaning` word-wrapped to
+/// [maxEm] (Helvetica, em units), the continuation lines hanging at
+/// [indentEm] (the width of the `CODE  -  ` lead, capped at a third of the
+/// box so a long code still leaves room for the meaning). A single word
+/// wider than the box stays whole on its own line (never split). Pure.
+({List<String> lines, double indentEm}) sldLegendEntryLines(SldLegendEntry e,
+    {double maxEm = kSldLegendWrapEm}) {
+  final lead = '${e.code}  -  ';
+  final indentEm = math.min(helveticaTextWidth(lead, 1), maxEm / 3);
+  final words = e.meaning.split(' ').where((w) => w.isNotEmpty).toList();
+  final lines = <String>[];
+  var cur = lead.trimRight();
+  var curMax = maxEm;
+  var first = true;
+  for (final w in words) {
+    final cand = first ? '$lead$w' : (cur.isEmpty ? w : '$cur $w');
+    if (!first && cur.isNotEmpty && helveticaTextWidth(cand, 1) > curMax) {
+      lines.add(cur);
+      cur = w;
+      curMax = maxEm - indentEm;
+    } else if (first &&
+        helveticaTextWidth(cand, 1) > curMax &&
+        helveticaTextWidth(lead, 1) < curMax) {
+      // the first word itself does not fit beside the lead: wrap it under.
+      lines.add(lead.trimRight());
+      cur = w;
+      curMax = maxEm - indentEm;
+    } else {
+      cur = cand;
+    }
+    first = false;
+  }
+  if (cur.isNotEmpty || lines.isEmpty) lines.add(cur);
+  return (lines: lines, indentEm: indentEm);
+}
+
+/// The number of printed legend lines [legend] takes after wrapping.
+int sldLegendLineCount(List<SldLegendEntry> legend,
+        {double maxEm = kSldLegendWrapEm}) =>
+    legend.fold(
+        0, (n, e) => n + sldLegendEntryLines(e, maxEm: maxEm).lines.length);

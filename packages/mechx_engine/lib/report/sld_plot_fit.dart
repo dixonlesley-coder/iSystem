@@ -266,6 +266,8 @@ SldSheet _withTextBounds(SldSheet sheet, List<SldPrim> prims) {
     legend: sheet.legend,
     supplyNote: sheet.supplyNote,
     overlapCount: sheet.overlapCount,
+    keyCount: sheet.keyCount,
+    plantKeyCount: sheet.plantKeyCount,
     belowMinLabelPt: sheet.belowMinLabelPt,
   );
 }

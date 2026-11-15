@@ -23,9 +23,14 @@ import 'package:test/test.dart';
 /// The feeder is long enough to drop ~1-2 % and the lighting run ~2 %, so the
 /// way is inside the 3 % lighting limit on its OWN drop but over it
 /// CUMULATIVELY — exactly the case the schedule used to call fine.
+/// Reference tower T3 (2026-11-13): an AUTO-sized feeder is now raised until
+/// that cumulative drop is cured, so the VD! scenario fixes the feeder cable
+/// by hand ([fixedFeederMm2], the 2.5 mm² trunk minimum — a floor that
+/// leaves the load-sized section as it was, but marks the cable user-set).
 ElectricalProject _twoLevel({
   double feederM = 60,
   double lightingM = 30,
+  double? fixedFeederMm2,
   ApparentPower? transformerKva,
   double? capacitorBankKvar,
   ElectricalSources? sources,
@@ -47,6 +52,7 @@ ElectricalProject _twoLevel({
               loadKind: LoadKind.feeder,
               feedsPanelId: 'LP1',
               length: Length(feederM),
+              cableOverrideMm2: fixedFeederMm2,
             ),
             const ElectricalCircuit(
               id: 'm-1',
@@ -90,7 +96,7 @@ String _rowText(ElectricalProject project, String panelId) {
 void main() {
   group('reports-3 — schedule VD! honours the cumulative drop', () {
     test('own drop within limit but cumulative over ⇒ VD! on the row', () {
-      final project = _twoLevel();
+      final project = _twoLevel(fixedFeederMm2: 2.5);
       final result = computeSystem(const PuilProfile(), project);
       final lp1 = result.panels['LP1']!;
       final way = lp1.circuits.single;
@@ -138,7 +144,7 @@ void main() {
     });
 
     test('the calc report Vdrop verdict uses the same gate', () {
-      final project = _twoLevel();
+      final project = _twoLevel(fixedFeederMm2: 2.5);
       final result = computeSystem(const PuilProfile(), project);
       final md = buildElectricalCalcReport(ElectricalCalcReportData(
         projectName: 'p',
@@ -153,6 +159,22 @@ void main() {
           .firstWhere((l) => l.startsWith('| Lighting L.2 |'));
       expect(row, contains('OVER'));
     });
+  });
+
+  test('reference tower T3 — the AUTO-sized feeder is raised for the '
+      'downstream cumulative drop (no VD!)', () {
+    final project = _twoLevel();
+    final result = computeSystem(const PuilProfile(), project);
+    final way = result.panels['LP1']!.circuits.single;
+    final feeder = result.panels['MDP']!.circuits
+        .firstWhere((c) => c.circuitId == 'f-lp1');
+    expect(feeder.cableRaisedForDownstreamVd, isTrue);
+    expect(way.cumulativeDropPercent,
+        lessThanOrEqualTo(way.voltageDrop.limitPercent));
+    expect(
+        result.warnings
+            .any((w) => w.code == 'cumulative-voltage-drop-exceeded'),
+        isFalse);
   });
 
   group('reports-2 — PE is stated once in PENGHANTAR', () {

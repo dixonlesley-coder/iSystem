@@ -192,7 +192,10 @@ void main() {
               loadKind: LoadKind.feeder,
               cosPhi: 0.85,
               length: Length(50),
-              feedsPanelId: 'SP'),
+              feedsPanelId: 'SP',
+              // Backlog B-1: the load-sized 25 mm2 pinned (an auto-sized
+              // feeder now grows for its selectivity floor).
+              cableOverrideMm2: 25),
           ElectricalCircuit(
               id: 'm1',
               name: 'Root motor',
@@ -287,7 +290,10 @@ void main() {
               loadKind: LoadKind.feeder,
               cosPhi: 0.85,
               length: Length(50),
-              feedsPanelId: 'SP'),
+              feedsPanelId: 'SP',
+              // Backlog B-1: the load-sized 25 mm2 pinned (an auto-sized
+              // feeder now grows for its selectivity floor).
+              cableOverrideMm2: 25),
         ],
       );
       const project = ElectricalProject(
