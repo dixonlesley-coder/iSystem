@@ -401,9 +401,20 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
 
 ### Backlog (not cured in this pass)
-- Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
-  detail sheet; it keeps the honest overlap stamp. Only the submittal package
-  issues detail sheets.
+
+_(empty)_
+
+### Backlog closed (2026-11-20)
+- **Standalone plan export issues its detail sheets — backlog K-3.** The
+  standalone plan exports (`exportAnnotatedPlanPdf`, Ctrl+P, and the plan DXF
+  `exportDrawingDxf`) now issue the package's pages for that plan from the ONE
+  builder (`buildIssuedPlanSet` + `issuedPlanSheetFiles`): the plan at the
+  set's shared scale with its DETAIL bubbles, then each M-5nn detail sheet its
+  bubbles point at (its own, or — a typical floor — the earlier plan's that
+  issues them) beside it as `<name>-detail.pdf` / `-detail-2.pdf` (`.dxf`).
+  Every file is byte-identical to the package's
+  (`test/issued_drawing_parity_test.dart` 'K-3', apartment: Lantai 1 plan +
+  M-501; Lantai 4 plan + M-503).
 
 ### Backlog closed (2026-11-13)
 - I-4 Reviewer observations: the house demand-vs-declared note, the apartment drain

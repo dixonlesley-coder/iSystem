@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data' show Uint8List;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
@@ -118,6 +119,7 @@ import '../../store/reference_line_store.dart';
 import '../../store/room_air_store.dart';
 import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
+import '../../store/models/sheet.dart' show Sheet;
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/snap_settings_store.dart';
@@ -1881,84 +1883,31 @@ Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
 );
 
 Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
-  final sheets = ref.read(sheetsControllerProvider);
-  final sheet = sheets.current;
   // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
   // cancel: null makes the guard raise a visible error instead of a no-op.
-  if (sheet == null) return null;
-  final project = ref.read(projectControllerProvider);
-  final levelCount = project.building.levelCount;
-  final floorIndex = sheets.floorFor(sheet.id, levelCount);
-  // A1: the floor-plan underlay — DXF sheets only here (the R12 re-emit is
-  // vector-only; a PDF-backed sheet's raster rides the PDF exports instead).
-  final planUnderlay = sheet.dxfPath != null
-      ? await buildPlanUnderlay(sheet)
-      : null;
-  final net = ref.read(networkControllerProvider).network;
-  final chrome = issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
-  final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
-  final grid = buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
-  final dxf = networkToDxf(
-    net: net,
-    sizing: ref.read(sizingProvider),
-    sheetId: sheet.id,
-    floorIndex: floorIndex,
-    // The same §10 lengths the plan PDF prints, so the DXF labels match it.
-    edgeLengths: projectEdgeLengths(net, project),
-    chrome: chrome,
-    // A2: the sheet calibration lets the DXF emit true-scale mm world units
-    // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
-    metersPerPixel: metersPerPixel,
-    // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
-    projectName: project.name,
-    // R6: plotted exactly like the sheet's plan PDF (its `1 : N` + frame
-    // limits), so the shared annotation layout makes the PDF's label choices.
-    sheetPlot: planSheetPlot(
-      net: net,
-      sheetId: sheet.id,
-      floorIndex: floorIndex,
-      projectName: project.name,
-      sheetName: sheet.name,
-      dateString: DateTime.now().toIso8601String().split('T').first,
-      chrome: chrome,
-      metersPerPixel: metersPerPixel,
-      underlay: sheet.dxfPath != null
-          ? planUnderlay
-          : await buildPlanUnderlay(sheet),
-      grid: grid,
-    ),
-    underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
-    // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(
-      net,
-      project.building,
-      mounting: ref.read(mountingProvider),
-    ),
-    // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
-    // plan DXF traces to the same element the riser + BOM + report carry.
-    edgeTags: elementTags(net, building: project.building),
-    // N4/B12: the setting-out grid from axis-aligned traced reference lines.
-    grid: grid,
-    // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
-    // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
-    // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
-    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
-    // H5: the LAID design slope the sizer + the report actually used
-    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
-    // issued sheet must not contradict the signed report (see the contract note
-    // at `plan_symbols.dart` `gravitySlopeLabel`).
-    gravitySlope: ref.read(drainageSlopeProvider),
-  );
+  if (ref.read(sheetsControllerProvider).current == null) return null;
+  // Backlog K-3 (2026-11-20) — the plan DXF the submittal package issues
+  // (the A1 vector underlay, the true-scale mm world units, the R6 sheet plot
+  // at the set's shared scale, the DETAIL bubbles), and each M-5nn detail
+  // sheet's DXF beside it (`<name>-detail.dxf`, ...), from the same builder
+  // ([buildIssuedPlanSet] / [issuedPlanSheetFiles]) — byte-identical to the
+  // package's files.
+  final issued = await _issuedCurrentPlan(ref);
+  if (issued == null) return null;
   final full = await pickExportSave(
     ref,
     dialogTitle: MechXStringsData(ref.read(localeProvider))(
       StringKey.exportTitleDrawingDxf,
     ),
-    fileName: '${sheet.name}.dxf',
+    fileName: '${issued.sheet.name}.dxf',
     ext: 'dxf',
   );
   if (full == null) return false;
-  await File(full).writeAsString(dxf);
+  await File(full).writeAsString(issued.plan.planDxf);
+  for (var g = 0; g < issued.details.length; g++) {
+    await File(issuedPlanDetailPath(full, g))
+        .writeAsString(issued.details[g].dxf);
+  }
   return true;
 }
 
@@ -2028,71 +1977,546 @@ Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => runExportGuarded(
 );
 
 Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
-  final sheets = ref.read(sheetsControllerProvider);
-  final sheet = sheets.current;
   // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
   // cancel: null makes the guard raise a visible error instead of a no-op.
-  if (sheet == null) return null;
-  final project = ref.read(projectControllerProvider);
-  final levelCount = project.building.levelCount;
-  final floorIndex = sheets.floorFor(sheet.id, levelCount);
-  final net = ref.read(networkControllerProvider).network;
-
-  // Real length per edge from the §10 sources of truth (run via calibration,
-  // riser via the elevation delta).
-  final edgeLengths = projectEdgeLengths(net, project);
-
-  final bytes = planToPdf(
-    net: net,
-    sizing: ref.read(sizingProvider),
-    edgeLengths: edgeLengths,
-    sheetId: sheet.id,
-    floorIndex: floorIndex,
-    projectName: project.name,
-    sheetName: sheet.name,
-    dateString: DateTime.now().toIso8601String().split('T').first,
-    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
-    // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
-    // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
-    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
-    // A1: the floor-plan substrate beneath the network — vector for a DXF
-    // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
-    // source) keeps the plain export.
-    underlay: await buildPlanUnderlay(sheet),
-    // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(
-      net,
-      project.building,
-      mounting: ref.read(mountingProvider),
-    ),
-    // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
-    // the plan traces to the same element the riser + BOM + report carry.
-    edgeTags: elementTags(net, building: project.building),
-    // N4/B12: axis-aligned traced reference lines become the setting-out grid
-    // (vertical → lettered columns, horizontal → numbered rows); diagonal ones
-    // are snap-only. Empty ⇒ no grid drawn (byte-identical).
-    grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
-    // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
-    // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
-    // the same tokens the on-canvas plan shows, now on the issued plan PDF.
-    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
-    // H5: the LAID design slope the sizer + the report actually used
-    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
-    // issued sheet must not contradict the signed report (see the contract note
-    // at `plan_symbols.dart` `gravitySlopeLabel`).
-    gravitySlope: ref.read(drainageSlopeProvider),
-  );
+  if (ref.read(sheetsControllerProvider).current == null) return null;
+  // Backlog K-3 (2026-11-20) — the SAME pages the submittal package issues
+  // for this plan, from the same builder ([buildIssuedPlanSet] /
+  // [issuedPlanSheetFiles]): the plan at the set's shared scale with its
+  // DETAIL bubbles, and each M-5nn detail sheet beside it
+  // (`<name>-detail.pdf`, `-detail-2.pdf`, ...), byte-identical to the
+  // package's — a dense plan exported alone no longer keeps the overlap
+  // stamp the detail sheets cure.
+  final issued = await _issuedCurrentPlan(ref);
+  if (issued == null) return null;
   final full = await pickExportSave(
     ref,
     dialogTitle: MechXStringsData(ref.read(localeProvider))(
       StringKey.exportTitleAnnotatedPlanPdf,
     ),
-    fileName: '${sheet.name}-annotated.pdf',
+    fileName: '${issued.sheet.name}-annotated.pdf',
     ext: 'pdf',
   );
   if (full == null) return false;
-  await File(full).writeAsBytes(bytes);
+  await File(full).writeAsBytes(issued.plan.planPdf);
+  for (var g = 0; g < issued.details.length; g++) {
+    await File(issuedPlanDetailPath(full, g))
+        .writeAsBytes(issued.details[g].pdf);
+  }
   return true;
+}
+
+/// Backlog K-3 (2026-11-20) — ONE issued set of mechanical PLAN drawings:
+/// every rail sheet at the set's shared plotted scale, the DETAIL callouts
+/// each plan needs to issue without the overlap stamp, the M-5nn detail
+/// sheets (numbered in issue order, typical floors issued once) and their
+/// sheet counters. Built by [buildIssuedPlanSet] for the submittal package
+/// AND the standalone plan exports, and rendered per sheet by
+/// [issuedPlanSheetFiles], so a plan exported alone is byte-identical to the
+/// package's (the I-1 parity principle).
+class IssuedPlanSet {
+  /// The project name the title blocks print ('project' when unnamed).
+  final String base;
+  final String today;
+
+  /// Every rail sheet's underlay, built once.
+  final Map<String, PlanUnderlay?> underlays;
+
+  /// Round 14 (drafting-visual-7) — the ONE plotted scale of the set.
+  final int? sharedPlanScale;
+
+  /// The callouts each plan draws (bubbles point at their M-5nn sheet).
+  final Map<String, List<PlanDetailCallout>> planDetails;
+
+  /// The detail SHEETS a plan issues itself, in order (a typical plan whose
+  /// details an earlier plan already issues has none).
+  final Map<String, List<({String number, List<PlanDetailCallout> callouts})>>
+      detailSheets;
+
+  /// The plan whose detail sheets a plan's bubbles point at (itself, or the
+  /// earlier plan of its typical set); absent with no detail sheet.
+  final Map<String, String> detailIssuedBy;
+
+  /// Drawing backlog I-3 (c) — the floors each issued detail set serves.
+  final Map<String, List<String>> typicalFloors;
+
+  /// The number of detail sheets in the whole set (the `SHEET k of n` n).
+  final int detailCount;
+
+  /// How many detail sheets earlier plans issue (the plan's first k - 1).
+  final Map<String, int> detailSheetsBefore;
+
+  const IssuedPlanSet({
+    required this.base,
+    required this.today,
+    required this.underlays,
+    required this.sharedPlanScale,
+    required this.planDetails,
+    required this.detailSheets,
+    required this.detailIssuedBy,
+    required this.typicalFloors,
+    required this.detailCount,
+    required this.detailSheetsBefore,
+  });
+
+  /// The detail sheet name: the plan's own floor, or the typical floors.
+  String detailSheetName(String sheetId, String name) {
+    final fl = typicalFloors[sheetId];
+    return fl == null || fl.length < 2 ? name : planDetailTypicalName(fl);
+  }
+}
+
+/// Backlog K-3 — the issued [IssuedPlanSet] of the live project, dated
+/// [today] (the package's one date).
+Future<IssuedPlanSet> buildIssuedPlanSet(
+  WidgetRef ref, {
+  required String today,
+}) async {
+  final project = ref.read(projectControllerProvider);
+  final base = project.name.trim().isEmpty ? 'project' : project.name.trim();
+  final doc = ref.read(documentControlProvider);
+  final sheetsFm = ref.read(sheetsControllerProvider);
+  final planSheets = sheetsFm.sheets;
+  // Round 14 (drafting-visual-7) — every plan of ONE set is issued at ONE
+  // plotted scale: the largest natural `1 : N` over the calibrated sheets
+  // floors each sheet's snap, so a sparse floor no longer plots at 1 : 50
+  // beside a dense 1 : 100 of the same building (overlaying floors, riser
+  // positions and setting-out then need no re-scaling).
+  final planUnderlays = <String, PlanUnderlay?>{};
+  int? sharedPlanScale;
+  {
+    final net0 = ref.read(networkControllerProvider).network;
+    for (final sheet in planSheets) {
+      final underlay = await buildPlanUnderlay(sheet);
+      planUnderlays[sheet.id] = underlay;
+      final natural = planSheetPlot(
+        net: net0,
+        sheetId: sheet.id,
+        floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        chrome: issuableChrome(
+          ref,
+          sheetId: sheet.id,
+          floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        ),
+        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+        underlay: underlay,
+        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+      )?.scaleDenominator;
+      if (natural != null && natural > 0) {
+        sharedPlanScale =
+            sharedPlanScale == null || natural > sharedPlanScale
+                ? natural
+                : sharedPlanScale;
+      }
+    }
+  }
+  // Drawing review R1 — the DETAIL callouts each plan needs so it issues
+  // without the overlap stamp, decided up front so the Daftar Gambar lists
+  // the detail sheets (M-5nn, numbered by the plan's rail position) and the
+  // plan + its detail sheet name each other. Same inputs as the plan export.
+  // Drawing review S1 — detail sheets are numbered M-501.. in issue order
+  // (a plan whose clusters need more than one sheet takes consecutive
+  // numbers), so a split never collides with the next plan's detail.
+  String detailNumberFor(int k) => sheetDrawingNumber(
+      base: doc.documentNumber,
+      series: DrawingSeries.mechanicalDetail,
+      index: k + 1);
+  final planDetails = <String, List<PlanDetailCallout>>{};
+  // Each plan's detail SHEETS in order: the drawing number + its callouts.
+  final planDetailSheets =
+      <String, List<({String number, List<PlanDetailCallout> callouts})>>{};
+  var detailCount = 0;
+  // Drawing backlog I-3 (c) — the floors each issued detail set serves.
+  final typicalFloors = <String, List<String>>{};
+  // K-3 — the plan whose detail sheets each plan's bubbles point at.
+  final detailIssuedBy = <String, String>{};
+  {
+    final net0 = ref.read(networkControllerProvider).network;
+    final sizing0 = ref.read(sizingProvider);
+    final lengths0 = projectEdgeLengths(net0, project);
+    final elev0 = planEdgeElevationLabels(net0, project.building,
+        mounting: ref.read(mountingProvider));
+    final tags0 = elementTags(net0, building: project.building);
+    final nodeTags0 =
+        planExportNodeTags(net0, ref.read(fixtureLibraryProvider));
+    final slope0 = ref.read(drainageSlopeProvider);
+    for (var i = 0; i < planSheets.length; i++) {
+      final sheet = planSheets[i];
+      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
+      final d = planSheetDetails(
+        net: net0,
+        sizing: sizing0,
+        edgeLengths: lengths0,
+        sheetId: sheet.id,
+        floorIndex: fIdx,
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        detailSheetRef: detailNumberFor(detailCount),
+        detailSheetRefOf: (k) => detailNumberFor(detailCount + k),
+        chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: fIdx)
+            .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalPlan,
+                sheetName: sheet.name)),
+        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+        underlay: planUnderlays[sheet.id],
+        minScaleDenominator: sharedPlanScale,
+        edgeElevationLabels: elev0,
+        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+        edgeTags: tags0,
+        nodeTags: nodeTags0,
+        gravitySlope: slope0,
+      );
+      if (d.isNotEmpty) {
+        planDetails[sheet.id] = d;
+        final refs = <String>[];
+        // Drawing backlog I-3 (a) — a keyed cluster has no detail sheet.
+        for (final c in d) {
+          if (!c.keyed && !refs.contains(c.sheetRef)) refs.add(c.sheetRef);
+        }
+        planDetailSheets[sheet.id] = [
+          for (final r in refs)
+            (
+              number: r,
+              callouts: [
+                for (final c in d)
+                  if (!c.keyed && c.sheetRef == r) c
+              ]
+            ),
+        ];
+        detailCount += refs.length;
+      }
+    }
+    // Drawing backlog I-3 (c) — a plan whose detail sheets draw exactly
+    // what an earlier plan's do (same geometry and labels once the level
+    // code is masked, `planDetailContentSignature`) issues none of its own:
+    // its bubbles point at the earlier plan's sheets, issued once as
+    // 'DETAIL - TIPIKAL - Lantai a..b'. The sheets are then renumbered
+    // M-501.. in issue order.
+    final area0 = planDetailDrawingAreaMm(
+        projectName: base, sheetName: '', dateString: today);
+    final canonOf = <String, String>{};
+    final bySig = <String, String>{};
+    for (final sheet in planSheets) {
+      final ds = planDetailSheets[sheet.id];
+      final mpp = project.calibrationFor(sheet.id)?.metersPerPixel;
+      if (ds == null || ds.isEmpty || mpp == null) continue;
+      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
+      final sig = [
+        for (final d in ds)
+          planDetailContentSignature(
+              planDetailSheetPlot(
+                  net: net0,
+                  sizing: sizing0,
+                  edgeLengths: lengths0,
+                  sheetId: sheet.id,
+                  floorIndex: fIdx,
+                  metersPerPixel: mpp,
+                  details: d.callouts,
+                  areaMm: area0,
+                  edgeTags: tags0,
+                  edgeElevationLabels: elev0),
+              nodeTags: nodeTags0),
+      ].join('\n##\n');
+      canonOf[sheet.id] = bySig.putIfAbsent(sig, () => sheet.id);
+    }
+    detailIssuedBy.addAll(canonOf);
+    final refMap = <String, Map<String, String>>{};
+    var next = 0;
+    for (final sheet in planSheets) {
+      final ds = planDetailSheets[sheet.id];
+      final canon = canonOf[sheet.id];
+      if (ds == null || canon == null) continue;
+      final m = refMap[sheet.id] = <String, String>{};
+      if (canon == sheet.id) {
+        for (final d in ds) {
+          m[d.number] = detailNumberFor(next++);
+        }
+      } else {
+        final cs = planDetailSheets[canon]!;
+        for (var k = 0; k < ds.length; k++) {
+          m[ds[k].number] = refMap[canon]![cs[k].number]!;
+        }
+      }
+    }
+    for (final sheet in planSheets) {
+      final m = refMap[sheet.id];
+      if (m == null) continue;
+      String to(String r) => m[r] ?? r;
+      PlanDetailCallout remap(PlanDetailCallout c) => c.keyed
+          ? c
+          : c.renamed(c.letter, to(c.sheetRef), matches: [
+              for (final x in c.matches)
+                PlanDetailMatch(x.x1, x.y1, x.x2, x.y2,
+                    letter: x.letter, sheetRef: to(x.sheetRef)),
+            ]);
+      planDetails[sheet.id] = [
+        for (final c in planDetails[sheet.id]!) remap(c)
+      ];
+      if (canonOf[sheet.id] == sheet.id) {
+        planDetailSheets[sheet.id] = [
+          for (final d in planDetailSheets[sheet.id]!)
+            (
+              number: to(d.number),
+              callouts: [for (final c in d.callouts) remap(c)]
+            ),
+        ];
+      } else {
+        planDetailSheets.remove(sheet.id);
+      }
+    }
+    for (final sheet in planSheets) {
+      final canon = canonOf[sheet.id];
+      if (canon != null) {
+        (typicalFloors[canon] ??= <String>[]).add(sheet.name);
+      }
+    }
+    detailCount = next;
+  }
+  // K-3 — how many detail sheets the plans before each one issue.
+  final before = <String, int>{};
+  var n = 0;
+  for (final sheet in planSheets) {
+    before[sheet.id] = n;
+    n += planDetailSheets[sheet.id]?.length ?? 0;
+  }
+  return IssuedPlanSet(
+    base: base,
+    today: today,
+    underlays: planUnderlays,
+    sharedPlanScale: sharedPlanScale,
+    planDetails: planDetails,
+    detailSheets: planDetailSheets,
+    detailIssuedBy: detailIssuedBy,
+    typicalFloors: typicalFloors,
+    detailCount: detailCount,
+    detailSheetsBefore: before,
+  );
+}
+
+/// Backlog K-3 — the files one plan [sheet] issues: its plan (PDF + DXF) and
+/// each M-5nn detail sheet it issues itself (PDF + DXF), exactly as the
+/// submittal package writes them.
+typedef IssuedPlanSheetFiles = ({
+  Uint8List planPdf,
+  String planDxf,
+  List<IssuedPlanDetailFile> details,
+});
+
+/// Backlog K-3 — one issued M-5nn detail sheet: its number, PDF and DXF.
+typedef IssuedPlanDetailFile = ({String number, Uint8List pdf, String dxf});
+
+/// Backlog K-3 — render [sheet]'s files of [set] (the ONE renderer the
+/// submittal package and the standalone plan exports call).
+IssuedPlanSheetFiles issuedPlanSheetFiles(
+  WidgetRef ref,
+  IssuedPlanSet set,
+  Sheet sheet,
+) {
+  final project = ref.read(projectControllerProvider);
+  final base = set.base;
+  final today = set.today;
+  final sharedPlanScale = set.sharedPlanScale;
+  final levelCount = project.building.levelCount;
+  final floorIndex =
+      ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+  final net = ref.read(networkControllerProvider).network;
+  final sizing = ref.read(sizingProvider);
+  // Round 14 (drafting-visual-6) — the plan's title block stamps the
+  // register title ([drawingSeriesTitle]).
+  final planChrome = issuableChrome(
+    ref,
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+  ).withTitle(
+    drawingSeriesTitle(DrawingSeries.mechanicalPlan, sheetName: sheet.name),
+  );
+  final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
+  final underlay = set.underlays[sheet.id];
+  final edgeLengths = projectEdgeLengths(net, project);
+  // N5: the §10 centreline-height token folded into each run's size label.
+  final elevationLabels = planEdgeElevationLabels(
+    net,
+    project.building,
+    mounting: ref.read(mountingProvider),
+  );
+  // N13: the stable element tags shared by both plan formats + the reports.
+  final tags = elementTags(net, building: project.building);
+  // N4/B12: the setting-out grid from axis-aligned traced reference lines,
+  // shared by both plan formats.
+  final grid = buildReferenceGrid(
+    ref.read(referenceLinesProvider),
+    sheet.id,
+  );
+  // G1/G5: the equipment tags + gravity fall, shared by both plan formats
+  // (the same tokens the on-canvas plan shows).
+  final nodeTags = planExportNodeTags(net, ref.read(fixtureLibraryProvider));
+  // H5: the LAID design slope from `drainageSlopeProvider` (the Building
+  // page input the sizer + calc report already honour), so every bundled
+  // submittal sheet stamps the SAME fall the report signs off on.
+  final gravitySlope = ref.read(drainageSlopeProvider);
+  final details = set.planDetails[sheet.id] ?? const <PlanDetailCallout>[];
+  final planPdf = planToPdf(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+    projectName: base,
+    sheetName: sheet.name,
+    dateString: today,
+    chrome: planChrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay,
+    edgeElevationLabels: elevationLabels,
+    edgeTags: tags,
+    grid: grid,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    minScaleDenominator: sharedPlanScale,
+    details: details,
+  );
+  final planDxf = networkToDxf(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+    chrome: planChrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay is VectorPlanUnderlay ? underlay : null,
+    edgeElevationLabels: elevationLabels,
+    edgeTags: tags,
+    grid: grid,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
+    projectName: base,
+    details: details,
+    // R6: plotted exactly like the PDF beside it, so both carry the
+    // same label splits + slots.
+    sheetPlot: planSheetPlot(
+      net: net,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      projectName: base,
+      sheetName: sheet.name,
+      dateString: today,
+      chrome: planChrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+      grid: grid,
+      minScaleDenominator: sharedPlanScale,
+    ),
+  );
+  // Drawing review R1 — the plan's DETAIL sheet (enlarged toilet cores /
+  // dense groups), PDF + DXF, numbered M-5nn by the plan's rail position.
+  // S1 — one file per detail sheet.
+  final out = <IssuedPlanDetailFile>[];
+  final dSheets = set.detailSheets[sheet.id] ?? const [];
+  var detailSheetNo = set.detailSheetsBefore[sheet.id] ?? 0;
+  for (var g = 0; g < dSheets.length && metersPerPixel != null; g++) {
+    final callouts = dSheets[g].callouts;
+    detailSheetNo++;
+    // Fix round 3 (O1) — a TYPICAL detail sheet (issued for several
+    // floors) prints no single floor's level code or FFL: tags read
+    // `CW-Ln` and one note keys `n` (`planTypicalDetailNotes`).
+    final typical = (set.typicalFloors[sheet.id]?.length ?? 0) >= 2;
+    var dChrome = planChrome
+        .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
+            sheetName: set.detailSheetName(sheet.id, sheet.name)))
+        .withDrawingNumber(dSheets[g].number)
+        .withSheetCounter(detailSheetNo, set.detailCount);
+    if (typical) {
+      dChrome = dChrome.withLegendNotesReplaced(
+          planTypicalDetailNotes(dChrome.legendNotes));
+    }
+    final dTags = typical
+        ? {for (final e in tags.entries) e.key: planTypicalTag(e.value)}
+        : tags;
+    final dNodeTags = typical
+        ? {for (final e in nodeTags.entries) e.key: planTypicalTag(e.value)}
+        : nodeTags;
+    out.add((
+      number: dSheets[g].number,
+      pdf: planDetailSheetToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheet.id,
+        floorIndex: floorIndex,
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        metersPerPixel: metersPerPixel,
+        details: callouts,
+        chrome: dChrome,
+        edgeElevationLabels: elevationLabels,
+        edgeTags: dTags,
+        nodeTags: dNodeTags,
+        gravitySlope: gravitySlope,
+      ),
+      dxf: planDetailSheetToDxf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheet.id,
+        floorIndex: floorIndex,
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        metersPerPixel: metersPerPixel,
+        details: callouts,
+        chrome: dChrome,
+        edgeElevationLabels: elevationLabels,
+        edgeTags: dTags,
+        nodeTags: dNodeTags,
+        gravitySlope: gravitySlope,
+      ),
+    ));
+  }
+  return (planPdf: planPdf, planDxf: planDxf, details: out);
+}
+
+/// Backlog K-3 — the CURRENT sheet's issued plan pages, the package's own:
+/// the plan, then every detail sheet its bubbles point at (its own, or — a
+/// typical floor — the earlier plan's that issues them). Null with no sheet.
+Future<
+    ({
+      Sheet sheet,
+      IssuedPlanSheetFiles plan,
+      List<IssuedPlanDetailFile> details,
+    })?> _issuedCurrentPlan(WidgetRef ref) async {
+  final sheet = ref.read(sheetsControllerProvider).current;
+  if (sheet == null) return null;
+  final set = await buildIssuedPlanSet(ref,
+      today: DateTime.now().toIso8601String().split('T').first);
+  final files = issuedPlanSheetFiles(ref, set, sheet);
+  final by = set.detailIssuedBy[sheet.id];
+  final issuer = by == null || by == sheet.id
+      ? null
+      : ref.read(sheetsControllerProvider).sheetById(by);
+  return (
+    sheet: sheet,
+    plan: files,
+    details: issuer == null
+        ? files.details
+        : issuedPlanSheetFiles(ref, set, issuer).details,
+  );
+}
+
+/// Backlog K-3 — the sibling path of a standalone plan file's [g]-th detail
+/// sheet: `<plan stem>-detail.<ext>`, then `-detail-2`, ... (the package's
+/// suffixes), beside the chosen plan file.
+String issuedPlanDetailPath(String planPath, int g) {
+  final dot = planPath.lastIndexOf('.');
+  final sepAt = planPath.lastIndexOf(RegExp(r'[\\/]'));
+  final hasExt = dot > sepAt + 1;
+  final stem = hasExt ? planPath.substring(0, dot) : planPath;
+  final ext = hasExt ? planPath.substring(dot) : '';
+  return g == 0 ? '$stem-detail$ext' : '$stem-detail-${g + 1}$ext';
 }
 
 /// H4 — the ONE-FOLDER SUBMITTAL PACKAGE. Pick a destination folder ONCE, then
@@ -2235,207 +2659,13 @@ Future<bool> writeSubmittalPackageToDir(
   ];
   final planSheets = sheetsFm.sheets;
   final localeStrings = MechXStringsData(ref.read(localeProvider));
-  // Round 14 (drafting-visual-7) — every plan of ONE set is issued at ONE
-  // plotted scale: the largest natural `1 : N` over the calibrated sheets
-  // floors each sheet's snap, so a sparse floor no longer plots at 1 : 50
-  // beside a dense 1 : 100 of the same building (overlaying floors, riser
-  // positions and setting-out then need no re-scaling).
-  final planUnderlays = <String, PlanUnderlay?>{};
-  int? sharedPlanScale;
-  {
-    final net0 = ref.read(networkControllerProvider).network;
-    for (final sheet in planSheets) {
-      final underlay = await buildPlanUnderlay(sheet);
-      planUnderlays[sheet.id] = underlay;
-      final natural = planSheetPlot(
-        net: net0,
-        sheetId: sheet.id,
-        floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
-        projectName: base,
-        sheetName: sheet.name,
-        dateString: today,
-        chrome: issuableChrome(
-          ref,
-          sheetId: sheet.id,
-          floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
-        ),
-        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
-        underlay: underlay,
-        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
-      )?.scaleDenominator;
-      if (natural != null && natural > 0) {
-        sharedPlanScale =
-            sharedPlanScale == null || natural > sharedPlanScale
-                ? natural
-                : sharedPlanScale;
-      }
-    }
-  }
-  // Drawing review R1 — the DETAIL callouts each plan needs so it issues
-  // without the overlap stamp, decided up front so the Daftar Gambar lists
-  // the detail sheets (M-5nn, numbered by the plan's rail position) and the
-  // plan + its detail sheet name each other. Same inputs as the plan export.
-  // Drawing review S1 — detail sheets are numbered M-501.. in issue order
-  // (a plan whose clusters need more than one sheet takes consecutive
-  // numbers), so a split never collides with the next plan's detail.
-  String detailNumberFor(int k) => sheetDrawingNumber(
-      base: doc.documentNumber,
-      series: DrawingSeries.mechanicalDetail,
-      index: k + 1);
-  final planDetails = <String, List<PlanDetailCallout>>{};
-  // Each plan's detail SHEETS in order: the drawing number + its callouts.
-  final planDetailSheets =
-      <String, List<({String number, List<PlanDetailCallout> callouts})>>{};
-  var detailCount = 0;
-  // Drawing backlog I-3 (c) — the floors each issued detail set serves.
-  final typicalFloors = <String, List<String>>{};
-  {
-    final net0 = ref.read(networkControllerProvider).network;
-    final sizing0 = ref.read(sizingProvider);
-    final lengths0 = projectEdgeLengths(net0, project);
-    final elev0 = planEdgeElevationLabels(net0, project.building,
-        mounting: ref.read(mountingProvider));
-    final tags0 = elementTags(net0, building: project.building);
-    final nodeTags0 =
-        planExportNodeTags(net0, ref.read(fixtureLibraryProvider));
-    final slope0 = ref.read(drainageSlopeProvider);
-    for (var i = 0; i < planSheets.length; i++) {
-      final sheet = planSheets[i];
-      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
-      final d = planSheetDetails(
-        net: net0,
-        sizing: sizing0,
-        edgeLengths: lengths0,
-        sheetId: sheet.id,
-        floorIndex: fIdx,
-        projectName: base,
-        sheetName: sheet.name,
-        dateString: today,
-        detailSheetRef: detailNumberFor(detailCount),
-        detailSheetRefOf: (k) => detailNumberFor(detailCount + k),
-        chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: fIdx)
-            .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalPlan,
-                sheetName: sheet.name)),
-        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
-        underlay: planUnderlays[sheet.id],
-        minScaleDenominator: sharedPlanScale,
-        edgeElevationLabels: elev0,
-        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
-        edgeTags: tags0,
-        nodeTags: nodeTags0,
-        gravitySlope: slope0,
-      );
-      if (d.isNotEmpty) {
-        planDetails[sheet.id] = d;
-        final refs = <String>[];
-        // Drawing backlog I-3 (a) — a keyed cluster has no detail sheet.
-        for (final c in d) {
-          if (!c.keyed && !refs.contains(c.sheetRef)) refs.add(c.sheetRef);
-        }
-        planDetailSheets[sheet.id] = [
-          for (final r in refs)
-            (
-              number: r,
-              callouts: [
-                for (final c in d)
-                  if (!c.keyed && c.sheetRef == r) c
-              ]
-            ),
-        ];
-        detailCount += refs.length;
-      }
-    }
-    // Drawing backlog I-3 (c) — a plan whose detail sheets draw exactly
-    // what an earlier plan's do (same geometry and labels once the level
-    // code is masked, `planDetailContentSignature`) issues none of its own:
-    // its bubbles point at the earlier plan's sheets, issued once as
-    // 'DETAIL - TIPIKAL - Lantai a..b'. The sheets are then renumbered
-    // M-501.. in issue order.
-    final area0 = planDetailDrawingAreaMm(
-        projectName: base, sheetName: '', dateString: today);
-    final canonOf = <String, String>{};
-    final bySig = <String, String>{};
-    for (final sheet in planSheets) {
-      final ds = planDetailSheets[sheet.id];
-      final mpp = project.calibrationFor(sheet.id)?.metersPerPixel;
-      if (ds == null || ds.isEmpty || mpp == null) continue;
-      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
-      final sig = [
-        for (final d in ds)
-          planDetailContentSignature(
-              planDetailSheetPlot(
-                  net: net0,
-                  sizing: sizing0,
-                  edgeLengths: lengths0,
-                  sheetId: sheet.id,
-                  floorIndex: fIdx,
-                  metersPerPixel: mpp,
-                  details: d.callouts,
-                  areaMm: area0,
-                  edgeTags: tags0,
-                  edgeElevationLabels: elev0),
-              nodeTags: nodeTags0),
-      ].join('\n##\n');
-      canonOf[sheet.id] = bySig.putIfAbsent(sig, () => sheet.id);
-    }
-    final refMap = <String, Map<String, String>>{};
-    var next = 0;
-    for (final sheet in planSheets) {
-      final ds = planDetailSheets[sheet.id];
-      final canon = canonOf[sheet.id];
-      if (ds == null || canon == null) continue;
-      final m = refMap[sheet.id] = <String, String>{};
-      if (canon == sheet.id) {
-        for (final d in ds) {
-          m[d.number] = detailNumberFor(next++);
-        }
-      } else {
-        final cs = planDetailSheets[canon]!;
-        for (var k = 0; k < ds.length; k++) {
-          m[ds[k].number] = refMap[canon]![cs[k].number]!;
-        }
-      }
-    }
-    for (final sheet in planSheets) {
-      final m = refMap[sheet.id];
-      if (m == null) continue;
-      String to(String r) => m[r] ?? r;
-      PlanDetailCallout remap(PlanDetailCallout c) => c.keyed
-          ? c
-          : c.renamed(c.letter, to(c.sheetRef), matches: [
-              for (final x in c.matches)
-                PlanDetailMatch(x.x1, x.y1, x.x2, x.y2,
-                    letter: x.letter, sheetRef: to(x.sheetRef)),
-            ]);
-      planDetails[sheet.id] = [
-        for (final c in planDetails[sheet.id]!) remap(c)
-      ];
-      if (canonOf[sheet.id] == sheet.id) {
-        planDetailSheets[sheet.id] = [
-          for (final d in planDetailSheets[sheet.id]!)
-            (
-              number: to(d.number),
-              callouts: [for (final c in d.callouts) remap(c)]
-            ),
-        ];
-      } else {
-        planDetailSheets.remove(sheet.id);
-      }
-    }
-    for (final sheet in planSheets) {
-      final canon = canonOf[sheet.id];
-      if (canon != null) {
-        (typicalFloors[canon] ??= <String>[]).add(sheet.name);
-      }
-    }
-    detailCount = next;
-  }
-  // The detail sheet name: the plan's own floor, or the typical floors.
-  String detailSheetName(String sheetId, String name) {
-    final fl = typicalFloors[sheetId];
-    return fl == null || fl.length < 2 ? name : planDetailTypicalName(fl);
-  }
-  var detailSheetNo = 0;
+  // Backlog K-3 — the plan set (one shared scale, the DETAIL callouts, the
+  // M-5nn numbers in issue order, typical floors issued once) is built by
+  // [buildIssuedPlanSet], the builder the standalone plan exports use too.
+  final planSet = await buildIssuedPlanSet(ref, today: today);
+  final planDetailSheets = planSet.detailSheets;
+  String detailSheetName(String sheetId, String name) =>
+      planSet.detailSheetName(sheetId, name);
 
   for (final s in sheetsFm.sheets) {
     final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
@@ -2784,170 +3014,23 @@ Future<bool> writeSubmittalPackageToDir(
           );
       final levelCount = project.building.levelCount;
       final floorIndex = sheetsFm.floorFor(sheet.id, levelCount);
-      final net = ref.read(networkControllerProvider).network;
-      final sizing = ref.read(sizingProvider);
-      // Round 14 (drafting-visual-6) — the plan's title block stamps the
-      // register title ([drawingSeriesTitle]).
-      final planChrome = issuableChrome(
-        ref,
-        sheetId: sheet.id,
-        floorIndex: floorIndex,
-      ).withTitle(
-        drawingSeriesTitle(DrawingSeries.mechanicalPlan, sheetName: sheet.name),
-      );
       final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
-      final underlay = planUnderlays.containsKey(sheet.id)
-          ? planUnderlays[sheet.id]
-          : await buildPlanUnderlay(sheet);
-      final edgeLengths = projectEdgeLengths(net, project);
-      // N5: the §10 centreline-height token folded into each run's size label.
-      final elevationLabels = planEdgeElevationLabels(
-        net,
-        project.building,
-        mounting: ref.read(mountingProvider),
-      );
-      // N13: the stable element tags shared by both plan formats + the reports.
-      final tags = elementTags(net, building: project.building);
-      // N4/B12: the setting-out grid from axis-aligned traced reference lines,
-      // shared by both plan formats.
-      final grid = buildReferenceGrid(
-        ref.read(referenceLinesProvider),
-        sheet.id,
-      );
-      // G1/G5: the equipment tags + gravity fall, shared by both plan formats
-      // (the same tokens the on-canvas plan shows).
-      final nodeTags =
-          planExportNodeTags(net, ref.read(fixtureLibraryProvider));
-      // H5: the LAID design slope from `drainageSlopeProvider` (the Building
-      // page input the sizer + calc report already honour), so every bundled
-      // submittal sheet stamps the SAME fall the report signs off on.
-      final gravitySlope = ref.read(drainageSlopeProvider);
+      final underlay = planSet.underlays[sheet.id];
+      // Backlog K-3 — the plan and its detail sheets from the ONE renderer
+      // the standalone plan exports call ([issuedPlanSheetFiles]).
+      final files = issuedPlanSheetFiles(ref, planSet, sheet);
       // One file per sheet, numbered by rail position so a multi-floor bundle
       // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
       final suffix =
           'plan-${i + 1}-${safeFileStem(sheet.name, fallback: 'sheet')}';
-      await File(out('$suffix.pdf')).writeAsBytes(
-        planToPdf(
-          net: net,
-          sizing: sizing,
-          edgeLengths: edgeLengths,
-          sheetId: sheet.id,
-          floorIndex: floorIndex,
-          projectName: base,
-          sheetName: sheet.name,
-          dateString: today,
-          chrome: planChrome,
-          metersPerPixel: metersPerPixel,
-          underlay: underlay,
-          edgeElevationLabels: elevationLabels,
-          edgeTags: tags,
-          grid: grid,
-          nodeTags: nodeTags,
-          gravitySlope: gravitySlope,
-          minScaleDenominator: sharedPlanScale,
-          details: planDetails[sheet.id] ?? const [],
-        ),
-      );
-      await File(out('$suffix.dxf')).writeAsString(
-        networkToDxf(
-          net: net,
-          sizing: sizing,
-          edgeLengths: edgeLengths,
-          sheetId: sheet.id,
-          floorIndex: floorIndex,
-          chrome: planChrome,
-          metersPerPixel: metersPerPixel,
-          underlay: underlay is VectorPlanUnderlay ? underlay : null,
-          edgeElevationLabels: elevationLabels,
-          edgeTags: tags,
-          grid: grid,
-          nodeTags: nodeTags,
-          gravitySlope: gravitySlope,
-          // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
-          projectName: base,
-          details: planDetails[sheet.id] ?? const [],
-          // R6: plotted exactly like the PDF beside it, so both carry the
-          // same label splits + slots.
-          sheetPlot: planSheetPlot(
-            net: net,
-            sheetId: sheet.id,
-            floorIndex: floorIndex,
-            projectName: base,
-            sheetName: sheet.name,
-            dateString: today,
-            chrome: planChrome,
-            metersPerPixel: metersPerPixel,
-            underlay: underlay,
-            grid: grid,
-            minScaleDenominator: sharedPlanScale,
-          ),
-        ),
-      );
-      // Drawing review R1 — the plan's DETAIL sheet (enlarged toilet cores /
-      // dense groups), PDF + DXF, numbered M-5nn by the plan's rail position.
-      // S1 — one file per detail sheet: `-detail`, then `-detail-2`, ...
-      final dSheets = planDetailSheets[sheet.id] ?? const [];
-      for (var g = 0; g < dSheets.length && metersPerPixel != null; g++) {
-        final details = dSheets[g].callouts;
+      await File(out('$suffix.pdf')).writeAsBytes(files.planPdf);
+      await File(out('$suffix.dxf')).writeAsString(files.planDxf);
+      // Drawing review R1 / S1 — one file per detail sheet: `-detail`, then
+      // `-detail-2`, ...
+      for (var g = 0; g < files.details.length; g++) {
         final dSuffix = g == 0 ? '$suffix-detail' : '$suffix-detail-${g + 1}';
-        detailSheetNo++;
-        // Fix round 3 (O1) — a TYPICAL detail sheet (issued for several
-        // floors) prints no single floor's level code or FFL: tags read
-        // `CW-Ln` and one note keys `n` (`planTypicalDetailNotes`).
-        final typical = (typicalFloors[sheet.id]?.length ?? 0) >= 2;
-        var dChrome = planChrome
-            .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
-                sheetName: detailSheetName(sheet.id, sheet.name)))
-            .withDrawingNumber(dSheets[g].number)
-            .withSheetCounter(detailSheetNo, detailCount);
-        if (typical) {
-          dChrome = dChrome.withLegendNotesReplaced(
-              planTypicalDetailNotes(dChrome.legendNotes));
-        }
-        final dTags = typical
-            ? {for (final e in tags.entries) e.key: planTypicalTag(e.value)}
-            : tags;
-        final dNodeTags = typical
-            ? {for (final e in nodeTags.entries) e.key: planTypicalTag(e.value)}
-            : nodeTags;
-        await File(out('$dSuffix.pdf')).writeAsBytes(
-          planDetailSheetToPdf(
-            net: net,
-            sizing: sizing,
-            edgeLengths: edgeLengths,
-            sheetId: sheet.id,
-            floorIndex: floorIndex,
-            projectName: base,
-            sheetName: sheet.name,
-            dateString: today,
-            metersPerPixel: metersPerPixel,
-            details: details,
-            chrome: dChrome,
-            edgeElevationLabels: elevationLabels,
-            edgeTags: dTags,
-            nodeTags: dNodeTags,
-            gravitySlope: gravitySlope,
-          ),
-        );
-        await File(out('$dSuffix.dxf')).writeAsString(
-          planDetailSheetToDxf(
-            net: net,
-            sizing: sizing,
-            edgeLengths: edgeLengths,
-            sheetId: sheet.id,
-            floorIndex: floorIndex,
-            projectName: base,
-            sheetName: sheet.name,
-            dateString: today,
-            metersPerPixel: metersPerPixel,
-            details: details,
-            chrome: dChrome,
-            edgeElevationLabels: elevationLabels,
-            edgeTags: dTags,
-            nodeTags: dNodeTags,
-            gravitySlope: gravitySlope,
-          ),
-        );
+        await File(out('$dSuffix.pdf')).writeAsBytes(files.details[g].pdf);
+        await File(out('$dSuffix.dxf')).writeAsString(files.details[g].dxf);
       }
       // H1: the electrical installation layout (denah instalasi listrik) for
       // this same sheet+floor — panels/loads at their placed positions + feeder
