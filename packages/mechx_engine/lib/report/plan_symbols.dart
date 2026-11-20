@@ -989,7 +989,9 @@ PlanKeyTable? placePlanKeyTable(
     );
     // Fix round 6 part 3 (Obs 11) — never inside a detail window.
     for (final w in avoid) {
-      if (b.minX < w.maxX && w.minX < b.maxX && b.minY < w.maxY &&
+      if (b.minX < w.maxX &&
+          w.minX < b.maxX &&
+          b.minY < w.maxY &&
           w.minY < b.maxY) {
         return false;
       }
@@ -1573,10 +1575,84 @@ LeaderedLabelPlacement placePlanLabel({
   double ownHalfWidth = 0,
   PlanKeyRegistry? keys,
   bool keyOnly = false,
+}) =>
+    _placePlanLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: textSize,
+        layout: layout,
+        splitLines: splitLines,
+        ownRunId: ownRunId,
+        recordBounds: recordBounds,
+        anchorPoint: anchorPoint,
+        extraStations: extraStations,
+        beyondEnds: beyondEnds,
+        ownHalfWidth: ownHalfWidth,
+        keys: keys,
+        keyOnly: keyOnly)!;
+
+/// Fix round 6 part 4 (Obs 9 / T7) — an OPTIONAL tag: [placePlanLabel]'s
+/// own slots under its own reservation rules, committed ONLY when the tag
+/// finds a legal spot (a clear slot, or on a keyed sheet a clear uncrossed
+/// escape within the keyed leader cap). Where [placePlanLabel] would key the
+/// element or print a counted overprint, this returns null and changes
+/// NOTHING in [layout] / [keys]: a failed optional tag never stamps the
+/// sheet, never makes a key and never paginates. Callers place every
+/// required tag first.
+LeaderedLabelPlacement? placeOptionalPlanLabel({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required PlanLabelLayout layout,
+  List<String>? splitLines,
+  String? ownRunId,
+  ({double x, double y})? anchorPoint,
+  double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
+}) =>
+    _placePlanLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: textSize,
+        layout: layout,
+        splitLines: splitLines,
+        ownRunId: ownRunId,
+        anchorPoint: anchorPoint,
+        ownHalfWidth: ownHalfWidth,
+        keys: keys,
+        optional: true);
+
+LeaderedLabelPlacement? _placePlanLabel({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required PlanLabelLayout layout,
+  List<String>? splitLines,
+  String? ownRunId,
+  bool recordBounds = false,
+  ({double x, double y})? anchorPoint,
+  List<({double x, double y})> extraStations = const [],
+  bool beyondEnds = true,
+  double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
+  bool keyOnly = false,
+  bool optional = false,
 }) {
   // Drawing backlog I-3 (a) — a tag inside a keyed cluster goes straight to
   // its key circle.
-  if (keyOnly && keys != null) {
+  if (keyOnly && !optional && keys != null) {
     return _placeKeyTag(
         layout: layout,
         keys: keys,
@@ -1958,6 +2034,7 @@ LeaderedLabelPlacement placePlanLabel({
       (best == null ||
           bestScore.$1 != 0 ||
           bestScore.$5 > kPlanKeyedLeaderMaxFactor * ts + eps)) {
+    if (optional) return null;
     return _placeKeyTag(
         layout: layout,
         keys: keys,
@@ -1967,6 +2044,7 @@ LeaderedLabelPlacement placePlanLabel({
         ownRunId: ownRunId);
   }
   if (best == null) {
+    if (optional) return null;
     // Degenerate (no station within the cap): first escape row at the midpoint.
     final (cx, cy) = along.first;
     final b = block(escapeForms.first, cx, cy, 1, du + lh);
@@ -1979,6 +2057,7 @@ LeaderedLabelPlacement placePlanLabel({
   // Round 29 (drawings-3-6) — so is a tier-2 slot whose LEADER strikes
   // through a placed label (it reads as tagging that label's element).
   if (bestScore.$1 == 3 || (bestScore.$1 == 2 && bestLeaderStrikesLabel)) {
+    if (optional) return null;
     layout._unresolved++;
   }
   return commit(best, anchor: bestA, end: bestE);
@@ -2053,9 +2132,14 @@ LeaderedLabelPlacement _placeKeyTag({
         );
         var cost = 0.0;
         if (layout.hitsBox(box)) cost += 1;
-        // Fix round 4 (R3) — the element's OWN run may pass under the circle
-        // but never through its NUMBER (a key on its own pipe printed the pipe
-        // through its digits); any other run keeps the 0.85 r test.
+        // Fix round 6 part 4 (key 7, tower M-512 Detail C) — the element's
+        // OWN run (and its flow chevron) never passes THROUGH the circle:
+        // fix round 4 tested it only against a tight box round the digits,
+        // so a key hugging its own pipe printed with the pipe through the
+        // circle beside its number. Its own run is tested on the true
+        // circle (within 0.85 r of the centre — it may still meet the
+        // rim, where the key sits against its pipe); any other run keeps
+        // the long-standing 0.85 r box.
         final numBox = (
           minX: cx - tw / 2 - 0.1 * ts,
           minY: cy - 0.5 * ts,
@@ -2064,7 +2148,12 @@ LeaderedLabelPlacement _placeKeyTag({
         );
         for (final rr in layout._runs) {
           final own = rr.id != null && rr.id == ownRunId;
-          if (_segHitsBox(rr.seg, own ? numBox : inkBox, 0)) cost += 1;
+          if (own
+              ? (_segHitsBox(rr.seg, numBox, 0) ||
+                  _segPointDist(rr.seg, cx, cy) < 0.85 * r)
+              : _segHitsBox(rr.seg, inkBox, 0)) {
+            cost += 1;
+          }
         }
         if (lead) {
           final ex = cx - ux * r, ey = cy - uy * r;
@@ -2133,6 +2222,17 @@ LeaderedLabelPlacement _placeKeyTag({
     lines: [line],
     keyCircle: (x: b.x, y: b.y, r: r),
   );
+}
+
+/// Distance from (px, py) to the segment [s]. Pure.
+double _segPointDist(LabelSegment s, double px, double py) {
+  final dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+  final ll = dx * dx + dy * dy;
+  final t = ll == 0
+      ? 0.0
+      : (((px - s.x1) * dx + (py - s.y1) * dy) / ll).clamp(0.0, 1.0);
+  final qx = s.x1 + t * dx - px, qy = s.y1 + t * dy - py;
+  return math.sqrt(qx * qx + qy * qy);
 }
 
 /// Legacy entry point (N3): place [text] for the edge (ax,ay)→(bx,by) against

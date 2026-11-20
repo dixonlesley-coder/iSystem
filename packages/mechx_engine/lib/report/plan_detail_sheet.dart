@@ -59,12 +59,12 @@ class PlanDetailSheetPlot {
   /// the plan's suppression — every element is labelled exactly once).
   final Set<String> unlabelledIds;
 
-  /// Fix round 6 part 3 — the nodes / runs a window shows in its margin
-  /// (outside its callout box, owned by no other detail) on a window
-  /// coarser than 1:10: KEYED into the sheet's one key table, so every
-  /// sized run and fixture the window shows is identified without crowding
-  /// the window with full tags.
-  final Set<String> keyOnlyIds;
+  /// Fix round 6 part 4 (Obs 9 / T7) — the nodes / runs a window coarser
+  /// than 1:10 shows in its margin (outside its callout box, owned by no
+  /// other detail): OPTIONAL tags, placed after every required one and only
+  /// where they find a legal spot; one that does not stays plan context
+  /// (never keyed, never counted in the overlap stamp, never a new sheet).
+  final Set<String> optionalLabelIds;
 
   /// Fix round 6 part 3 (T4) — how many run break marks the windows draw.
   final int breakMarks;
@@ -83,7 +83,7 @@ class PlanDetailSheetPlot {
     required this.edgeElevationLabels,
     required this.hiddenNodeIds,
     required this.unlabelledIds,
-    this.keyOnlyIds = const {},
+    this.optionalLabelIds = const {},
     this.breakMarks = 0,
     required this.marks,
     required this.occupiedMm,
@@ -209,7 +209,7 @@ PlanDetailSheetPlot planDetailSheetPlot({
   final used = <String>{};
   final hidden = <String>{};
   final unlabelled = <String>{};
-  final keyOnly = <String>{};
+  final optional = <String>{};
   var breaks = 0;
   final sz = <String, EdgeSizing>{};
   final lens = <String, Length>{};
@@ -269,10 +269,11 @@ PlanDetailSheetPlot planDetailSheetPlot({
       // every node and run it SHOWS is tagged or keyed there (a detail
       // exists to be read): the margin outside the callout box used to be
       // left unlabelled ('labelled on the plan'), so the house / shophouse
-      // 1:10 windows showed bare runs and fixtures. Coarser windows keep the
-      // margin as context (labelling it there crowded the tower's details
-      // into 14 more sheets).
-      if (!d.containsPx(nd.x, nd.y) && !labelMargin) unlabelled.add(nd.id);
+      // 1:10 windows showed bare runs and fixtures. Coarser windows tag the
+      // margin OPTIONALLY (part 4): a tag that finds a legal spot prints,
+      // one that does not stays context (required labelling there crowded
+      // the tower's details into 13-14 more sheets).
+      if (!d.containsPx(nd.x, nd.y) && !labelMargin) optional.add(nd.id);
       nodes.add(nd.copyWith(x: mx(nd.x), y: my(nd.y)));
     }
     String bare(String baseId, double x, double y, int fl) {
@@ -332,11 +333,10 @@ PlanDetailSheetPlot planDetailSheetPlot({
         // here (T7).
         final mx2 = (a.x + c.x) / 2, my2 = (a.y + c.y) / 2;
         if (!d.containsPx(mx2, my2)) {
-          if (details.any(
-              (o) => !identical(o, d) && o.containsPx(mx2, my2))) {
+          if (details.any((o) => !identical(o, d) && o.containsPx(mx2, my2))) {
             unlabelled.add(id);
           } else if (!labelMargin) {
-            unlabelled.add(id);
+            optional.add(id);
           }
         }
         edges.add(NetEdge(
@@ -436,7 +436,7 @@ PlanDetailSheetPlot planDetailSheetPlot({
     edgeElevationLabels: elev,
     hiddenNodeIds: hidden,
     unlabelledIds: unlabelled,
-    keyOnlyIds: keyOnly,
+    optionalLabelIds: optional,
     breakMarks: breaks,
     marks: PlanMarks(lines: lines, texts: texts),
     occupiedMm:
@@ -485,8 +485,7 @@ DrawingChrome? planDetailLegendChrome(
 /// (`WC water closet - LAV lavatory - ...`, [kFixturePlanCodeNames]) cut to
 /// the [codes] present; a code note left empty is dropped, every other note
 /// kept verbatim. Pure.
-List<String> planDetailNarrowCodeNotes(
-    List<String> notes, Set<String?> codes) {
+List<String> planDetailNarrowCodeNotes(List<String> notes, Set<String?> codes) {
   final out = <String>[];
   for (final note in notes) {
     final parts = note.split(' - ');
@@ -633,7 +632,7 @@ Uint8List planDetailSheetToPdf({
     hiddenNodeIds: p.hiddenNodeIds,
     fixedFit: const PlanFixedFit(),
     unlabelledIds: p.unlabelledIds,
-    keyOnlyIds: p.keyOnlyIds,
+    optionalLabelIds: p.optionalLabelIds,
     keyTableAvoidPx: p.keyTableAvoidPx,
   );
 }
@@ -688,7 +687,7 @@ String planDetailSheetToDxf({
     extraMarks: p.marks,
     scaleRowOverride: kPlanDetailScaleRow,
     unlabelledIds: p.unlabelledIds,
-    keyOnlyIds: p.keyOnlyIds,
+    optionalLabelIds: p.optionalLabelIds,
     keyTableAvoidPx: p.keyTableAvoidPx,
     sheetPlot: planSheetPlot(
       net: p.net,
@@ -707,8 +706,8 @@ String planDetailSheetToDxf({
 
 /// Drawing backlog I-3 (c) — a level code in a tag (`CW-L12`, `D-GF`,
 /// `SP-B1`, `RW-RF`) masked, so two typical floors' tags compare equal.
-String planDetailMaskLevel(String s) => s.replaceAll(
-    RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), '#');
+String planDetailMaskLevel(String s) =>
+    s.replaceAll(RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), '#');
 
 /// Drawing backlog I-3 (c) — the CONTENT of a detail sheet's [plot] as a
 /// string: every detail's scale and frame, every drawn node (paper-mm
@@ -729,7 +728,8 @@ String planDetailContentSignature(PlanDetailSheetPlot plot,
         '${pos[n.id]}|${n.role.name}|${n.component?.name}|'
             '${n.fixture?.name}|'
             '${planDetailMaskLevel(nodeTags?[n.id] ?? '')}|'
-            '${plot.unlabelledIds.contains(n.id)}',
+            // Part 4 — an optional (margin) tag signs as before (context).
+            '${plot.unlabelledIds.contains(n.id) || plot.optionalLabelIds.contains(n.id)}',
   ]..sort();
   final edges = <String>[];
   for (final e in plot.net.edges) {
@@ -745,7 +745,7 @@ String planDetailContentSignature(PlanDetailSheetPlot plot,
         '${len == null ? '-' : r(len.meters)}|'
         '${planDetailMaskLevel(plot.edgeTags[e.id] ?? '')}|'
         '${plot.edgeElevationLabels[e.id] ?? ''}|'
-        '${plot.unlabelledIds.contains(e.id)}');
+        '${plot.unlabelledIds.contains(e.id) || plot.optionalLabelIds.contains(e.id)}');
   }
   edges.sort();
   final frames = [
@@ -762,8 +762,8 @@ String planDetailContentSignature(PlanDetailSheetPlot plot,
 /// several floors) prints no floor-specific level code: `CW-L7` reads
 /// `CW-Ln`, `n` keyed by [kPlanTypicalDetailNote]. Riser / plant tags (no
 /// level code) are unchanged. Pure.
-String planTypicalTag(String s) => s.replaceAll(
-    RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), 'Ln');
+String planTypicalTag(String s) =>
+    s.replaceAll(RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), 'Ln');
 
 /// Fix round 3 (O1) — the one note a typical detail sheet carries in place
 /// of the single-floor CL datum (`CL = ... (Lantai 7 FFL +24.00)`): the

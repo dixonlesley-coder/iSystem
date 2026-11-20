@@ -458,7 +458,7 @@ Uint8List planToPdf({
   Set<String> hiddenNodeIds = const {},
   PlanFixedFit? fixedFit,
   Set<String> unlabelledIds = const {},
-  Set<String> keyOnlyIds = const {},
+  Set<String> optionalLabelIds = const {},
   List<LabelBox> keyTableAvoidPx = const [],
 }) =>
     _planPdfBuild(
@@ -486,7 +486,7 @@ Uint8List planToPdf({
       hiddenNodeIds: hiddenNodeIds,
       fixedFit: fixedFit,
       unlabelledIds: unlabelledIds,
-      keyOnlyIds: keyOnlyIds,
+      optionalLabelIds: optionalLabelIds,
       keyTableAvoidPx: keyTableAvoidPx,
     ).bytes;
 
@@ -641,7 +641,7 @@ List<PlanDetailCallout> planSheetDetails({
       extraOccupiedPx: plot.occupiedMm,
       hiddenNodeIds: plot.hiddenNodeIds,
       unlabelledIds: plot.unlabelledIds,
-      keyOnlyIds: plot.keyOnlyIds,
+      optionalLabelIds: plot.optionalLabelIds,
       keyTableAvoidPx: plot.keyTableAvoidPx,
       fixedFit: const PlanFixedFit(),
       layoutOnly: true,
@@ -893,7 +893,7 @@ const double kPlanDetailMarginMm = 4;
   PlanFixedFit? fixedFit,
   bool layoutOnly = false,
   Set<String> unlabelledIds = const {},
-  Set<String> keyOnlyIds = const {},
+  Set<String> optionalLabelIds = const {},
   List<LabelBox> keyTableAvoidPx = const [],
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -1107,7 +1107,7 @@ const double kPlanDetailMarginMm = 4;
     details: details,
     extraMarks: extraMarks,
     unlabelledIds: unlabelledIds,
-    keyOnlyIds: keyOnlyIds,
+    optionalLabelIds: optionalLabelIds,
     keyTableAvoidPx: keyTableAvoidPx,
   );
   final scaleDenominator = (pointsPerMeter == null || metersPerPixel == null)

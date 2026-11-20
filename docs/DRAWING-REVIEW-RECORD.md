@@ -1555,6 +1555,17 @@ Regenerated set: `drawings-z3` (scratchpad); pre-check FAIL 0 on all five buildi
 | T4 break marks | A cut run simply ended at the window edge. | `planBreakMarkLines` double slash at the edge; legend note only when drawn. | none (unit test) |
 | Item 1 / Obs 9 key-only margins | (not changed) | Measured: key-only labels for margins of windows coarser than 1:10 took the tower from 65 to 78 drawing files with overlap stamps; NOT enabled, as instructed. | none |
 
+### Fix round 6 part 4 (2026-11-20)
+
+Regenerated set: `drawings-z4` (scratchpad); pre-check FAIL 0 on all five buildings; drawing files and page counts equal to `drawings-z3`; the new key-circle class fires on `drawings-z3`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| Obs 9 / T7 coarse windows (M-505 Detail B) | The margin of a window coarser than 1:10 was left unlabelled as plan context (required labels there added 13-14 tower sheets). | Margin items are OPTIONAL tags (`placeOptionalPlanLabel`, `optionalLabelIds`), placed after every required tag and only in a legal spot; one that fails stays context (never keyed, counted or paginated). Placed / skipped: office 6 / 4, apartment 23 / 11, tower 57 / 33. The part-3 `keyOnlyIds` path is gone (replaced by this one). | none (unit tests) |
+| Key 7 on its own run (M-512 Detail C) | Fix round 4 tested the element's own run only against a tight box round the digits, so the pipe could pass through the circle beside the number. | `_placeKeyTag` also rejects its own run within 0.85 r of the circle centre. | item 6 'no stroke through a plan / detail key circle' (`key_circle_run_hits`): 33 files on `drawings-z3`, 0 on `drawings-z4`. |
+
+PNGs to re-check in `drawings-z4`: `tower/png/Menara Contoh 30-plan-5-Lantai 5-detail-p1.png` (M-505), `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png` (M-512).
+
 ## Reviewer re-check of fix round 6 (2026-11-20)
 
 | Item | Sheet checked | Result |
@@ -1569,7 +1580,8 @@ Regenerated set: `drawings-z3` (scratchpad); pre-check FAIL 0 on all five buildi
 | T7 1:10 | house M-501 | PASS |
 | T9 WH-01 | hand check | 2 x 0.126 x 8.658 x 3.69 = 8.05 V = 3.49 % |
 | T9 P-05 loop | hand check | 2 x 0.126 x 5.52 = 1.39 ohm vs the 1.92 ohm limit - PASS |
-| Obs 11 (part 3) | | |
-| T4 break marks (part 3) | | |
-| Item 1 / Obs 9 (part 3, not enabled) | | |
+| Obs 11 (part 3) | tower M-512, M-505 | PASS - key tables outside the windows |
+| T4 break marks (part 3) | tower M-512 Detail C | PASS - break marks drawn, legend note printed |
+| Obs 9 / T7 coarse windows (part 4, optional tags) | | |
+| Key 7 off its own run (part 4) | | |
 

@@ -480,6 +480,44 @@ def key_circle_hits(pdf, clear=0.3):
     return out
 
 
+def key_circle_run_hits(pdf, frac=0.85):
+    """Fix round 6 part 4 (Obs 12, item 6) - {page: [key]}: a KEY circle
+    (its own text a number) that a stroke passes THROUGH - a run, its own
+    run included, a chevron, a frame - on a plan or detail sheet. Fix round
+    4's glyph test (R3) shrinks the digit quads, so a pipe through the
+    circle beside its digit (tower M-512 Detail C, key 7) escaped it. A
+    stroke counts when it comes within [frac] r of the centre; the key's
+    own leader ends ON the circle (distance r) and never counts."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            segs = _page_lines(pg)
+            hits = []
+            for cx, cy, r in page_circles(pg):
+                own = [k for k in range(len(chars))
+                       if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                              for x, y in quads[k])]
+                key = ''.join(chars[k]['text'] for k in
+                              sorted(own, key=lambda k: chars[k]['x0']))
+                if not re.fullmatch(r'\d{1,3}', key):
+                    continue
+                for x1, y1, x2, y2, *_ in segs:
+                    dx, dy = x2 - x1, y2 - y1
+                    ll = dx * dx + dy * dy
+                    t = 0.0 if ll == 0 else max(0.0, min(1.0, (
+                        (cx - x1) * dx + (cy - y1) * dy) / ll))
+                    px, py = x1 + t * dx, y1 + t * dy
+                    if ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 < frac * r:
+                        hits.append(key)
+                        break
+            if hits:
+                out[i] = hits
+    return out
+
+
 def symbol_text_hits(pdf):
     """Fix round 3 (S1) - {page: [text]}: on a power one-line, a text run
     (consecutive glyphs on one line) that touches a symbol circle it is not
@@ -1773,6 +1811,27 @@ def run_building(root, b):
                      '; '.join(h[:6]))
             else:
                 emit(8, 'PASS', lab, 'key leaders capped, uncrossed, clear')
+
+    # Fix round 6 part 4 (item 6) - no stroke passes through a key circle
+    # on a plan or detail sheet (its own run included).
+    lines += ['', '## Item 6 - no stroke through a plan / detail key circle '
+              '(scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-plan-\d+-.+$', st) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = key_circle_run_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} key circle(s) with a stroke '
+                     'through: ' + ', '.join(f'key {k}' for k in h[:8]))
+            else:
+                emit(6, 'PASS', lab, 'no stroke through a key circle')
 
     # R2 (item 6) - a riser key circle never sits on (or tight to) a symbol.
     lines += ['', '## Item 6 - riser key circles clear of every symbol '
