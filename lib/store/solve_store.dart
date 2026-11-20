@@ -36,6 +36,7 @@ import 'fire_store.dart'
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sizing_store.dart';
+import 'tank_fill_store.dart' show mainsFeedFieldProvider;
 
 Pressure get _targetResidual =>
     SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
@@ -502,7 +503,9 @@ PressureSolution _coldUpfeed(Network net, Map<String, EdgeSizing> sizing,
 /// IS [solveProvider] (same object). [solveProvider] stays the single-source
 /// SIZING basis (its `requiredPumpHead` sizes the movers); the heatmap, the
 /// node probe, the over-pressure judge and the SNI-minimum judge read this.
-final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
+/// Backlog K-2 — the PUMP-SIDE field; [upfeedDeliveredProvider] overlays the
+/// mains side of each meter feed on it.
+final _upfeedPumpSideDeliveredProvider = Provider<PressureSolution?>((ref) {
   final base = ref.watch(solveProvider);
   if (base == null) return null;
   final transfers = ref.watch(transferPumpNodeIdsProvider);
@@ -532,6 +535,48 @@ final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
           targetResidual: _targetResidual),
       extra);
 });
+
+/// Backlog K-2 (2026-11-20) — the UPFEED delivered field: the pump-side
+/// field ([_upfeedPumpSideDeliveredProvider], byte-identical at every pump-
+/// side node) with the MAINS side of each meter feed ([mainsFeedFieldProvider])
+/// in place of the solve's back-calculation from the ground tank (which read
+/// the meter below 0 kPa). A DELIVERY node is never overwritten (every judge
+/// reads the solved figure); no meter feed ⇒ the same object.
+final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
+  final s = ref.watch(_upfeedPumpSideDeliveredProvider);
+  if (s == null) return null;
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds,
+      ref.watch(mainsFeedFieldProvider));
+  if (mains.isEmpty) return s;
+  return PressureSolution(
+    residualPressure: {
+      ...s.residualPressure,
+      for (final e in mains.entries) e.key: e.value.residual,
+    },
+    requiredPumpHead: s.requiredPumpHead,
+    criticalNodeId: s.criticalNodeId,
+    targetHeldByDesign: s.targetHeldByDesign,
+    noFlowStaticPressure: {
+      ...s.noFlowStaticPressure,
+      for (final e in mains.entries) e.key: e.value.noFlow,
+    },
+    deliveryNodeIds: s.deliveryNodeIds,
+  );
+});
+
+/// Backlog K-2 — the mains-side entries of [mains] for nodes the solve
+/// [field] holds that are not [delivery] nodes.
+Map<String, ({Pressure residual, Pressure noFlow})> _mainsSideOf(
+    Map<String, Pressure> field,
+    Set<String> delivery,
+    Map<String, ({Pressure residual, Pressure noFlow})> mains) {
+  if (mains.isEmpty) return const {};
+  return {
+    for (final e in mains.entries)
+      if (field.containsKey(e.key) && !delivery.contains(e.key))
+        e.key: e.value,
+  };
+}
 
 /// mech-building-2 — upfeed DELIVERY nodes over the SNI fixture pressure
 /// limits (judge-only; see the engine's [upfeedOverPressure]). Empty on a
@@ -652,7 +697,9 @@ final downfeedMoverHeadsProvider = Provider<Map<String, Head>>((ref) {
 /// sized booster it IS [downfeedProvider] (same object). [downfeedProvider]
 /// stays the UNBOOSTED field the booster duties are sized on; the heatmap,
 /// node probe and over-pressure judgement read this one.
-final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
+/// Backlog K-2 — the PUMP-SIDE field; [downfeedDeliveredProvider] overlays
+/// the mains side of each meter feed on it.
+final _downfeedPumpSideDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   final base = ref.watch(downfeedProvider);
   if (base == null) return null;
   final heads = ref.watch(downfeedMoverHeadsProvider);
@@ -696,6 +743,35 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
       }),
   ];
   return _withExtraDownfeed(_mergeDownfeedTanks(main, others), extra);
+});
+
+/// Backlog K-2 (2026-11-20) — the DOWNFEED delivered field: the gravity /
+/// booster field ([_downfeedPumpSideDeliveredProvider]) with the MAINS side
+/// of each meter feed ([mainsFeedFieldProvider]) in place of the gravity
+/// walk back through the transfer riser (a meter is on mains pressure, never
+/// on the roof tank's head). Delivery nodes are never overwritten; no meter
+/// feed ⇒ the same object.
+final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
+  final s = ref.watch(_downfeedPumpSideDeliveredProvider);
+  if (s == null) return null;
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds,
+      ref.watch(mainsFeedFieldProvider));
+  if (mains.isEmpty) return s;
+  return DownfeedSolution(
+    residualPressure: {
+      ...s.residualPressure,
+      for (final e in mains.entries) e.key: e.value.residual,
+    },
+    criticalNodeId: s.criticalNodeId,
+    minResidual: s.minResidual,
+    boosterHeadRequired: s.boosterHeadRequired,
+    targetHeldByDesign: s.targetHeldByDesign,
+    noFlowStaticPressure: {
+      ...s.noFlowStaticPressure,
+      for (final e in mains.entries) e.key: e.value.noFlow,
+    },
+    deliveryNodeIds: s.deliveryNodeIds,
+  );
 });
 
 /// Round 32 (binding-1) — the SNI 8153 MINIMUM residual a solve's critical

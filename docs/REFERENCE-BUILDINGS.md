@@ -130,7 +130,11 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(d) Mains pressure — the delivered field.** The upfeed delivered field still reads GT 0 kPa and WM negative (W-2 adds a judge, it does not change the field).
+_(empty)_
+
+### Backlog closed (2026-11-20)
+
+- **(d) Mains pressure — the delivered field — backlog K-2.** Upstream of GT the pipe is on mains pressure: WM now reads the available mains head 10 m x 9.81 = 98.1 kPa (was −13.979 kPa flowing / −4.905 kPa no-flow, the pump solve back-calculated from GT); GT stays the pump-side datum 0 kPa; the tank inlet keeps 10 − (−0.5) − 0.312966 (0.694444 L/s on DN25 over 3.5 m) = 10.187034 m, printed on the calc report's mains line. Every other office figure is unchanged. The apartment, shophouse and tower meters read 98.1 kPa too (were 376.860 / 110.180 / 1128.601 kPa from the roof tank's gravity), see `test/backlog_k2_mains_feed_reference_test.dart`.
 
 ### Backlog closed (2026-11-14)
 

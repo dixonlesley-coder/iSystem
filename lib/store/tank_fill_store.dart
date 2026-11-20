@@ -4,6 +4,7 @@
 // applied the fill flow; this only reports it (inspector, calc report,
 // Review), never a parallel re-derivation of a size.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/hydraulics.dart' show pressureFromHead;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart' show SniProfile;
@@ -138,6 +139,52 @@ final mainsPressureChecksProvider = Provider<List<MainsPressureCheck>>((ref) {
             nodeElevation(n, project.building, project.mounting).meters,
       ),
   ];
+});
+
+/// Backlog K-2 (2026-11-20) — the MAINS-side delivered field: for every
+/// water meter feeding a ground tank (`meterFeedsToGroundTanks`, the feeds
+/// [mainsPressureChecksProvider] judges), the meter and each node of its
+/// feed up to the tank read the available mains head ([mainsHeadProvider])
+/// less the true elevation rise and the SIZED feed friction from the meter
+/// ([mainsFeedHeads] — the same terms the W-2 check uses). The ground tank
+/// itself is not in the map: its free surface stays the pump-side datum.
+/// Empty with no sized meter feed.
+final mainsFeedFieldProvider =
+    Provider<Map<String, ({Pressure residual, Pressure noFlow})>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final feeds = meterFeedsToGroundTanks(net);
+  if (feeds.isEmpty) return const {};
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final available = Head(ref.watch(mainsHeadProvider));
+  final sized = {
+    for (final e in sizing.entries)
+      e.key: (flow: e.value.flow, diameter: e.value.diameter),
+  };
+  final out = <String, ({Pressure residual, Pressure noFlow})>{};
+  for (final f in feeds) {
+    final heads = mainsFeedHeads(
+      net: net,
+      feed: f,
+      sized: sized,
+      available: available,
+      lengthOf: (e) => edgeLength(e, net,
+              calibrationBySheet: project.calibrations,
+              building: project.building,
+              mounting: project.mounting)
+          .meters,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters,
+    );
+    if (heads == null) continue;
+    for (final h in heads) {
+      out[h.nodeId] = (
+        residual: pressureFromHead(h.flowing),
+        noFlow: pressureFromHead(h.noFlow),
+      );
+    }
+  }
+  return out;
 });
 
 /// Backlog W-4 (2026-11-14) — THE domestic water reserve (the one source

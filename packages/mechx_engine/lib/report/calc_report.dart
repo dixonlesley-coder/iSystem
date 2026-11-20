@@ -1021,6 +1021,8 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       'lift': c.liftM.toStringAsFixed(2),
       'fric': c.frictionM.toStringAsFixed(2),
       'res': c.inletResidualM.toStringAsFixed(1),
+      // Backlog K-2 — the head the mains leaves at the float valve.
+      'inlet': c.inletHead.meters.toStringAsFixed(2),
       'lps': c.flow.inLitersPerSecond.toStringAsFixed(3),
       'verdict': c.ok
           ? strings(RptStringKey.verdictOk)

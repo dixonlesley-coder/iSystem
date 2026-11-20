@@ -633,7 +633,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsMainsPressure:
       '- Mains at meter {meter} -> {tank}: available **{avail} m**, required '
           '**{req} m** (lift {lift} + feed friction {fric} at {lps} L/s + '
-          'inlet residual {res}) · {verdict} _(// VERIFY mains pressure)_',
+          'inlet residual {res}); head left at the tank inlet {inlet} m · '
+          '{verdict} _(// VERIFY mains pressure)_',
   RptStringKey.wsMainsShort: 'INSUFFICIENT',
   RptStringKey.wsDailyDemandBasis:
       '- Daily demand basis: {use}, {lpd} L/{unit}/day (SNI 03-7065-2005 '
@@ -1241,7 +1242,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsMainsPressure:
       '- PDAM di meter {meter} -> {tank}: tersedia **{avail} m**, dibutuhkan '
           '**{req} m** (angkat {lift} + gesekan pipa {fric} pada {lps} L/s + '
-          'sisa tekanan inlet {res}) · {verdict} _(// VERIFY tekanan PDAM)_',
+          'sisa tekanan inlet {res}); sisa head di inlet tangki {inlet} m · '
+          '{verdict} _(// VERIFY tekanan PDAM)_',
   RptStringKey.wsMainsShort: 'TIDAK CUKUP',
   RptStringKey.wsDailyDemandBasis:
       '- Dasar kebutuhan harian: {use}, {lpd} L/{unit}/hari (SNI 03-7065-2005 '

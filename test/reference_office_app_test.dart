@@ -773,10 +773,22 @@ void main() {
       // the stub carries its fill 0.69444 L/s on DN25: residual −4.905 − the
       // solved 3.5 m stub loss 9.074 kPa (2.593 kPa/m) = −13.979 kPa (was
       // −19.431 with 14.526 kPa on DN50 at the 3.91733 L/s peak).
+      // Backlog K-2 (2026-11-20) — that −4.905 / −13.979 kPa was the pump
+      // solve back-calculated from GT; upstream of GT the pipe is on MAINS
+      // pressure. WM now reads the available mains head 10 m (default
+      // `mainsHeadProvider`): 10 x 9.81 = 98.1 kPa flowing and no-flow (no
+      // rise or friction between the meter and itself). GT stays the
+      // pump-side datum, 0 kPa. The tank inlet keeps 10 − lift (0.0 − 0.5 =
+      // −0.5) − the W-2 feed friction (0.694444 L/s on DN25 over 3.5 m,
+      // C150: 10.67 x (6.94444e-4)^1.852 / (150^1.852 x 0.025^4.8704) =
+      // 0.0894188 m/m x 3.5 = 0.312966 m) = 10.187034 m.
       expect(up.noFlowStaticPressure['WM']!.inKiloPascals,
-          closeTo(-4.905, 1e-6));
-      expect(up.residualPressure['WM']!.inKiloPascals, closeTo(-13.979, 2e-3));
+          closeTo(98.1, 1e-9));
+      expect(up.residualPressure['WM']!.inKiloPascals, closeTo(98.1, 1e-9));
       expect(up.residualPressure['GT']!.inKiloPascals, closeTo(0.0, 1e-9));
+      final mains = c.read(mainsPressureChecksProvider).single;
+      expect(mains.frictionM, closeTo(0.312966, 5e-6));
+      expect(mains.inletHead.meters, closeTo(10.187034, 5e-6));
       // BOM: the DN50 cold-water runs GT→P1 1.0 + P1→R0 5.7 = 6.7 m (backlog
       // W-5: WM→GT 3.5 m is now DN25; 10.2 m before); the DN50 riser R0→R1
       // 4.0 m.
