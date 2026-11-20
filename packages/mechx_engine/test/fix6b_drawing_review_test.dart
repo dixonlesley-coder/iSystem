@@ -71,4 +71,20 @@ void main() {
     expect(sub('bus'), '400 V · 250 A');
     expect(sub('ats'), 'transfer switch · PP-E 125A 4P');
   });
+
+  test('T4 (part 3): a break mark is a double slash across the cut run', () {
+    // Run leaves the window at (0, 0) heading into it along +x.
+    final m = planBreakMarkLines(0, 0, 10, 0);
+    expect(m, hasLength(2));
+    // Centres 1.2 and 2.4 mm into the window, each stroke 3 mm long at 45
+    // deg: half-length 1.5 x (cos 45, sin 45) = (1.0607, 1.0607).
+    for (final (i, l) in m.indexed) {
+      final cx = (l.x1 + l.x2) / 2, cy = (l.y1 + l.y2) / 2;
+      expect(cx, closeTo(1.2 * (i + 1), 1e-9));
+      expect(cy, closeTo(0, 1e-9));
+      expect((l.x2 - l.x1).abs(), closeTo(2.1213, 1e-4));
+      expect((l.y2 - l.y1).abs(), closeTo(2.1213, 1e-4));
+    }
+    expect(planBreakMarkLines(5, 5, 5, 5), isEmpty);
+  });
 }

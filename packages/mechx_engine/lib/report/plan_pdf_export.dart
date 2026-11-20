@@ -458,6 +458,8 @@ Uint8List planToPdf({
   Set<String> hiddenNodeIds = const {},
   PlanFixedFit? fixedFit,
   Set<String> unlabelledIds = const {},
+  Set<String> keyOnlyIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) =>
     _planPdfBuild(
       net: net,
@@ -484,6 +486,8 @@ Uint8List planToPdf({
       hiddenNodeIds: hiddenNodeIds,
       fixedFit: fixedFit,
       unlabelledIds: unlabelledIds,
+      keyOnlyIds: keyOnlyIds,
+      keyTableAvoidPx: keyTableAvoidPx,
     ).bytes;
 
 /// Drawing review R1 — the detail callouts the plan sheet needs so it is
@@ -637,6 +641,8 @@ List<PlanDetailCallout> planSheetDetails({
       extraOccupiedPx: plot.occupiedMm,
       hiddenNodeIds: plot.hiddenNodeIds,
       unlabelledIds: plot.unlabelledIds,
+      keyOnlyIds: plot.keyOnlyIds,
+      keyTableAvoidPx: plot.keyTableAvoidPx,
       fixedFit: const PlanFixedFit(),
       layoutOnly: true,
     ).ann.overlapCount;
@@ -887,6 +893,8 @@ const double kPlanDetailMarginMm = 4;
   PlanFixedFit? fixedFit,
   bool layoutOnly = false,
   Set<String> unlabelledIds = const {},
+  Set<String> keyOnlyIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
@@ -1099,6 +1107,8 @@ const double kPlanDetailMarginMm = 4;
     details: details,
     extraMarks: extraMarks,
     unlabelledIds: unlabelledIds,
+    keyOnlyIds: keyOnlyIds,
+    keyTableAvoidPx: keyTableAvoidPx,
   );
   final scaleDenominator = (pointsPerMeter == null || metersPerPixel == null)
       ? null

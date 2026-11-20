@@ -1545,3 +1545,31 @@ Not done: T4 break marks at window edges, Obs 9 (M-505 is a coarser-than-1:10 wi
 
 PNGs to re-check in `drawings-z2`: T4 `tower/png/Menara Contoh 30-plan-15-Lantai 15-p1.png`, `-plan-15-Lantai 15-detail-p1.png`; T7 `house/png/Rumah Contoh-plan-1-Lantai 1-detail-p1.png`, `house/png/Rumah Contoh-plan-2-Lantai 2-detail-p1.png`, `shophouse/png/Ruko Contoh-plan-3-Lantai 3-detail-p1.png`; T10 `tower/png/Menara Contoh 30-plan-1-Lantai 1-p1.png`; Obs 7 `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png`, `apartment/png/Apartemen Contoh-electrical-power-one-line-p1.png`; New A `tower/png/Menara Contoh 30-riser-sld-p17.png`, `apartment/png/Apartemen Contoh-riser-sld-p9.png`.
 
+### Fix round 6 part 3 (2026-11-20)
+
+Regenerated set: `drawings-z3` (scratchpad); pre-check FAIL 0 on all five buildings; class O11 fires on `drawings-y`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| Obs 11 key table in a window | The key table took any clear spot, a window's empty paper included. | `placePlanKeyTable(avoid:)` refuses every detail window. | O11 |
+| T4 break marks | A cut run simply ended at the window edge. | `planBreakMarkLines` double slash at the edge; legend note only when drawn. | none (unit test) |
+| Item 1 / Obs 9 key-only margins | (not changed) | Measured: key-only labels for margins of windows coarser than 1:10 took the tower from 65 to 78 drawing files with overlap stamps; NOT enabled, as instructed. | none |
+
+## Reviewer re-check of fix round 6 (2026-11-20)
+
+| Item | Sheet checked | Result |
+|---|---|---|
+| T1 | tower M-201 p17 | PASS - fire pump room in the PLANT row |
+| T2 | tower M-201 p18 | PASS - two TRANSFER PUMP captions |
+| T3 | office M-201 p1 | PASS - sprinkler head drawn + keyed, SP its own column |
+| T6 | shophouse M-201 p3 | PASS |
+| T8 | apartment M-201 p9 | PASS |
+| C8 | tower E-301 | PASS - "backs 352.4 of 914.9 kW (39%)" |
+| T4 legend | tower M-115 | PASS |
+| T7 1:10 | house M-501 | PASS |
+| T9 WH-01 | hand check | 2 x 0.126 x 8.658 x 3.69 = 8.05 V = 3.49 % |
+| T9 P-05 loop | hand check | 2 x 0.126 x 5.52 = 1.39 ohm vs the 1.92 ohm limit - PASS |
+| Obs 11 (part 3) | | |
+| T4 break marks (part 3) | | |
+| Item 1 / Obs 9 (part 3, not enabled) | | |
+

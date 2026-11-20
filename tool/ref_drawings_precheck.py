@@ -1221,6 +1221,45 @@ def round6_checks(bdir, project, pages, emit, lines):
          '; '.join(sorted(bad4)[:6]) if bad4 else
          f'{len(bt)} break tank(s) keyed by name')
 
+    # Obs 11 - a key-table header never sits inside a detail window (a
+    # framed rectangle on a detail sheet, not the page border / title block).
+    bad11 = []
+    for f in glob.glob(os.path.join(bdir, '*-detail*.pdf')):
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                W, H = float(pg.width), float(pg.height)
+                ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+                heads = [w for w in ws if w['text'].startswith('KETERANGAN PIPA')]
+                caps = [w for w in ws if re.fullmatch(r'DETAIL [A-Z]{1,2}',
+                                                      w['text'].strip())]
+                frames = []
+                segs = _page_lines(pg)
+                # A window frame: its bottom edge just above a DETAIL caption,
+                # starting at the caption's left; its left edge rising from
+                # that corner.
+                for c in caps:
+                    hz = [sg for sg in segs if abs(sg[1] - sg[3]) < 0.5 and
+                          0 <= c['top'] - sg[1] < 20 and
+                          abs(min(sg[0], sg[2]) - c['x0']) < 3]
+                    for (x1, y1, x2, y2, _, _) in hz:
+                        vt = [sg for sg in segs if abs(sg[0] - sg[2]) < 0.5
+                              and abs(sg[0] - min(x1, x2)) < 1 and
+                              abs(max(sg[1], sg[3]) - y1) < 1]
+                        if vt:
+                            top = min(min(v[1], v[3]) for v in vt)
+                            frames.append({'x0': min(x1, x2),
+                                           'x1': max(x1, x2),
+                                           'top': top, 'bottom': y1})
+                            break
+                for h in heads:
+                    for r in frames:
+                        if r['x0'] <= h['x0'] <= r['x1'] and \
+                                r['top'] <= h['top'] <= r['bottom']:
+                            bad11.append(f'{short(stem_of(f), project)} p{i}')
+    emit('O11', 'FAIL' if bad11 else 'PASS', 'key table vs detail windows',
+         'key table inside a window: ' + ', '.join(sorted(set(bad11))[:6])
+         if bad11 else 'no key-table block inside a detail window')
+
 
 def run_building(root, b):
     bdir = os.path.join(root, b)

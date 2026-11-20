@@ -199,6 +199,33 @@ class PlanMarkLine {
       {this.dashed = false, this.heavy = false});
 }
 
+/// Fix round 6 part 3 (T4, 2026-11-20) — the ONE run BREAK mark of a detail
+/// window: a double slash across the run at its window-edge end ([x], [y]),
+/// leaning 45 deg across the run's direction toward ([tx], [ty]), each stroke
+/// [lenMm] long and [gapMm] apart along the run. Plain lines, so the PDF and
+/// DXF draw the same mark.
+List<PlanMarkLine> planBreakMarkLines(double x, double y, double tx, double ty,
+    {double lenMm = 3.0, double gapMm = 1.2}) {
+  final dx = tx - x, dy = ty - y;
+  final l = math.sqrt(dx * dx + dy * dy);
+  if (l < 1e-9) return const [];
+  final ux = dx / l, uy = dy / l; // along the run, into the window
+  // The stroke direction: the run's normal rotated 45 deg.
+  final nx = -uy, ny = ux;
+  final sx = (nx + ux) / math.sqrt2, sy = (ny + uy) / math.sqrt2;
+  final out = <PlanMarkLine>[];
+  for (final k in const [1.0, 2.0]) {
+    final cx = x + ux * gapMm * k, cy = y + uy * gapMm * k;
+    out.add(PlanMarkLine(cx - sx * lenMm / 2, cy - sy * lenMm / 2,
+        cx + sx * lenMm / 2, cy + sy * lenMm / 2));
+  }
+  return out;
+}
+
+/// Fix round 6 part 3 (T4) — the legend note of the break mark.
+const String kPlanBreakMarkNote =
+    '// = pipe continues beyond the detail (break)';
+
 class PlanMarkCircle {
   final double cx, cy, r;
   final bool filled;

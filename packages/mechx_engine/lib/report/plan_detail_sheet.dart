@@ -58,6 +58,20 @@ class PlanDetailSheetPlot {
   /// box: labelled on the plan, so left unlabelled here (the complement of
   /// the plan's suppression — every element is labelled exactly once).
   final Set<String> unlabelledIds;
+
+  /// Fix round 6 part 3 — the nodes / runs a window shows in its margin
+  /// (outside its callout box, owned by no other detail) on a window
+  /// coarser than 1:10: KEYED into the sheet's one key table, so every
+  /// sized run and fixture the window shows is identified without crowding
+  /// the window with full tags.
+  final Set<String> keyOnlyIds;
+
+  /// Fix round 6 part 3 (T4) — how many run break marks the windows draw.
+  final int breakMarks;
+
+  /// Fix round 6 part 3 (Obs 11) — the detail windows (paper mm): no block of
+  /// the sheet's one key table is placed inside one.
+  List<LabelBox> get keyTableAvoidPx => [for (final d in details) d.frameMm];
   final PlanMarks marks;
   final List<LabelBox> occupiedMm;
   const PlanDetailSheetPlot({
@@ -69,6 +83,8 @@ class PlanDetailSheetPlot {
     required this.edgeElevationLabels,
     required this.hiddenNodeIds,
     required this.unlabelledIds,
+    this.keyOnlyIds = const {},
+    this.breakMarks = 0,
     required this.marks,
     required this.occupiedMm,
   });
@@ -193,6 +209,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
   final used = <String>{};
   final hidden = <String>{};
   final unlabelled = <String>{};
+  final keyOnly = <String>{};
+  var breaks = 0;
   final sz = <String, EdgeSizing>{};
   final lens = <String, Length>{};
   final tags = <String, String>{};
@@ -298,16 +316,28 @@ PlanDetailSheetPlot planDetailSheetPlot({
         if ((x2 - x1).abs() + (y2 - y1).abs() < 1e-9) continue;
         final fromId = idOf[a.id] ?? bare(a.id, mx(x1), my(y1), floorIndex);
         final toId = idOf[c.id] ?? bare(c.id, mx(x2), my(y2), floorIndex);
+        // Fix round 6 part 3 (T4) — a run the window cuts ends in a break
+        // mark at the window edge (it continues beyond the detail).
+        if (idOf[a.id] == null) {
+          lines.addAll(planBreakMarkLines(mx(x1), my(y1), mx(x2), my(y2)));
+          breaks++;
+        }
+        if (idOf[c.id] == null) {
+          lines.addAll(planBreakMarkLines(mx(x2), my(y2), mx(x1), my(y1)));
+          breaks++;
+        }
         final id = fresh('${e.id}#${d.letter}');
         // A run another detail's box holds is labelled THERE (a split
         // piece's neighbour); every other run the window shows is labelled
         // here (T7).
         final mx2 = (a.x + c.x) / 2, my2 = (a.y + c.y) / 2;
-        if (!d.containsPx(mx2, my2) &&
-            (!labelMargin ||
-                details.any(
-                    (o) => !identical(o, d) && o.containsPx(mx2, my2)))) {
-          unlabelled.add(id);
+        if (!d.containsPx(mx2, my2)) {
+          if (details.any(
+              (o) => !identical(o, d) && o.containsPx(mx2, my2))) {
+            unlabelled.add(id);
+          } else if (!labelMargin) {
+            unlabelled.add(id);
+          }
         }
         edges.add(NetEdge(
             id: id,
@@ -406,6 +436,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
     edgeElevationLabels: elev,
     hiddenNodeIds: hidden,
     unlabelledIds: unlabelled,
+    keyOnlyIds: keyOnly,
+    breakMarks: breaks,
     marks: PlanMarks(lines: lines, texts: texts),
     occupiedMm:
         planDetailOutsideFrames([for (final p in plots) p.frameMm], areaMm),
@@ -439,10 +471,14 @@ DrawingChrome? planDetailLegendChrome(
     for (final n in plot.net.nodes)
       if (!plot.hiddenNodeIds.contains(n.id)) fixturePlanCode(n),
   }..remove(null);
-  return chrome.withLegendNarrowedTo(
+  final narrowed = chrome.withLegendNarrowedTo(
       keepService: services.contains,
       keepSymbol: symbols.contains,
       narrowNotes: (notes) => planDetailNarrowCodeNotes(notes, codes));
+  // Fix round 6 part 3 (T4) — the break mark is keyed only where drawn.
+  return plot.breakMarks > 0
+      ? narrowed.withLegendNotes(const [kPlanBreakMarkNote])
+      : narrowed;
 }
 
 /// Drawing backlog C-5 (iv) — [notes] with the fixture-code note
@@ -597,6 +633,8 @@ Uint8List planDetailSheetToPdf({
     hiddenNodeIds: p.hiddenNodeIds,
     fixedFit: const PlanFixedFit(),
     unlabelledIds: p.unlabelledIds,
+    keyOnlyIds: p.keyOnlyIds,
+    keyTableAvoidPx: p.keyTableAvoidPx,
   );
 }
 
@@ -650,6 +688,8 @@ String planDetailSheetToDxf({
     extraMarks: p.marks,
     scaleRowOverride: kPlanDetailScaleRow,
     unlabelledIds: p.unlabelledIds,
+    keyOnlyIds: p.keyOnlyIds,
+    keyTableAvoidPx: p.keyTableAvoidPx,
     sheetPlot: planSheetPlot(
       net: p.net,
       sheetId: sheetId,

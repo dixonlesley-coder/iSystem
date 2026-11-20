@@ -930,6 +930,7 @@ PlanKeyTable? placePlanKeyTable(
   PlanKeyRegistry keys, {
   required double textSize,
   required LabelBox bounds,
+  List<LabelBox> avoid = const [],
 }) {
   if (keys.isEmpty) return null;
   final ts = textSize;
@@ -986,6 +987,13 @@ PlanKeyTable? placePlanKeyTable(
       maxX: b.maxX + margin,
       maxY: b.maxY + margin,
     );
+    // Fix round 6 part 3 (Obs 11) — never inside a detail window.
+    for (final w in avoid) {
+      if (b.minX < w.maxX && w.minX < b.maxX && b.minY < w.maxY &&
+          w.minY < b.maxY) {
+        return false;
+      }
+    }
     return !layout.hitsBox(g) &&
         !layout.hitsRun(b, clearance: math.max(0.25 * ts, margin)) &&
         !layout.hitsGrid(b);

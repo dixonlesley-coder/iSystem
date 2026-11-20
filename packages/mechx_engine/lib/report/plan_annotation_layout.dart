@@ -470,6 +470,8 @@ PlanAnnotations layoutPlanAnnotations({
   List<PlanDetailCallout> details = const [],
   PlanMarks extraMarks = PlanMarks.empty,
   Set<String> unlabelledIds = const {},
+  Set<String> keyOnlyIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
   Map<String, String> flowFromIds = const {},
 }) {
   // Drawing review R1 — an element anchored inside a detail boundary is
@@ -997,7 +999,8 @@ PlanAnnotations layoutPlanAnnotations({
             // Round 29 (drawings-3-3) — clear the duct's own outline.
             ownHalfWidth: runHalfWidths[e.id] ?? 0,
             keys: keys,
-            keyOnly: inKeyed(mx, my)),
+            // Fix round 6 part 3 — a detail window's margin run is keyed.
+            keyOnly: inKeyed(mx, my) || keyOnlyIds.contains(e.id)),
         ts));
     if (layout.unresolvedCount > before) unresolvedAt.add((x: mx, y: my));
   }
@@ -1044,7 +1047,7 @@ PlanAnnotations layoutPlanAnnotations({
       final p = map(n.x, n.y);
       labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id,
           pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null,
-              keyOnly: inKeyed(n.x, n.y)),
+              keyOnly: inKeyed(n.x, n.y) || keyOnlyIds.contains(n.id)),
           ts));
       if (layout.unresolvedCount > before) {
         unresolvedAt.add((x: n.x, y: n.y));
@@ -1098,6 +1101,19 @@ PlanAnnotations layoutPlanAnnotations({
     final pad = 80 * ts;
     keyTable = placePlanKeyTable(layout, keys,
         textSize: ts,
+        // Fix round 6 part 3 (Obs 11) — no block inside a detail window.
+        avoid: [
+          for (final w in keyTableAvoidPx)
+            () {
+              final a = map(w.minX, w.minY), c = map(w.maxX, w.maxY);
+              return (
+                minX: math.min(a.x, c.x),
+                minY: math.min(a.y, c.y),
+                maxX: math.max(a.x, c.x),
+                maxY: math.max(a.y, c.y)
+              );
+            }(),
+        ],
         bounds: (
           minX: x0 - pad,
           minY: y0 - pad,
