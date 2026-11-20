@@ -34,7 +34,7 @@ import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
 import '../../store/fire_store.dart' show fireBreakTankIdsProvider;
 import '../../store/electrical_feed.dart'
-    show issuedRiserEquipmentDetailsProvider;
+    show issuedRiserEquipmentDetailsProvider, scheduledTransferPumpNodeIdsProvider;
 import '../../store/project_store.dart';
 import '../../store/network_store.dart';
 import '../../store/sizing_store.dart';
@@ -219,7 +219,7 @@ SldSheet buildLiveRiserSheet(
     // plan + the equipment schedule (P-08 · 2.2 kW).
     nodeTags: equipmentNodeTags(network),
     // Round 17 — the transfer pump is captioned TRANSFER PUMP on the sheet.
-    transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
+    transferPumpNodeIds: ref.read(scheduledTransferPumpNodeIdsProvider),
     // Backlog Z-4 — fire zone break tanks are named so on the riser.
     fireBreakTankIds: ref.read(fireBreakTankIdsProvider),
     // Round 21 (riser-drafting-2-1) — the HWR recirculation return leg the

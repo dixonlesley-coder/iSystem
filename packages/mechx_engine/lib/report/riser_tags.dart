@@ -15,6 +15,7 @@
 library;
 
 import 'package:mechx_engine/geometry/building.dart' show BuildingLevels, Floor;
+import 'package:mechx_engine/network/connectivity.dart' show isSelfContainedAcUnit;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
     show formatTankCapacity, signedElevationText;
@@ -565,16 +566,53 @@ Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
 
   double bucketOf(double x) => (x / kRiserColumnBucket).round() * kRiserColumnBucket;
 
-  // Distinct column buckets, sorted ascending → a stable left→right rank.
-  final buckets = <double>{for (final n in nodes) bucketOf(n.x)}.toList()..sort();
-  final rankOf = <double, int>{
-    for (var i = 0; i < buckets.length; i++) buckets[i]: i,
+  // Fix round 6 (T3) — risers of DIFFERENT services never share a column
+  // line: a node on the vertical riser edges of exactly one service is
+  // columned by (x bucket, that service), so a sprinkler riser drawn at the
+  // hydrant riser's plan x gets its own column beside FH-R1 (it was drawn on
+  // the same red line, two junction squares and two LANJUT marks on one
+  // pipe). Every other node keeps its plain x bucket (sub-rank -1).
+  final shown = {for (final n in nodes) n.id};
+  final riserServices = <String, Set<ServiceType>>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.riser) continue;
+    if (focus != null && e.service != focus) continue;
+    if (!shown.contains(e.fromId) || !shown.contains(e.toId)) continue;
+    (riserServices[e.fromId] ??= <ServiceType>{}).add(e.service);
+    (riserServices[e.toId] ??= <ServiceType>{}).add(e.service);
+  }
+  // The services whose risers share one x bucket.
+  final bucketServices = <double, Set<ServiceType>>{};
+  for (final n in nodes) {
+    final rs = riserServices[n.id];
+    if (rs != null && rs.length == 1) {
+      (bucketServices[bucketOf(n.x)] ??= <ServiceType>{}).add(rs.single);
+    }
+  }
+  (double, int) keyOf(NetNode n) {
+    final b = bucketOf(n.x);
+    final rs = riserServices[n.id];
+    // Only a bucket that two risers of different services share splits.
+    if (rs == null || rs.length != 1 || (bucketServices[b]?.length ?? 0) < 2) {
+      return (b, -1);
+    }
+    return (b, rs.single.index);
+  }
+
+  // Distinct columns, sorted ascending → a stable left→right rank.
+  final keys = <(double, int)>{for (final n in nodes) keyOf(n)}.toList()
+    ..sort((a, b) {
+      final c = a.$1.compareTo(b.$1);
+      return c != 0 ? c : a.$2.compareTo(b.$2);
+    });
+  final rankOf = <(double, int), int>{
+    for (var i = 0; i < keys.length; i++) keys[i]: i,
   };
-  final columns = buckets.length;
+  final columns = keys.length;
 
   return <String, double>{
     for (final n in nodes)
-      n.id: columns <= 1 ? 0.5 : rankOf[bucketOf(n.x)]! / (columns - 1),
+      n.id: columns <= 1 ? 0.5 : rankOf[keyOf(n)]! / (columns - 1),
   };
 }
 
@@ -629,6 +667,12 @@ double riserServiceLane(ServiceType s) => switch (s) {
       ServiceType.exhaust => 3.4,
     };
 
+/// Fix round 6 (T1) — the largest |[riserServiceLane]|: the outermost lane a
+/// consumer must keep inside its floor band.
+final double kRiserServiceLaneMax = ServiceType.values
+    .map((s) => riserServiceLane(s).abs())
+    .reduce((a, b) => a > b ? a : b);
+
 /// The lane pitch (drawing units) the riser EXPORT applies to
 /// [riserServiceLane]; the band is 150 units tall, so the outermost lane
 /// (3.4 × 14 ≈ 48) stays inside it.
@@ -660,8 +704,18 @@ Map<String, double> riserServiceLanes(Network net, {ServiceType? focus}) {
     for (final entry in services.entries)
       if (entry.value.length == 1 && riserServiceLane(entry.value.single) != 0)
         entry.key: riserServiceLane(entry.value.single),
+    // Fix round 6 (T6) — a self-contained AC unit (cassette / split wall)
+    // has no pipe or duct: it rides the air lane, never the band centre the
+    // cold-water run occupies (AC-01 / AC-02 were drawn ON the booster run).
+    for (final n in net.nodes)
+      if (isSelfContainedAcUnit(n.component) && !services.containsKey(n.id))
+        n.id: kRiserSelfContainedAcLane,
   };
 }
+
+/// Fix round 6 (T6) — the riser lane of a pipe-less AC unit: the supply-air
+/// lane ([riserServiceLane] of [ServiceType.duct]).
+final double kRiserSelfContainedAcLane = riserServiceLane(ServiceType.duct);
 
 /// Round 17 (drafting-visual-3-1) — the per-EDGE run-lane offset of the
 /// combined riser sheet: for each edge whose horizontal leg would NOT already

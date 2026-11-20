@@ -206,6 +206,22 @@ Set<ServiceType> _servicesAt(Network net, String nodeId) => {
 bool _onFireService(Set<ServiceType> s) =>
     s.contains(ServiceType.fireHydrant) || s.contains(ServiceType.fireSprinkler);
 
+/// Fix round 6 (T2, 2026-11-20) — the TRANSFER movers as the schedule
+/// names them: the solve's transfer pumps ([transferPumpNodeIdsProvider])
+/// plus every STANDBY pump whose duty pump is one
+/// ([MepDutyBinding.supplyStandbyPumpNodeIds] — the same rule M-601 uses for
+/// 'Transfer pump (standby)'). The riser's pump-set detail captions read
+/// this, so a standby transfer pump is never captioned 'BOOSTER PUMP'.
+final scheduledTransferPumpNodeIdsProvider = Provider<Set<String>>((ref) {
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
+  final standby = ref.watch(mepDutyBindingProvider).supplyStandbyPumpNodeIds;
+  return {
+    ...transfers,
+    for (final e in standby.entries)
+      if (transfers.contains(e.value)) e.key,
+  };
+});
+
 final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);

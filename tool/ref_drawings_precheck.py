@@ -870,6 +870,171 @@ def red_text_lines(pgp):
             rows[round(c['top'])].append(c)
     return [''.join(c['text'] for c in sorted(v, key=lambda q: q['x0']))
             for _, v in sorted(rows.items())]
+# ── Fix round 6 (third review, 2026-11-20) ──────────────────────────────────
+
+EQUIP_TAG = re.compile(r'^((?:TK|P|AHU|FCU|EF|SF|BP|WH)-\d+)\b')
+
+
+def key_table_rows(pdf):
+    """Fix round 6 - every riser / plan KETERANGAN PIPA row as
+    (page, key, tag, length, level), read from the column headers' x."""
+    out = []
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+            heads = [w for w in ws if w['text'].strip() == 'KEY']
+            for h in heads:
+                row = [w for w in ws if abs(w['top'] - h['top']) < 0.5
+                       and w['x0'] > h['x0']]
+                tag = next((w for w in row if w['text'].startswith(
+                    'SIZE-SERVICE')), None)
+                ln = next((w for w in row if w['text'].strip() == 'LENGTH'),
+                          None)
+                lv = next((w for w in row if w['text'].strip() == 'LEVEL'),
+                          None)
+                if not (tag and ln and lv):
+                    continue
+                nxt = [w['x0'] for w in heads if abs(w['top'] - h['top'])
+                       < 0.5 and w['x0'] > lv['x0']]
+                right = min(nxt) - 2 if nxt else lv['x0'] + 120
+                rows = defaultdict(dict)
+                for w in ws:
+                    if w['top'] <= h['top'] + 1 or w['top'] > h['top'] + 400:
+                        continue
+                    if not (h['x0'] - 2 <= w['x0'] < right):
+                        continue
+                    col = ('level' if w['x0'] >= lv['x0'] - 1 else
+                           'length' if w['x0'] >= ln['x0'] - 1 else
+                           'tag' if w['x0'] >= tag['x0'] - 1 else 'key')
+                    r = rows[round(w['top'], 0)]
+                    r[col] = (r.get(col, '') + ' ' + w['text']).strip()
+                for top in sorted(rows):
+                    r = rows[top]
+                    if r.get('key', '').isdigit():
+                        out.append((i, r['key'], r.get('tag', ''),
+                                    r.get('length', ''), r.get('level', '')))
+    return out
+
+
+def plan_tag_floors(bdir, project):
+    """{equipment tag: {floor names}} from every mechanical plan / detail
+    sheet (`plan-<n>-<floor>[-detail[-k]]`)."""
+    out = defaultdict(set)
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        st = stem_of(f)
+        if '-elec-plan-' in st:
+            continue
+        m = re.search(r'-plan-\d+-(.+?)(?:-detail(?:-\d+)?)?$', st)
+        if not m:
+            continue
+        for t in set(re.findall(r'\b((?:TK|P)-\d+)\b', pdftext(f))):
+            out[t].add(m.group(1))
+    return out
+
+
+def round6_checks(bdir, project, pages, emit, lines):
+    """Fix round 6 classes T1..T10 / C-items that a script can see."""
+    risers = [f for f in glob.glob(os.path.join(bdir, '*-riser-sld.pdf'))]
+    # T1 - an equipment row of the riser key table names the floor the
+    # plans draw that equipment on.
+    lines += ['', '## Fix round 6 - T1 riser key LEVEL vs the plan floor']
+    floors = plan_tag_floors(bdir, project)
+    for f in risers:
+        bad, n = [], 0
+        for (pgno, key, tag, _, level) in key_table_rows(f):
+            m = EQUIP_TAG.match(tag)
+            if not m or m.group(1) not in floors or ',' in level:
+                continue
+            n += 1
+            # A roof tank parks on the roof band (ATAP) of the top floor.
+            if level == 'ATAP' and m.group(1).startswith('TK-'):
+                continue
+            if level and level not in floors[m.group(1)]:
+                bad.append(f'p{pgno} key {key} {m.group(1)} LEVEL {level}, '
+                           f'plan {"/".join(sorted(floors[m.group(1)]))}')
+        emit('T1', 'FAIL' if bad else 'PASS', short(stem_of(f), project),
+             '; '.join(bad[:6]) if bad else f'{n} keyed equipment rows on '
+             'their plan floor')
+
+    # T2 - the pump-set detail names each mover as the schedule does: per
+    # duty (Q, H) the TRANSFER captions equal the schedule's transfer rows.
+    lines += ['', '## Fix round 6 - T2 pump-set captions vs M-601']
+    sched = glob.glob(os.path.join(bdir, '*-equipment-schedule.pdf'))
+    stext = pdftext(sched[0]) if sched else ''
+    for f in risers:
+        caps = re.findall(r'(TRANSFER|BOOSTER) PUMP Q (\S+) L/s · H (\S+) m',
+                          pdftext(f))
+        bad = []
+        for (q, h) in sorted({(q, h) for _, q, h in caps}):
+            rows = [l for l in stext.splitlines()
+                    if f'{q} L/s @ {h} m' in l]
+            if not rows:
+                continue
+            want = sum(1 for l in rows if 'Transfer pump' in l)
+            got = sum(1 for n, qq, hh in caps
+                      if (qq, hh) == (q, h) and n == 'TRANSFER')
+            if want != got:
+                bad.append(f'{q} L/s @ {h} m: {got} TRANSFER caption(s), '
+                           f'{want} transfer row(s) on M-601')
+        emit('T2', 'FAIL' if bad else 'PASS', short(stem_of(f), project),
+             '; '.join(bad) if bad else f'{len(caps)} captions agree')
+
+    # T3 - every terminal kind the BRANCHES column counts is drawn (a label
+    # or a key row on the same page); T3/T8 - no two identical continuation
+    # marks are stacked on one line (two risers on one column, or marks
+    # piled at one corner).
+    lines += ['', '## Fix round 6 - T3 BRANCHES kinds drawn; T3/T8 stacked '
+              'continuation marks']
+    for f in risers:
+        miss, stack = [], []
+        keyrows = defaultdict(list)
+        for (pgno, _, tag, _, _) in key_table_rows(f):
+            keyrows[pgno].append(tag)
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+                hd = [w for w in ws if w['text'].strip() == 'BRANCHES']
+                kinds = []
+                for h in hd:
+                    lh = h['bottom'] - h['top']
+                    y = h['bottom']
+                    col = sorted((w for w in ws if abs(w['x0'] - h['x0']) <
+                                  25 and w['top'] > h['top'] + 0.5),
+                                 key=lambda w: w['top'])
+                    for w in col:
+                        if w['top'] - y > 1.5 * lh:
+                            break
+                        y = w['bottom']
+                        kinds.append((w, re.sub(r' x\d+$', '',
+                                                w['text'].strip())))
+                inlist = {id(w) for w, _ in kinds}
+                labels = [w['text'].strip() for w in ws if id(w) not in inlist]
+                labels += keyrows.get(i, [])
+                for _, k in kinds:
+                    if len(k) < 2:
+                        continue
+                    if not any(t == k or t.startswith(k + ' ') or
+                               re.search(r'(^|\s)' + re.escape(k) + r'(\s|$)',
+                                         t) for t in labels):
+                        miss.append(f'p{i} "{k}"')
+                marks = [w for w in ws
+                         if w['text'].strip().startswith(('LANJUT KE',
+                                                          'LANJUTAN DARI'))]
+                for a in range(len(marks)):
+                    for b in range(a + 1, len(marks)):
+                        m1, m2 = marks[a], marks[b]
+                        lh = m1['bottom'] - m1['top']
+                        if (m1['text'].strip() == m2['text'].strip() and
+                                abs(m1['x0'] - m2['x0']) < 1.0 and
+                                abs(m1['top'] - m2['top']) < 1.6 * lh):
+                            stack.append(f'p{i} "{m1["text"].strip()}"')
+        emit('T3', 'FAIL' if miss else 'PASS', short(stem_of(f), project),
+             'listed, not drawn: ' + ', '.join(sorted(set(miss))[:8])
+             if miss else 'every BRANCHES kind is drawn')
+        emit('T8', 'FAIL' if stack else 'PASS', short(stem_of(f), project),
+             'stacked marks: ' + ', '.join(sorted(set(stack))[:8])
+             if stack else 'no stacked continuation marks')
+
 
 def run_building(root, b):
     bdir = os.path.join(root, b)
@@ -1766,6 +1931,9 @@ def run_building(root, b):
         else:
             emit(25, 'PASS', lab, f'{len(dstr)} DXF strings all in the PDF '
                  'and vice versa')
+
+    # Fix round 6 classes.
+    round6_checks(bdir, project, pages, emit, lines)
 
     # 24 — cross-document figures.
     lines += ['', '## Item 24 - cross-document figures']

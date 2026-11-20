@@ -137,6 +137,7 @@ List<(double, double)> riserColumnRespace(Iterable<double> xs,
     required double hi,
     required double minPitch,
     Iterable<double>? taggedXs,
+    Iterable<(double, ServiceType)>? riserXs,
     double tol = 0.5}) {
   final sorted = xs.toList()..sort();
   final v = <double>[];
@@ -158,10 +159,25 @@ List<(double, double)> riserColumnRespace(Iterable<double> xs,
   final tagged = taggedXs?.toList();
   double share(double x) =>
       tagged == null || tagged.any((t) => (t - x).abs() <= tol) ? 1 : 0;
+  // Fix round 6 (T3) — two neighbouring RISER columns of DIFFERENT services
+  // (each carries a vertical riser line) keep at least half a pitch between
+  // them, so an untagged sprinkler riser never prints on the hydrant riser.
+  final risers = riserXs?.toList() ?? const <(double, ServiceType)>[];
+  Set<ServiceType> riserSvc(double x) => {
+        for (final r in risers)
+          if ((r.$1 - x).abs() <= tol) r.$2,
+      };
+  final svcs = [for (final x in v) riserSvc(x)];
+  bool apart(int i) =>
+      svcs[i].isNotEmpty &&
+      svcs[i + 1].isNotEmpty &&
+      !svcs[i].containsAll(svcs[i + 1]) &&
+      !svcs[i + 1].containsAll(svcs[i]);
   final p = <double>[
     0,
     for (var i = 0; i + 1 < v.length; i++)
-      minPitch * (share(v[i]) + share(v[i + 1])) / 2,
+      math.max(minPitch * (share(v[i]) + share(v[i + 1])) / 2,
+          apart(i) ? minPitch / 2 : 0.0),
     0,
   ];
   final sumP = p.fold<double>(0, (a, b) => a + b);
@@ -614,6 +630,36 @@ SldSheet riserPitchEscalation({
       build: build, bandH: bandH, best: best, bandStep: bestK, pitch: bestP);
 }
 
+/// Fix round 6 (T1) — the service-lane pitch of a riser page at escalation
+/// [pitchScale] whose FIXTURE band is [fixtureBandH] tall: the scaled pitch,
+/// capped so the outermost lane ([kRiserServiceLaneMax]) keeps its symbol
+/// inside the band (a node is never drawn in the floor band above or below
+/// its own). Pure.
+double riserLanePitch(double pitchScale, double fixtureBandH,
+        {double? maxLane}) =>
+    math.min(
+        kRiserLanePitch * pitchScale,
+        (fixtureBandH / 2 - _symbolSize / 2) /
+            math.max(1.0, maxLane ?? kRiserServiceLaneMax));
+
+/// Fix round 6 (T1) — the outermost service lane the riser of [net] DRAWS
+/// (every edge's [riserServiceLane], and a pipe-less AC unit's lane), the
+/// |lane| [riserLanePitch] keeps inside the band. Pure.
+double riserLaneMaxOf(Network net, {ServiceType? focus}) {
+  var m = 0.0;
+  if (focus != null) return 0.0;
+  for (final e in net.edges) {
+    m = math.max(m, riserServiceLane(e.service).abs());
+  }
+  for (final v in riserServiceLanes(net).values) {
+    m = math.max(m, v.abs());
+  }
+  return m;
+}
+
+/// The riser's equipment glyph box (drawing units).
+const double kRiserSymbolSize = _symbolSize;
+
 /// Drawing backlog C-4 — the taller lone-floor bands tried to tag a crowded
 /// plant level DIRECTLY: the band height is free on a width-bound page, so the
 /// extra rows give the placer clear slots before it falls back to a numbered
@@ -764,7 +810,7 @@ SldSheet _buildMechanicalRiserSld({
   bool plantSplit = false,
 }) {
   final prims = <SldPrim>[];
-  final lanePitch = kRiserLanePitch * pitchScale;
+  var lanePitch = kRiserLanePitch * pitchScale;
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
   final flowFromByEdge = flowFromBySizing(sizing);
 
@@ -924,8 +970,13 @@ SldSheet _buildMechanicalRiserSld({
   final plantIds = !lonePage
       ? const <String>{}
       : split == null
-          ? riserPlantGroup(network,
-              [for (final n in nodes) if (!parksOnRoof(n)) n], focus: focus)
+          ? riserPlantGroup(
+              network,
+              [
+                for (final n in nodes)
+                  if (!parksOnRoof(n)) n
+              ],
+              focus: focus)
           // The '<floor> - PLANT' page of a plant split counts its own.
           : plantSplit && columnPart == 2
               ? split
@@ -973,6 +1024,14 @@ SldSheet _buildMechanicalRiserSld({
   // fixture band, so it keeps a short one.
   if (plantPage && rowPlant) bandH = kRiserPlantPageFixtureBandH;
   bandH += plantRowH;
+  // Fix round 6 (T1) — the service lanes stay INSIDE their floor band: the
+  // pitch escalation scales the lane pitch (up to 3x) without growing the
+  // band, so the hydrant lane (-2.2) of a ground-floor fire pump room rose
+  // 92 units above the band centre, past the floor line into the band above
+  // (drawn and keyed on Lantai 2). The outermost lane keeps its symbol clear
+  // of the band edge whatever the escalation.
+  lanePitch = riserLanePitch(pitchScale, bandH - plantRowH,
+      maxLane: riserLaneMaxOf(network, focus: focus));
   Offset posOf(NetNode n) => Offset(
       placeX(n.id),
       parksOnRoof(n)
@@ -1010,10 +1069,11 @@ SldSheet _buildMechanicalRiserSld({
   // Drawing review R2 — the band's node columns re-spaced over the free
   // width (NTS): a toilet group compressed into a few cm of plan no longer
   // stacks its stubs under each other's tags while the sheet stays empty.
-  final respace = riserColumnRespace([
-    for (final e in posById.entries)
-      if (!rowPlant || !plantIds.contains(e.key)) e.value.dx
-  ],
+  final respace = riserColumnRespace(
+      [
+        for (final e in posById.entries)
+          if (!rowPlant || !plantIds.contains(e.key)) e.value.dx
+      ],
       lo: _gutterW + _sidePad,
       hi: _gutterW + _drawW - _sidePad,
       minPitch: kMechRiserMinColumnPitch * pitchScale,
@@ -1023,6 +1083,13 @@ SldSheet _buildMechanicalRiserSld({
               (!rowPlant || !plantIds.contains(n.id)) &&
               (n.component != null || n.role == NodeRole.fixture))
             posById[n.id]!.dx,
+      ],
+      riserXs: [
+        for (final e in network.edges)
+          if (e.kind == EdgeKind.riser)
+            for (final id in [e.fromId, e.toId])
+              if (posById[id] != null && (!rowPlant || !plantIds.contains(id)))
+                (posById[id]!.dx, e.service),
       ]);
   for (final id in posById.keys.toList()) {
     final p = posById[id]!;
@@ -1033,8 +1100,8 @@ SldSheet _buildMechanicalRiserSld({
   final plantRowTop = !rowPlant ? 0.0 : bandTop(loFloor) + bandH - plantRowH;
   for (var r = 0; r < plantRows.length; r++) {
     for (final m in plantRows[r]) {
-      posById[m.id] = Offset(m.x,
-          plantRowTop + kRiserPlantRowPad + (r + 0.5) * plantPitch);
+      posById[m.id] =
+          Offset(m.x, plantRowTop + kRiserPlantRowPad + (r + 0.5) * plantPitch);
     }
   }
   double pageX(String nodeId) => riserRespaceAt(respace, placeX(nodeId));
@@ -1226,8 +1293,7 @@ SldSheet _buildMechanicalRiserSld({
     prims.add(SldLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop,
         weight: SldWeight.thin, dashed: true));
     placer.reserveLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop);
-    placer.reserve(
-        SldLabel(8, plantRowTop + 16, 'PLANT', size: 8, bold: true));
+    placer.reserve(SldLabel(8, plantRowTop + 16, 'PLANT', size: 8, bold: true));
   }
 
   // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
@@ -1237,15 +1303,32 @@ SldSheet _buildMechanicalRiserSld({
   final fanOuts = floorFanOuts(fullNetwork,
       visibleNodeIds: fullVisible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
   const fanX = _gutterW + _drawW + 12;
+  // Fix round 6 (T3) — a kind is listed only where the page DRAWS one (a
+  // collapsed group keeps its representative terminal; a column-split part
+  // lists the kinds of its own part).
+  final drawnKinds = <(int, String)>{
+    for (final n in nodes)
+      if (n.role == NodeRole.fixture)
+        (n.floorIndex, _nodeLabel(n) ?? 'Fixture'),
+  };
   for (final fo in fanOuts) {
     if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
+    // Fix round 6 (T3) — the '<floor> - PLANT' page draws none of the
+    // floor's terminals (they ride the floor page, which lists them): it
+    // never lists a BRANCHES kind it does not draw.
+    if (plantPage) continue;
+    final groups = [
+      for (final g in fo.groups)
+        if (drawnKinds.contains((fo.floorIndex, g.label))) g,
+    ];
+    if (groups.isEmpty) continue;
     var y = bandTop(fo.floorIndex) + 18;
     final colTop = y - 7;
     var colRight = fanX + _labelWidth('BRANCHES', 7);
     placer.reserve(SldLabel(fanX, y, 'BRANCHES', size: 7, bold: true));
     // N7: enumerate EVERY fixture the floor serves, grouped per type with a
     // count (`WC x3`) — no `+N more` truncation. A count of 1 stays bare.
-    for (final g in fo.groups) {
+    for (final g in groups) {
       y += 12;
       final row = g.count > 1 ? '${g.label} x${g.count}' : g.label;
       placer.reserve(SldLabel(fanX + 6, y, row, size: 7));
@@ -1553,8 +1636,25 @@ SldSheet _buildMechanicalRiserSld({
     String floorName(int f) => (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
-    void lanjut(double x, double edgeY, bool up, int floor) {
-      final text = 'LANJUT KE ${floorName(floor)}';
+    // Fix round 6 (T3 / T8) — where each continuation mark text is printed:
+    // marks of one text on risers closer than a mark's width name their pipe
+    // (the riser id, else the service code), so two piled marks are never
+    // identical — two risers' marks used to read 'LANJUT KE Lantai 29'
+    // twice, one above the other, with nothing to tell which pipe each
+    // continues.
+    final lanjutAt = <String, List<double>>{};
+    void lanjut(double x, double edgeY, bool up, int floor, NetEdge e) {
+      final base = 'LANJUT KE ${floorName(floor)}';
+      // Only marks close enough to pile onto each other (their risers less
+      // than a mark's width apart) name their pipe.
+      final reach = _labelWidth(base, 8) + 12;
+      final crowded = (lanjutAt[base] ?? const <double>[])
+              .where((o) => (o - x).abs() < reach)
+              .length >
+          1;
+      final text = crowded
+          ? '$base (${tags[e.id] ?? riserServiceCode(e.service)})'
+          : base;
       placer.place(x + 6, up ? edgeY + 9 : edgeY - 3, text,
           size: 8,
           bold: true,
@@ -1618,9 +1718,12 @@ SldSheet _buildMechanicalRiserSld({
             layer: layer,
             dashed: e.service == ServiceType.vent));
         placer.reserveLine(x, bottomEdgeY, x, topEdgeY);
+        for (final f in [upper.floorIndex, lower.floorIndex]) {
+          (lanjutAt['LANJUT KE ${floorName(f)}'] ??= <double>[]).add(x);
+        }
         deferred.add(() {
-          lanjut(x, topEdgeY, true, upper.floorIndex);
-          lanjut(x, bottomEdgeY, false, lower.floorIndex);
+          lanjut(x, topEdgeY, true, upper.floorIndex, e);
+          lanjut(x, bottomEdgeY, false, lower.floorIndex, e);
           riserTagAt(e, x, topEdgeY, bottomEdgeY, withId: false);
         });
         continue;
@@ -1642,8 +1745,10 @@ SldSheet _buildMechanicalRiserSld({
             layer: layer,
             dashed: e.service == ServiceType.vent));
         placer.reserveLine(here.dx, here.dy, here.dx, edgeY);
+        (lanjutAt['LANJUT KE ${floorName(farNode.floorIndex)}'] ??= <double>[])
+            .add(here.dx);
         deferred.add(() {
-          lanjut(here.dx, edgeY, up, farNode.floorIndex);
+          lanjut(here.dx, edgeY, up, farNode.floorIndex, e);
           // The lower end's page carries the tag + riser id.
           if (up) riserTagAt(e, here.dx, here.dy, edgeY, withId: true);
         });
@@ -1728,10 +1833,16 @@ SldSheet _buildMechanicalRiserSld({
         placer.reserveLine(a.dx, y, xEdge, y);
       }
       for (final k in keys) {
-        final (_, y, _) = stubs[k]!;
+        final (_, y, e) = stubs[k]!;
+        // Fix round 6 (T8) — several cut marks share the band's right edge:
+        // each names its pipe (as its part-2 'LANJUTAN DARI' twin does), so
+        // marks stacked at the edge are never identical.
+        final via = keys.length < 2
+            ? ''
+            : ' (${_pipeTag(sizing[e.id], e, function: riserFunctionFor(network, e, downfeed: downfeed, flowFrom: flowFromByEdge))})';
         final text = plantSplit
-            ? 'LANJUT KE $floor - PLANT'
-            : 'LANJUT KE $floor - BAGIAN 2';
+            ? 'LANJUT KE $floor - PLANT$via'
+            : 'LANJUT KE $floor - BAGIAN 2$via';
         placer.place(xEdge - _labelWidth(text, 8), y - 6, text,
             size: 8,
             bold: true,
@@ -1764,8 +1875,8 @@ SldSheet _buildMechanicalRiserSld({
             const Offset(0, 0),
             const Offset(0, 10),
             const Offset(0, -(_symbolSize + 18)),
-            ..._nodeLadder(label).skip(1).map((o) => Offset(
-                o.dx + w / 2 + inset + 4, o.dy - _symbolSize / 2 - 7)),
+            ..._nodeLadder(label).skip(1).map((o) =>
+                Offset(o.dx + w / 2 + inset + 4, o.dy - _symbolSize / 2 - 7)),
           ]);
     }
   }
@@ -2065,6 +2176,39 @@ Network collapseRiserTerminals(Network net) {
     for (final e in net.edges)
       if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
   };
+  // Fix round 6 (T3) — each collapsed (floor, service) group keeps ONE
+  // representative terminal: the one fewest pipe hops from a riser end (then
+  // the least id), with the pipe that reaches it, so the kind the BRANCHES
+  // column counts (`Sprinkler head x6`) is DRAWN on the riser, its take-off
+  // pipe tagged (`40-SP-BS`, keying the service in the legend). The top
+  // floor of a sprinkler riser used to end in a bare junction square.
+  final hops = <String, int>{for (final id in riserEnds) id: 0};
+  final adjAll = <String, List<String>>{};
+  for (final e in net.edges) {
+    (adjAll[e.fromId] ??= []).add(e.toId);
+    (adjAll[e.toId] ??= []).add(e.fromId);
+  }
+  final queue = (riserEnds.toList()..sort());
+  for (var i = 0; i < queue.length; i++) {
+    final id = queue[i];
+    if (removed.contains(id)) continue; // never walk through a terminal
+    final nb = (adjAll[id] ?? const <String>[]).toList()..sort();
+    for (final o in nb) {
+      if (hops.containsKey(o)) continue;
+      hops[o] = hops[id]! + 1;
+      queue.add(o);
+    }
+  }
+  final rep = <(int, ServiceType), String>{};
+  for (final id in (removed.toList()..sort())) {
+    // A group no riser reaches (a horizontal duct from a floor unit) keeps
+    // its least id.
+    final h = hops[id] ?? 1 << 30;
+    final k = (byId[id]!.floorIndex, serviceOf[id]!);
+    final cur = rep[k];
+    if (cur == null || h < (hops[cur] ?? 1 << 30)) rep[k] = id;
+  }
+  removed.removeAll(rep.values);
   List<String> neighbours(String id) => [
         for (final e in net.edges)
           if (e.fromId == id && !removed.contains(e.toId))
@@ -3882,9 +4026,8 @@ double _segPointDist(
     double px, double py, double x1, double y1, double x2, double y2) {
   final dx = x2 - x1, dy = y2 - y1;
   final ll = dx * dx + dy * dy;
-  final t = ll == 0
-      ? 0.0
-      : (((px - x1) * dx + (py - y1) * dy) / ll).clamp(0.0, 1.0);
+  final t =
+      ll == 0 ? 0.0 : (((px - x1) * dx + (py - y1) * dy) / ll).clamp(0.0, 1.0);
   final ex = x1 + t * dx - px, ey = y1 + t * dy - py;
   return math.sqrt(ex * ex + ey * ey);
 }

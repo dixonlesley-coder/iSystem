@@ -234,7 +234,10 @@ void main() {
       expect(texts(part(null)), texts(whole));
       expect(part(null).prims.length, whole.prims.length);
       final p1 = texts(part(1)), p2 = texts(part(2));
-      expect(p1, containsAll(['BAGIAN 1/2', 'LANJUT KE Lantai 1 - BAGIAN 2']));
+      expect(p1, contains('BAGIAN 1/2'));
+      // Fix round 6 (T8) — several cut marks each name their pipe.
+      expect(p1.where((t) => t.startsWith('LANJUT KE Lantai 1 - BAGIAN 2')),
+          isNotEmpty);
       expect(p2, contains('BAGIAN 2/2'));
       // Fix round 3 (O2) — each continuation mark names the pipe it
       // continues: 'LANJUTAN DARI Lantai 1 - BAGIAN 1 (<size-service-...>)'.

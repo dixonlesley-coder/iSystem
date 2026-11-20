@@ -138,7 +138,13 @@ void main() {
         plant: MechRiserPlant.split);
     test('part 1 hands its plant runs to the PLANT page, which names it', () {
       final p1 = _texts(part(1)), p2 = _texts(part(2));
-      expect(p1, contains('LANJUT KE Lantai 1 - PLANT'));
+      // Fix round 6 (T8) — several cut marks each name their pipe.
+      expect(p1.where((t) => t.startsWith('LANJUT KE Lantai 1 - PLANT')),
+          isNotEmpty);
+      for (final m
+          in p1.where((t) => t.startsWith('LANJUT KE Lantai 1 - PLANT'))) {
+        expect(m, matches(RegExp(r'^LANJUT KE Lantai 1 - PLANT( \(.+\))?$')));
+      }
       expect(p1, isNot(contains('Lantai 1 - PLANT')));
       expect(p2, contains('Lantai 1 - PLANT'));
       // Fix round 3 (O2) — each 'LANJUTAN DARI' mark names its pipe tag.
