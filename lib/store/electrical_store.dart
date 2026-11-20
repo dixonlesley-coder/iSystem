@@ -1710,6 +1710,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         cosPhiUserSet: cosPhi != null ? true : null,
         phasesUserSet: (phases != null || clearPhases) ? true : null,
         loadKindUserSet: loadKind != null ? true : null,
+        // Fix round 6 (T9) — a typed length is the engineer's: the MEP way's
+        // auto vertical leg never applies to it.
+        lengthUserSet: length != null ? true : null,
         length: length,
         phases: phases,
         clearPhases: clearPhases,
@@ -3603,6 +3606,8 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     !c.loadKindUserSet &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
+    // Fix round 6 (T9) — a length the engineer typed (even the default).
+    !c.lengthUserSet &&
     // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there
     // is the mint value, not an engineer override.
     (c.cableType == null || (c.lifeSafety && c.cableType == 'FRC')) &&

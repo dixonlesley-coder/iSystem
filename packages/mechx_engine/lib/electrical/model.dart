@@ -175,6 +175,13 @@ class ElectricalCircuit {
   final bool phasesUserSet;
   final bool loadKindUserSet;
 
+  /// Fix round 6 (T9, 2026-11-20) — true once the ENGINEER typed this way's
+  /// [length]. An MEP-synced way whose length is NOT the engineer's runs the
+  /// minted allowance PLUS the vertical distance from its board's floor to
+  /// the machine's floor ([resolveCircuitLengthDetailed]); an entered length
+  /// always wins. Additive; persisted only when true.
+  final bool lengthUserSet;
+
   /// Round 24 — MIGRATION marker (never persisted as such): true when this
   /// MEP-derived way ([sourceEquipmentId] set) was decoded from a file written
   /// BEFORE the round-23 provenance flags existed (no [kMepProvenanceKey] in
@@ -234,6 +241,7 @@ class ElectricalCircuit {
     this.cosPhiUserSet = false,
     this.phasesUserSet = false,
     this.loadKindUserSet = false,
+    this.lengthUserSet = false,
     this.legacyProvenance = false,
   });
 
@@ -291,6 +299,7 @@ class ElectricalCircuit {
     bool? cosPhiUserSet,
     bool? phasesUserSet,
     bool? loadKindUserSet,
+    bool? lengthUserSet,
     bool? legacyProvenance,
   }) =>
       ElectricalCircuit(
@@ -338,6 +347,7 @@ class ElectricalCircuit {
         cosPhiUserSet: cosPhiUserSet ?? this.cosPhiUserSet,
         phasesUserSet: phasesUserSet ?? this.phasesUserSet,
         loadKindUserSet: loadKindUserSet ?? this.loadKindUserSet,
+        lengthUserSet: lengthUserSet ?? this.lengthUserSet,
         legacyProvenance: legacyProvenance ?? this.legacyProvenance,
       );
 
@@ -378,6 +388,7 @@ class ElectricalCircuit {
         if (cosPhiUserSet) 'cosPhiUserSet': true,
         if (phasesUserSet) 'phasesUserSet': true,
         if (loadKindUserSet) 'loadKindUserSet': true,
+        if (lengthUserSet) 'lengthUserSet': true,
         // Round 24 — a provenance-aware MEP way says so; a legacy way that has
         // not yet been resolved by a sync keeps its legacy status on re-save.
         // Round 25 — a PARKED way (source removed) is stamped too, so a parked
@@ -430,6 +441,7 @@ class ElectricalCircuit {
         cosPhiUserSet: json['cosPhiUserSet'] == true,
         phasesUserSet: json['phasesUserSet'] == true,
         loadKindUserSet: json['loadKindUserSet'] == true,
+        lengthUserSet: json['lengthUserSet'] == true,
         legacyProvenance: (json['sourceEquipmentId'] is String ||
                 (json['name'] is String &&
                     (json['name'] as String)

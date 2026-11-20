@@ -1600,7 +1600,14 @@ void main() {
       expect(w.loadW, closeTo(2000, 1e-9));
       expect(w.designCurrentExactA, closeTo(8.658, 5e-4));
       expect(w.breaker.ratingA.amperes, 16);
-      expect(w.cable.csaMm2, 2.5);
+      // Fix round 6 (T9) — WH-01 sits on Lantai 30 (index 29), the MEP board
+      // on Lantai 1: 10 m allowance + 29 x 4.0 m = 126 m. On 2.5 mm2 the
+      // drop is 2 x 0.126 x 8.658 x 8.87 / 231 = 8.38 %, on 4 mm2 5.21 %
+      // (+ the feeder's 0.48 % > 5 %); 6 mm2: 2 x 0.126 x 8.658 x 3.69 =
+      // 8.051 V = 3.49 % (cumulative 3.97 %). Was NYM 3 x 2.5 on 10 m.
+      expect(w.lengthM, closeTo(126, 1e-9));
+      expect(w.cable.csaMm2, 6);
+      expect(w.voltageDrop.dropPercent, closeTo(3.49, 1e-9));
       final cc = c
           .read(electricalProjectProvider)
           .panels
@@ -2078,7 +2085,10 @@ void main() {
       // incomer (the upstream bound).
       expect(n('electrical:non-selective'), 2);
       expect(n('electrical:outgoing-exceeds-incomer'), 0);
-      expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
+      // Fix round 6 (T9) — + the MEP board: its long relay / roof runs now
+      // take MCB 6 A devices (ADS on the longer loop), a smaller enclosure
+      // estimated at 36.4 K > 35 K (judge-only).
+      expect(n('electrical:enclosure-temp-rise-exceeded'), 3);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
       // Backlog Z-3 — each zone's own churn is below the 350 psi single-zone
@@ -2127,7 +2137,9 @@ void main() {
       expect(c.read(prvHoseValvesProvider), hasLength(60));
       // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
       // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
-      expect(n('electrical:cable-raised-for-ads'), 6);
+      // Fix round 6 (T9) — + one MEP way on its longer board-to-machine run
+      // (the 126 m roof booster P-05 grows 2.5 -> 4 mm2).
+      expect(n('electrical:cable-raised-for-ads'), 7);
       // Backlog Z-3 — six fire pump ways (FP / FPS / FJ, FP2 / FP2S / FJ2).
       expect(n('electrical:fire-pump-protection'), 6);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
