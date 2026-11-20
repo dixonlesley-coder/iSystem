@@ -15,6 +15,9 @@ import 'package:mechx/ui/inspector/project_panel.dart'
     show gatherEquipmentScheduleData;
 import 'package:mechx/ui/schematic/schematic_export.dart'
     show buildLiveRiserPages;
+import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/report/cover_sheet.dart'
+    show buildMasterLegendSections, masterLegendComponentsOf;
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/sld_sheet.dart';
@@ -75,5 +78,21 @@ void main() {
     expect(reserve.tanks.map((t) => t.tankId).toSet(), {'GT', 'RT'});
     expect(reserve.storedLitres, closeTo(180000, 1e-9));
     expect(c.read(tankFillsProvider).map((t) => t.tankId), isNot(contains('BT')));
+
+    // Backlog K-4 — the G-003 master legend's inputs (the split the package
+    // front matter reads): RT stays a genuine roof tank ('RT Roof tank'), BT
+    // keys 'BT Fire break tank' with its roof-tank glyph.
+    final legend = masterLegendComponentsOf(
+        c.read(networkControllerProvider).network,
+        c.read(fireBreakTankIdsProvider));
+    expect(legend.components, contains(NodeComponent.roofTank));
+    expect(legend.fireBreakTankComponents, {NodeComponent.roofTank});
+    final legendRows = [
+      for (final s in buildMasterLegendSections(
+          components: legend.components,
+          fireBreakTankComponents: legend.fireBreakTankComponents))
+        for (final e in s.entries) '${e.code} ${e.meaning}',
+    ];
+    expect(legendRows, containsAll(['RT Roof tank', 'BT Fire break tank']));
   });
 }

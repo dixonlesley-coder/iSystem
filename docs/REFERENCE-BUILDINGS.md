@@ -240,6 +240,10 @@ _(empty)_
 
 - **(b) Recirculation pump way only with the duty-feed opt-in — partly closed by backlog G-3.** A circulator pump DRAWN on the loop was already a placed machine (minted by default); since G-3 a system whose return is DRAWN also mints its solved recirculation way in the default sync even with no pump symbol drawn. The tower draws no return (the app ASSUMES it), so its HW recirc way stays behind the "Feed solved MEP duties" opt-in (on in this fixture): no tower figure moves.
 
+### Backlog closed (2026-11-20)
+
+- **Legend row of the fire break tank — backlog K-4 (left by Z-5).** The G-003 master legend keyed BT on its symbol type, so a drawing whose only roof-typed tank is a break tank would print `RT  Roof tank`. A break tank now adds `BT  Fire break tank` (its roof-tank glyph) and `RT  Roof tank` is keyed only for a genuine roof tank: the tower lists both rows (RT on the top storey is genuine). No figure moved.
+
 ### Backlog closed (2026-11-14)
 
 - **(e) Standpipe zoning — backlog Z (Z-1 engine, Z-2 app, Z-3 this redraw).** Owner decision: tall buildings get DESIGNED fire zones, marked by drawing the break. The fixture now breaks at Lantai 15 (index 14): BT (roof-typed, 56.0 m, 90 000 L) filled from riser a's top, relay room FP2 / FP2S / FJ2 + header FH2 on Lantai 15. Each zone is its own rating system (a storage tank is a hydraulic break, Round 51); `fireZones` numbers them 1 / 2. Hand figures (NFPA 14 / 20, `// VERIFY`; residual 690 / 9.81 = 70.336 m; friction = max(15 m allowance, the sized index path), HW C 120, hf = 10.67 L Q^1.852 / (C^1.852 D^4.8704)):

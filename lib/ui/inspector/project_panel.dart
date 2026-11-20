@@ -2799,6 +2799,8 @@ Future<bool> writeSubmittalPackageToDir(
       for (final c in p.circuits)
         if (c.cableType != null && c.cableType!.trim().isNotEmpty) c.cableType!,
   };
+  final legendComponents =
+      masterLegendComponentsOf(netFm, ref.read(fireBreakTankIdsProvider));
   final frontMatter = buildSubmittalFrontMatter(
     projectName: base,
     drawings: drawingList,
@@ -2808,10 +2810,10 @@ Future<bool> writeSubmittalPackageToDir(
     date: today,
     preparedBy: doc.preparedBy,
     services: {for (final e in netFm.edges) e.service},
-    components: {
-      for (final n in netFm.nodes)
-        if (n.component != null) n.component!,
-    },
+    // Backlog K-4 — a fire zone break tank is keyed 'BT Fire break tank'
+    // (the zone chain's derived naming), never 'RT Roof tank'.
+    components: legendComponents.components,
+    fireBreakTankComponents: legendComponents.fireBreakTankComponents,
     cableFamilies: specifiedCables.isNotEmpty
         ? specifiedCables
         : (eResultFm.order.isNotEmpty

@@ -22,6 +22,7 @@ library;
 
 import '../electrical/cable_family.dart' show cableFamilyDescription;
 import '../network/network.dart';
+import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'drawing_chrome.dart'
     show DrawingChrome, serviceChromeLabel, serviceDashPatternPdf;
 import 'plan_symbols.dart' show planComponentPrims, planFixturePrims;
@@ -158,10 +159,18 @@ const List<String> kFrontMatterDiagramTitles = [
 /// terminal — the symbols the plan draws but never keys), and — when
 /// [cableFamilies] is non-empty — a CABLES section (each family's distinct
 /// construction). Sections with no rows are omitted.
+///
+/// Backlog K-4 (2026-11-20) — [fireBreakTankComponents] are the drawn
+/// symbol types of the fire zone BREAK tanks (`fireBreakTankIds`, the zone
+/// chain's derived naming): they add ONE row 'BT Fire break tank' drawn with
+/// that tank's glyph, right after the tank rows. [components] carries only
+/// the genuine components ([masterLegendComponentsOf]), so 'RT Roof tank' is
+/// keyed only when a genuine roof tank is drawn. Empty ⇒ byte-identical.
 List<MasterLegendSection> buildMasterLegendSections({
   Iterable<ServiceType> services = const [],
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
+  Iterable<NodeComponent> fireBreakTankComponents = const [],
 }) {
   final out = <MasterLegendSection>[];
 
@@ -185,8 +194,15 @@ List<MasterLegendSection> buildMasterLegendSections({
 
   // EQUIPMENT & FITTINGS — one row per component present, ordered by the enum.
   final comp = components.toSet();
-  final compRows = <MasterLegendEntry>[
+  final breakTanks = fireBreakTankComponents.toSet();
+  // Backlog K-4 — the break-tank row follows the LAST tank type drawn for a
+  // break tank (roof before ground in the enum), keyed once.
+  final breakAfter = [
     for (final c in NodeComponent.values)
+      if (breakTanks.contains(c)) c,
+  ];
+  final compRows = <MasterLegendEntry>[
+    for (final c in NodeComponent.values) ...[
       if (comp.contains(c))
         MasterLegendEntry(
           kind: LegendGlyphKind.component,
@@ -194,6 +210,14 @@ List<MasterLegendSection> buildMasterLegendSections({
           code: componentLegendCode(c),
           meaning: componentLegendName(c),
         ),
+      if (breakAfter.isNotEmpty && c == breakAfter.last)
+        MasterLegendEntry(
+          kind: LegendGlyphKind.component,
+          component: breakAfter.first,
+          code: kFireBreakTankLegendCode,
+          meaning: kFireBreakTankLabel,
+        ),
+    ],
   ];
   if (compRows.isNotEmpty) {
     out.add(MasterLegendSection('PERALATAN & FITTING / EQUIPMENT', compRows));
@@ -239,12 +263,38 @@ List<MasterLegendSection> buildMasterLegendSections({
 List<MasterLegendEntry> planLegendSubset({
   Iterable<ServiceType> services = const [],
   Iterable<NodeComponent> components = const [],
+  Iterable<NodeComponent> fireBreakTankComponents = const [],
 }) =>
     [
       for (final s in buildMasterLegendSections(
-          services: services, components: components))
+          services: services,
+          components: components,
+          fireBreakTankComponents: fireBreakTankComponents))
         if (s.title != 'KABEL / CABLES') ...s.entries,
     ];
+
+/// Backlog K-4 — the master legend's drafting code for a fire zone break
+/// tank (not an engineering value).
+const String kFireBreakTankLegendCode = 'BT';
+
+/// Backlog K-4 (2026-11-20) — the master legend's component inputs for
+/// [net]: [components] every drawn component EXCEPT the fire zone break
+/// tanks ([fireBreakTankIds], the zone chain's derived naming), and
+/// [fireBreakTankComponents] the drawn symbol types of those break tanks.
+/// The one split every caller of [buildSubmittalFrontMatter] reads.
+({Set<NodeComponent> components, Set<NodeComponent> fireBreakTankComponents})
+    masterLegendComponentsOf(Network net, Set<String> fireBreakTankIds) => (
+          components: {
+            for (final n in net.nodes)
+              if (n.component != null && !fireBreakTankIds.contains(n.id))
+                n.component!,
+          },
+          fireBreakTankComponents: {
+            for (final n in net.nodes)
+              if (n.component != null && fireBreakTankIds.contains(n.id))
+                n.component!,
+          },
+        );
 
 // ── Sheet builders ───────────────────────────────────────────────────────────
 
@@ -456,6 +506,7 @@ SldSheet buildGeneralNotesSheet({
   Iterable<ServiceType> services = const [],
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
+  Iterable<NodeComponent> fireBreakTankComponents = const [],
   List<String> notes = kDefaultGeneralNotes,
 }) {
   final prims = <SldPrim>[];
@@ -487,6 +538,7 @@ SldSheet buildGeneralNotesSheet({
     services: services,
     components: components,
     cableFamilies: cableFamilies,
+    fireBreakTankComponents: fireBreakTankComponents,
   );
   for (final section in sections) {
     label(legendL, ry, section.title, 11, bold: true);
@@ -527,6 +579,7 @@ List<SldSheet> buildSubmittalFrontMatter({
   Iterable<ServiceType> services = const [],
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
+  Iterable<NodeComponent> fireBreakTankComponents = const [],
   List<String> notes = kDefaultGeneralNotes,
 }) =>
     [
@@ -544,6 +597,7 @@ List<SldSheet> buildSubmittalFrontMatter({
         services: services,
         components: components,
         cableFamilies: cableFamilies,
+        fireBreakTankComponents: fireBreakTankComponents,
         notes: notes,
       ),
     ];
