@@ -27,7 +27,7 @@ import '../sizing/tank_fill.dart' show MainsPressureCheck, WaterReserve;
 import '../sizing/water_heater.dart';
 import '../standards/sni.dart';
 import '../units.dart';
-import 'number_format.dart' show formatTankCapacity;
+import 'number_format.dart' show formatPumpHead, formatTankCapacity;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 import 'riser_tags.dart' show elementTags;
@@ -204,6 +204,11 @@ class FireZoneReportLine {
   final double? fillPipeMm;
   final double? fillPipeLps;
 
+  /// Fix round 6 (C3) — the zone's jockey point (its rating basis).
+  final double? jockeyLps;
+  final double? jockeyHeadM;
+  final bool jockeyStandby;
+
   const FireZoneReportLine({
     required this.number,
     required this.floors,
@@ -224,6 +229,9 @@ class FireZoneReportLine {
     this.breakCapacityLitres,
     this.fillPipeMm,
     this.fillPipeLps,
+    this.jockeyLps,
+    this.jockeyHeadM,
+    this.jockeyStandby = false,
   });
 }
 
@@ -855,13 +863,13 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         'tag': p.tag,
         'service': p.service,
         'lps': lps.toStringAsFixed(lps < 1 ? 2 : 1),
-        'm': p.duty.head.meters.toStringAsFixed(1),
+        'm': formatPumpHead(p.duty.head.meters),
         'kw': p.duty.selectedMotor.inKiloWatts.toStringAsFixed(2),
       }));
     }
   } else if (d.pump != null) {
     ws.writeln(strings.format(RptStringKey.wsPumpHead,
-        {'m': d.pump!.head.meters.toStringAsFixed(1)}));
+        {'m': formatPumpHead(d.pump!.head.meters)}));
     ws.writeln(strings.format(RptStringKey.wsPumpMotor,
         {'kw': d.pump!.selectedMotor.inKiloWatts.toStringAsFixed(2)}));
   }
@@ -869,7 +877,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
   if (pop != null) {
     ws.writeln(strings.format(RptStringKey.wsOperatingPoint, {
       'lps': pop.operatingFlow.inLitersPerSecond.toStringAsFixed(1),
-      'm': pop.operatingHead.meters.toStringAsFixed(1),
+      'm': formatPumpHead(pop.operatingHead.meters),
       'pct': (pop.flowRatio * 100).toStringAsFixed(0),
       'match': pop.stable
           ? strings(RptStringKey.wsMatchStable)
@@ -903,7 +911,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       'lps': hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2),
       // Round 16 — the loop LENGTH and the loop HEAD are separate figures.
       'len': hwr.loopLength.meters.toStringAsFixed(1),
-      'head': hwr.loopHead.meters.toStringAsFixed(1),
+      'head': formatPumpHead(hwr.loopHead.meters),
       'kw': hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2),
       'c': hwr.returnTempC.toStringAsFixed(0),
     }));
@@ -1122,7 +1130,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             strings(RptStringKey.fireStandpipeKey),
             strings.format(RptStringKey.fireStandpipeValue, {
               'lps': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
-              'm': st.pumpHead.meters.toStringAsFixed(0),
+              'm': formatPumpHead(st.pumpHead.meters),
               'kw': st.pumpShaftPower.inKiloWatts.toStringAsFixed(1),
               'mm': st.minRiserDiameter.inMillimeters.round(),
             })
@@ -1136,7 +1144,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             }),
             strings.format(RptStringKey.firePumpValue, {
               'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(1),
-              'head': fp.ratedHead.meters.toStringAsFixed(0),
+              'head': formatPumpHead(fp.ratedHead.meters),
               'churn': fp.churn.head.meters.toStringAsFixed(0),
               'overload': fp.overload.head.meters.toStringAsFixed(0),
               'motor': fp.selectedMotor.inKiloWatts.toStringAsFixed(1),
@@ -1239,7 +1247,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               strings.format(RptStringKey.firePumpValue, {
                 'rated': fs.rating.ratedFlow.inLitersPerSecond
                     .toStringAsFixed(1),
-                'head': fs.rating.ratedHead.meters.toStringAsFixed(0),
+                'head': formatPumpHead(fs.rating.ratedHead.meters),
                 'churn': fs.rating.churn.head.meters.toStringAsFixed(0),
                 'overload': fs.rating.overload.head.meters.toStringAsFixed(0),
                 'motor': fs.rating.selectedMotor.inKiloWatts.toStringAsFixed(1),
@@ -1257,7 +1265,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             strings.format(RptStringKey.fireZoneValue, {
               'tag': z.tag,
               'lps': z.ratedLps.toStringAsFixed(2),
-              'head': z.ratedHeadM.toStringAsFixed(1),
+              'head': formatPumpHead(z.ratedHeadM),
               'motor': z.motorKw.toStringAsFixed(1),
               'churn': z.churnKpa.toStringAsFixed(0),
               'psi': (z.churnKpa / 6.894757).toStringAsFixed(0),
@@ -1270,9 +1278,9 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   {'n': '${z.number}', 'tank': z.fillTankTag!}),
               strings.format(RptStringKey.fireZoneRelayValue, {
                 'ownq': (z.ownLps ?? 0).toStringAsFixed(2),
-                'ownh': (z.ownHeadM ?? 0).toStringAsFixed(1),
+                'ownh': formatPumpHead(z.ownHeadM ?? 0),
                 'fillq': (z.fillLps ?? 0).toStringAsFixed(2),
-                'fillh': z.fillHeadM!.toStringAsFixed(1),
+                'fillh': formatPumpHead(z.fillHeadM!),
                 'flowby': strings(
                     (z.fillLps ?? 0) > (z.ownLps ?? 0) + 1e-9
                         ? RptStringKey.fireZoneGovernsFill
@@ -1292,7 +1300,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                 'need': z.breakRequiredLitres!.toStringAsFixed(0),
                 'cap': z.breakCapacityLitres == null
                     ? strings(RptStringKey.fireTankReserveUnset)
-                    : '${z.breakCapacityLitres!.toStringAsFixed(0)} L',
+                    : formatTankCapacity(z.breakCapacityLitres!),
                 'verdict': z.breakCapacityLitres == null
                     ? ''
                     : z.breakCapacityLitres! + 1e-9 < z.breakRequiredLitres!
@@ -1339,12 +1347,28 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'kpa': g.inletKpa.toStringAsFixed(0),
             })
           ),
-        if ((fp ?? d.fireJockeyRating) case final jr?)
+        // Fix round 6 (C3) — a fire-zoned project lists one jockey per zone
+        // (each zone is its own rating system with its own jockey).
+        if (d.fireZones.length > 1 &&
+            d.fireZones.every((z) => z.jockeyLps != null))
+          for (final z in d.fireZones)
+            (
+              strings.format(
+                  RptStringKey.fireZoneJockeyKey, {'n': '${z.number}'}),
+              strings.format(RptStringKey.fireJockeyValue, {
+                'lps': z.jockeyLps!.toStringAsFixed(2),
+                'm': formatPumpHead(z.jockeyHeadM!),
+                'standby': z.jockeyStandby
+                    ? strings(RptStringKey.fireJockeyStandby)
+                    : '',
+              })
+            )
+        else if ((fp ?? d.fireJockeyRating) case final jr?)
           (
             strings(RptStringKey.fireJockeyKey),
             strings.format(RptStringKey.fireJockeyValue, {
               'lps': jr.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
-              'm': jr.jockeyHead.meters.toStringAsFixed(0),
+              'm': formatPumpHead(jr.jockeyHead.meters),
               'standby': jr.standbyRecommended
                   ? strings(RptStringKey.fireJockeyStandby)
                   : '',

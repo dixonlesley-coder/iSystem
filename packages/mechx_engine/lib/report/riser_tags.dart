@@ -18,7 +18,7 @@ import 'package:mechx_engine/geometry/building.dart' show BuildingLevels, Floor;
 import 'package:mechx_engine/network/connectivity.dart' show isSelfContainedAcUnit;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
-    show formatTankCapacity, signedElevationText;
+    show formatPumpHead, formatTankCapacity, kAutoMark, signedElevationText;
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
@@ -925,7 +925,7 @@ String? equipmentDetail(NetNode node,
       // m3 to 3 decimals), ASCII 'm3' (the PDF sanitizer would mangle a
       // superscript). Backlog T-2 — an app-sized capacity says so.
       final cap = formatTankCapacity(litres);
-      return node.tankCapacityAuto ? '$cap (auto)' : cap;
+      return node.tankCapacityAuto ? '$cap $kAutoMark' : cap;
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
     case NodeComponent.ahu:
@@ -940,7 +940,7 @@ String? equipmentDetail(NetNode node,
       if (flow != null && head != null && flow.cubicMetersPerSecond > 0) {
         String f(double v) => v.toStringAsFixed(v.abs() < 1 ? 2 : 1);
         return 'Q ${f(flow.inLitersPerSecond)} L/s · '
-            'H ${f(head.meters)} m · ${motorKwText(motor)}';
+            'H ${formatPumpHead(head.meters)} m · ${motorKwText(motor)}';
       }
       return motorKwText(motor);
     default:

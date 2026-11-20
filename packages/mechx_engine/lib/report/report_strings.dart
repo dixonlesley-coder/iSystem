@@ -187,6 +187,8 @@ enum RptStringKey {
   fireHoseStationResidualKey, // {tag} {floors}
   fireHoseStationResidualValue, // {max} {min} {limit}
   fireJockeyKey,
+  fireZoneJockeyKey, // {n}
+  esFireZoneService, // {svc} {n}
   fireJockeyValue, // {lps} {m} {standby}
   fireJockeyStandby,
 
@@ -741,6 +743,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'standpipe system pressure{share} - split the standpipe into '
           'pressure zones (VERIFY)',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
+  RptStringKey.fireZoneJockeyKey: 'Jockey pump, fire zone {n}:',
+  RptStringKey.esFireZoneService: '{svc} - zone {n}',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
   RptStringKey.fireJockeyStandby: ' · standby pump recommended',
@@ -1350,6 +1354,8 @@ const Map<RptStringKey, String> kReportStringsId = {
           '{limit} kPa (350 psi){share} - bagi pipa tegak menjadi zona '
           'tekanan (VERIFY)',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
+  RptStringKey.fireZoneJockeyKey: 'Pompa jockey, zona kebakaran {n}:',
+  RptStringKey.esFireZoneService: '{svc} - zona {n}',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',
   RptStringKey.fireJockeyStandby: ' · disarankan pompa cadangan',

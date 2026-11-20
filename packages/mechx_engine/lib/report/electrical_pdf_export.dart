@@ -395,10 +395,14 @@ String _sldPageContent({
             '${_n(_weightPt(p.weight) * scale + 0.3)} w');
         // A dashed prim strokes inside a dash pattern, reset straight after so
         // the following prims stay solid. Default solid ⇒ byte-identical.
-        if (p.dashed) cs.writeln('[4 3] 0 d');
+        if (p.dashDot) {
+          cs.writeln('[10 3 2 3] 0 d');
+        } else if (p.dashed) {
+          cs.writeln('[4 3] 0 d');
+        }
         cs.writeln('${_n(tx(p.x1))} ${_n(ty(p.y1))} m '
             '${_n(tx(p.x2))} ${_n(ty(p.y2))} l S');
-        if (p.dashed) cs.writeln('[] 0 d');
+        if (p.dashed || p.dashDot) cs.writeln('[] 0 d');
       case SldRect():
         cs.writeln('${_rectStrokeForRole(p.role)} RG '
             '${_n(_weightPt(p.weight) * scale + 0.3)} w');

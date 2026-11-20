@@ -1035,6 +1035,80 @@ def round6_checks(bdir, project, pages, emit, lines):
              'stacked marks: ' + ', '.join(sorted(set(stack))[:8])
              if stack else 'no stacked continuation marks')
 
+    # C-items (cross-surface consistency).
+    def one(pattern):
+        g = glob.glob(os.path.join(bdir, pattern))
+        return g[0] if g else None
+    rp = [f for f in glob.glob(os.path.join(bdir, '*-report.md'))
+          if not f.endswith(('-mep-report.md', '-electrical-report.md'))]
+    rtext = open(rp[0]).read() if rp else ''
+    rtext_n = re.sub(r'\*\*', '', rtext)
+    lines += ['', '## Fix round 6 - C1 pump heads, C2 tank capacities, '
+              'C5 (auto) mark, C6 M-601, C8 genset share, C9 G-003 cables']
+    heads = set(re.findall(r'L/s @ (\d+(?:\.\d+)?) m', stext))
+    bad = []
+    for v in re.findall(r'(?:@|pump|head|jockey)\s+\+?(\d+(?:\.\d+)?) m\b',
+                        rtext_n):
+        for h in heads:
+            if v != h and abs(float(v) - float(h)) <= 0.5 and \
+                    float(h) > 0 and v not in heads:
+                bad.append(f'report {v} m vs M-601 {h} m')
+    emit('C1', 'FAIL' if bad else 'PASS', 'calc report vs M-601',
+         '; '.join(sorted(set(bad))[:6]) if bad else
+         f'{len(heads)} schedule heads, none printed at another precision')
+    raw = sorted(set(re.findall(r'tank \d{4,} L\b', rtext_n)))
+    emit('C2', 'FAIL' if raw else 'PASS', 'calc report tank capacities',
+         ', '.join(raw[:6]) if raw else 'no capacity printed as raw litres')
+    autos, defined = [], True
+    for f in risers:
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                t = pg.extract_text() or ''
+                if '(auto)' in t and 'Sized by the app from daily demand' \
+                        not in t and '(auto) = sized' not in t:
+                    autos.append(f'p{i}')
+    any_auto = any('(auto)' in pdftext(f) for f in risers)
+    cov = one('*-00-cover-sheets.pdf')
+    if any_auto and cov and 'Sized by the app from daily demand' not in \
+            pdftext(cov):
+        defined = False
+    bad5 = ([f'riser {",".join(autos)} prints (auto) undefined'] if autos
+            else []) + ([] if defined else ['G-003 does not define (auto)'])
+    emit('C5', 'FAIL' if bad5 else 'PASS', '(auto) mark',
+         '; '.join(bad5) if bad5 else 'defined wherever printed')
+    bad6 = []
+    if sched:
+        with pdfplumber.open(sched[0]) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                t = pg.extract_text() or ''
+                if re.search(r'Page \d+ of \d+', t) and 'SHEET' in t:
+                    bad6.append(f'p{i} two page counters')
+        svc = Counter()
+        for l in stext.splitlines():
+            m = re.match(r'^(P-\d+) (Fire [^@]*?) \d', l)
+            if m:
+                svc[m.group(2).strip()] += 1
+        bad6 += [f'{k} x{n}' for k, n in svc.items() if n > 1]
+    emit('C6', 'FAIL' if bad6 else 'PASS', 'M-601',
+         '; '.join(bad6) if bad6 else 'one numbering; fire rows distinct')
+    bad8 = []
+    for pat in ('*-electrical-overview-sld.pdf', '*-electrical-riser.pdf'):
+        f = one(pat)
+        if f and re.search(r'backs \d+% of load', pdftext(f)):
+            bad8.append(f'{short(stem_of(f), project)}: rating printed as '
+                        'the backed share')
+    emit('C8', 'FAIL' if bad8 else 'PASS', 'genset backed share',
+         '; '.join(bad8) if bad8 else 'no rating-as-share label')
+    fams = r'\b(NYY|NYM|FRC|NYYHY|NYA|N2XSY|NA2XY|N2XY|NYFGbY)\b'
+    sld = one('*-electrical-sld.pdf')
+    if sld and cov:
+        used = set(re.findall(fams, pdftext(sld)))
+        listed = set(re.findall(fams, pdftext(cov)))
+        miss = sorted(used - listed)
+        emit('C9', 'FAIL' if miss else 'PASS', 'G-003 cable families',
+             f'printed on E-201, not on G-003: {", ".join(miss)}' if miss
+             else f'{len(used)} families all listed')
+
 
 def run_building(root, b):
     bdir = os.path.join(root, b)

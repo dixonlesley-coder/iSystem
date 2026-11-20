@@ -306,16 +306,17 @@ judged.
 **SNI 03-7065 presets (backlog T-3, 2026-11-14).** The apartment picks 'Rumah
 susun' (100 L/penghuni/day): 9 600 L/day (was 11 520), reserve 3.125 days (was
 2.6). The shophouse picks 'Ruko / rukan' (100 L/penghuni dan pegawai/day): 1 500
-L/day (was 1 800); auto GT 500 L (was 650; M-601 '0.5 m3 (auto)'), RT 250 L
+L/day (was 1 800); auto GT 500 L (was 650; M-601 '500 L (auto)'), RT 250 L
 unchanged; meter feed 0.045139 → 0.034722 L/s (DN15, v 0.255 → 0.196); W-2 4.524 →
 4.515 m; transfer line and TP unchanged; reserve 2250 / 1500 = 1.5 days
 (unchanged). House, office and tower keep their occupancy defaults.
 
-**Auto marks on the drawings (backlog T-2, 2026-11-14).** House M-601 TK-01
-'- (*)' → '0.7 m3 (auto)', M-201 'TK-01 Roof tank' → 'TK-01 Roof tank · 0.7 m3
-(auto)'; shophouse GT '0.7 m3 (auto)', RT '0.3 m3 (auto)'; office GT '10.0 m3
-(auto)' (riser '10 m3 (auto)'); each sheet carries '(auto) = sized by the app from
-daily demand; not entered'. Before T-2 the schedule and the riser read the live
+**Auto marks on the drawings (backlog T-2, 2026-11-14; strings as printed since
+W-7 / fix round 6 C4).** House M-601 TK-01 '- (*)' → '650 L (auto)', M-201
+'TK-01 Roof tank' → 'TK-01 Roof tank · 650 L (auto)'; shophouse GT '500 L
+(auto)', RT '250 L (auto)'; office GT '10 m3 (auto)' (schedule and riser alike);
+each riser page carrying an '(auto)' tag also carries '(auto) = sized by the app
+from daily demand; not entered', and G-003 defines it (fix round 6 C5). Before T-2 the schedule and the riser read the live
 network and printed an auto tank as 'capacity not set'.
 
 **Tower storage to one day (backlog T-1, 2026-11-14).** Owner: "enlarge tanks

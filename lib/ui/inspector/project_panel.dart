@@ -4,6 +4,7 @@ import 'dart:typed_data' show Uint8List;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/cable_family.dart' show defaultCableFamily;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/zoning.dart' show DownfeedZoneStatic;
@@ -535,6 +536,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
                   breakCapacityLitres: bt?.capacityLitres,
                   fillPipeMm: fillSz?.diameter.inMillimeters,
                   fillPipeLps: fillSz?.flow.inLitersPerSecond,
+                  // Fix round 6 (C3) — the zone's own jockey point.
+                  jockeyLps: b.rating.jockeyFlow.inLitersPerSecond,
+                  jockeyHeadM: b.rating.jockeyHead.meters,
+                  jockeyStandby: b.rating.standbyRecommended,
                 );
               }(),
           ]
@@ -1332,6 +1337,27 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     // Round 28 — each drawn pump on the duty and service of its OWN fire
     // system (a sprinkler pump on its own network is a sprinkler pump).
     final bases = fireBasesByNode;
+    // Fix round 6 (C6) — on a fire-ZONED project each pump's row names its
+    // zone (the zone whose rating system is the pump's own basis), so the
+    // two duty / standby / jockey sets are told apart by more than the duty.
+    final zones = ref.read(fireZoneChainProvider);
+    final zoneBases = [
+      for (final z in zones)
+        (z.number, fireZoneBasis(z, ref.read(fireSystemBasesProvider))),
+    ];
+    String zoned(String id, String svc) {
+      if (zones.length < 2) return svc;
+      final b = bases[id];
+      if (b == null) return svc;
+      for (final (n, zb) in zoneBases) {
+        if (zb != null && identical(zb.system, b.system)) {
+          return reportStringsFor(ref)
+              .format(RptStringKey.esFireZoneService, {'svc': svc, 'n': '$n'});
+        }
+      }
+      return svc;
+    }
+
     for (final id in drawn) {
       final tag = nodeTags[id]!;
       final jockey = binding.fireJockeyPumpNodeIds.contains(id);
@@ -1350,11 +1376,13 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
         duty: jockey
             ? (basis?.jockey ?? jockeyDuty ?? mainDuty)
             : mainDuty,
-        service: jockey
-            ? reportStringsFor(ref)(RptStringKey.esSvcFireJockeyPump)
-            : binding.fireStandbyPumpNodeIds.contains(id)
-                ? reportStringsFor(ref)(RptStringKey.esSvcFireStandbyPump)
-                : sysService,
+        service: zoned(
+            id,
+            jockey
+                ? reportStringsFor(ref)(RptStringKey.esSvcFireJockeyPump)
+                : binding.fireStandbyPumpNodeIds.contains(id)
+                    ? reportStringsFor(ref)(RptStringKey.esSvcFireStandbyPump)
+                    : sysService),
         tag: tag,
         modelSpec: specs[tag],
       ));
@@ -2794,10 +2822,17 @@ Future<bool> writeSubmittalPackageToDir(
 
   // Cable families the electrical set actually specifies; fall back to the
   // conventional NYY/NYM defaults only when panels exist but none are typed.
+  // Fix round 6 (C9) — every family the set PRINTS: a way's explicit cable
+  // type, else the default family its label prints ([defaultCableFamily],
+  // the SAME rule the single-line labels use) — the list named only FRC
+  // while every untyped way printed NYY / NYM.
   final specifiedCables = <String>{
     for (final p in eProjectFm.panels)
       for (final c in p.circuits)
-        if (c.cableType != null && c.cableType!.trim().isNotEmpty) c.cableType!,
+        if (c.cableType != null && c.cableType!.trim().isNotEmpty)
+          c.cableType!
+        else
+          defaultCableFamily(c.loadKind),
   };
   final legendComponents =
       masterLegendComponentsOf(netFm, ref.read(fireBreakTankIdsProvider));
@@ -2814,6 +2849,9 @@ Future<bool> writeSubmittalPackageToDir(
     // (the zone chain's derived naming), never 'RT Roof tank'.
     components: legendComponents.components,
     fireBreakTankComponents: legendComponents.fireBreakTankComponents,
+    // Fix round 6 (C5) — G-003 defines the '(auto)' capacity mark.
+    autoMark:
+        ref.read(sizingNetworkProvider).nodes.any((n) => n.tankCapacityAuto),
     cableFamilies: specifiedCables.isNotEmpty
         ? specifiedCables
         : (eResultFm.order.isNotEmpty
@@ -5450,7 +5488,7 @@ class _ResultsSection extends ConsumerWidget {
                 context,
                 'Water heater ${heaterTags[id] ?? id}',
                 '${h.recoveryLph.toStringAsFixed(1)} L/h · '
-                    '${h.tankL.toStringAsFixed(0)} L · '
+                    '${formatTankCapacity(h.tankL)} · '
                     '${h.elementKw.toStringAsFixed(1)} kW',
               ),
             _kvRow(
@@ -5716,7 +5754,7 @@ class _FireSection extends ConsumerWidget {
               '${t.requiredLitres.toStringAsFixed(0)} L '
                   '(${t.reserve.ratedFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'
                   ' x ${t.reserve.durationMin.toStringAsFixed(0)} min)'
-                  '${t.capacityLitres == null ? ' · capacity not set' : t.verdict == FireTankVerdict.undersized ? ' · tank ${t.capacityLitres!.toStringAsFixed(0)} L short' : ' · tank OK'}',
+                  '${t.capacityLitres == null ? ' · capacity not set' : t.verdict == FireTankVerdict.undersized ? ' · tank ${formatTankCapacity(t.capacityLitres!)} short' : ' · tank OK'}',
             ),
           // Backlog Z-2 — one row per designed fire zone (pump point, motor,
           // pipe class) and its break tank (required vs entered); nothing is
@@ -5737,7 +5775,7 @@ class _FireSection extends ConsumerWidget {
                 '${bt.requiredLitres.toStringAsFixed(0)} L '
                     '(${bt.requirement.ratedFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'
                     ' x ${bt.requirement.durationMin.toStringAsFixed(0)} min)'
-                    '${bt.capacityLitres == null ? ' · capacity not set' : bt.verdict == FireTankVerdict.undersized ? ' · tank ${bt.capacityLitres!.toStringAsFixed(0)} L short' : ' · tank OK'}',
+                    '${bt.capacityLitres == null ? ' · capacity not set' : bt.verdict == FireTankVerdict.undersized ? ' · tank ${formatTankCapacity(bt.capacityLitres!)} short' : ' · tank OK'}',
               ),
           ],
           const SizedBox(height: MechXSpacing.xs),

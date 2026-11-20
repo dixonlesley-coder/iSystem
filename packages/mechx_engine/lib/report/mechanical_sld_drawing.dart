@@ -24,6 +24,7 @@ import '../standards/pipe_products.dart' show PipeProduct;
 import '../standards/sni.dart' show PlumbingFixture;
 import '../units.dart' show Length;
 import 'drawing_chrome.dart' show helveticaTextWidth;
+import 'number_format.dart' show kAutoMark, kAutoMarkMeaning;
 import 'plan_symbols.dart'
     show
         planComponentPrims,
@@ -2447,6 +2448,12 @@ List<SldLegendEntry> _fittingLegend(
     if (tokens.contains(code) && keyed.add(code)) {
       out.add(SldLegendEntry(code, meaning));
     }
+  }
+  // Fix round 6 (C5) — the '(auto)' capacity mark is defined on EVERY page
+  // that prints it (it used to be explained only in the notes of the
+  // extras page, while the tag rode another page).
+  if (prims.any((p) => p is SldLabel && p.text.contains(kAutoMark))) {
+    out.add(const SldLegendEntry(kAutoMark, kAutoMarkMeaning));
   }
   // A riser id (`CW-R1`) keys with the first one the sheet prints.
   final riserId = RegExp(r'^[A-Z]+-R\d+$');

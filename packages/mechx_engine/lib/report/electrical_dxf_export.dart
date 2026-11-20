@@ -477,7 +477,8 @@ SldSheet _emitSldPage(
     switch (p) {
       case SldLine():
         d.connector(lineLayer(p), p.x1, p.y1, p.x2, p.y2,
-            color: colorFor(p.role), linetype: p.dashed ? 'DASHED' : null);
+            color: colorFor(p.role),
+            linetype: p.dashDot ? 'DASHDOT' : p.dashed ? 'DASHED' : null);
       case SldRect():
         d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h, color: colorFor(p.role));
       case SldLabel():

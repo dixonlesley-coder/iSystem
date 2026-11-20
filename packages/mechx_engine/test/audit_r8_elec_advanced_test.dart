@@ -19,10 +19,14 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/enclosure.dart';
+import 'package:mechx_engine/electrical/genset_backup.dart'
+    show gensetBackupDemandW;
 import 'package:mechx_engine/electrical/lightning.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/electrical/power_factor.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/electrical/sources.dart';
@@ -371,8 +375,8 @@ void main() {
       for (final j in [v, h]) {
         expect(j, contains('GENSET $n x 2500 kVA'));
         expect(j, isNot(contains('GENSET 2500 kVA')));
-        // n × 2500 ≥ demand ⇒ the paralleled sets back the whole load.
-        expect(j, contains('backs 100% of load'));
+        // Fix round 6 (C8) — the backed share (every board on the sets).
+        expect(j, contains(_c8Share(p, r)));
       }
     });
 
@@ -459,4 +463,13 @@ void main() {
           ElectricalSystem.threePhase), isNull);
     });
   });
+}
+
+/// Fix round 6 (C8) — the genset label is the BACKED share: the load the set
+/// backs ([gensetBackupDemandW]) against the building demand.
+String _c8Share(ElectricalProject p, ElectricalSystemResult r) {
+  final b = gensetBackupDemandW(p, r).watts, d = r.supply.demandW;
+  final pct = (b / d * 100).clamp(0, 100).round();
+  return 'backs ${(b / 1000).toStringAsFixed(1)} of '
+      '${(d / 1000).toStringAsFixed(1)} kW ($pct%)';
 }

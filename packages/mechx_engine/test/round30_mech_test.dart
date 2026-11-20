@@ -342,8 +342,9 @@ void main() {
       ]));
       expect(md, contains('P-01 — sprinkler pump rating curve (NFPA 20):'));
       expect(md, contains('P-02 — standpipe pump rating curve (NFPA 20):'));
-      // 133.9 m prints at 0 dp: '134 m'; the sprinkler motor is its own.
-      expect(md, contains('@ 134 m'));
+      // Fix round 6 (C1) — 133.9 m prints at the schedule's 1 dp
+      // (`formatPumpHead`), no longer '134 m'; the motor is its own.
+      expect(md, contains('@ 133.9 m'));
       expect(
           md, contains(sprinkler.selectedMotor.inKiloWatts.toStringAsFixed(1)));
     });

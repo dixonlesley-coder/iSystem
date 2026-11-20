@@ -25,6 +25,7 @@ import '../network/network.dart';
 import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import 'drawing_chrome.dart'
     show DrawingChrome, serviceChromeLabel, serviceDashPatternPdf;
+import 'number_format.dart' show kAutoMark, kAutoMarkMeaning;
 import 'plan_symbols.dart' show planComponentPrims, planFixturePrims;
 import 'riser_tags.dart' show riserServiceCode;
 import 'sld_sheet.dart';
@@ -171,6 +172,7 @@ List<MasterLegendSection> buildMasterLegendSections({
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
   Iterable<NodeComponent> fireBreakTankComponents = const [],
+  bool autoMark = false,
 }) {
   final out = <MasterLegendSection>[];
 
@@ -240,6 +242,14 @@ List<MasterLegendSection> buildMasterLegendSections({
         code: 'FIX',
         meaning: 'Fixture terminal (titik alat)'),
   ]));
+  // Fix round 6 (C5) — the set prints the app-sized capacity mark: define it.
+  if (autoMark) {
+    out.last = MasterLegendSection(out.last.title, [
+      ...out.last.entries,
+      const MasterLegendEntry(
+          kind: LegendGlyphKind.none, code: kAutoMark, meaning: kAutoMarkMeaning),
+    ]);
+  }
 
   // CABLES — one row per family, each its own construction (N24).
   final fams = cableFamilies.toSet().toList()..sort();
@@ -507,6 +517,7 @@ SldSheet buildGeneralNotesSheet({
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
   Iterable<NodeComponent> fireBreakTankComponents = const [],
+  bool autoMark = false,
   List<String> notes = kDefaultGeneralNotes,
 }) {
   final prims = <SldPrim>[];
@@ -539,6 +550,7 @@ SldSheet buildGeneralNotesSheet({
     components: components,
     cableFamilies: cableFamilies,
     fireBreakTankComponents: fireBreakTankComponents,
+    autoMark: autoMark,
   );
   for (final section in sections) {
     label(legendL, ry, section.title, 11, bold: true);
@@ -580,6 +592,7 @@ List<SldSheet> buildSubmittalFrontMatter({
   Iterable<NodeComponent> components = const [],
   Iterable<String> cableFamilies = const [],
   Iterable<NodeComponent> fireBreakTankComponents = const [],
+  bool autoMark = false,
   List<String> notes = kDefaultGeneralNotes,
 }) =>
     [
@@ -598,6 +611,7 @@ List<SldSheet> buildSubmittalFrontMatter({
         components: components,
         cableFamilies: cableFamilies,
         fireBreakTankComponents: fireBreakTankComponents,
+        autoMark: autoMark,
         notes: notes,
       ),
     ];
@@ -620,8 +634,17 @@ void _addLegendGlyph(
       prims.add(SldLine(cx - 16, cy, cx + 16, cy,
           weight: SldWeight.thick, layer: swatchLayer));
     case LegendGlyphKind.lineDashed:
+      // Fix round 6 (C9) — the plans' own pattern: dash-dot for the fire
+      // services (`serviceDashPatternPdf` [10 3 2 3]), dashed otherwise.
+      final dot = (serviceDashPatternPdf(e.service ?? ServiceType.vent)
+                  ?.length ??
+              0) >
+          2;
       prims.add(SldLine(cx - 16, cy, cx + 16, cy,
-          weight: SldWeight.thick, layer: swatchLayer, dashed: true));
+          weight: SldWeight.thick,
+          layer: swatchLayer,
+          dashed: !dot,
+          dashDot: dot));
     case LegendGlyphKind.component:
       if (e.component != null) {
         prims.addAll(planComponentPrims(e.component!, cx: cx, cy: cy, size: 15));

@@ -36,7 +36,7 @@ import '../electrical/sources.dart'
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower, Power;
-import 'number_format.dart' show formatTankCapacity;
+import 'number_format.dart' show formatPumpHead, formatTankCapacity;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
@@ -400,7 +400,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       tag: item.tag ?? _seqTag('P', i + 1),
       service: item.service,
       duty: '${_fmtSmall(d.flow.inLitersPerSecond)} L/s @ '
-          '${_fmtSmall(d.head.meters)} m',
+          '${formatPumpHead(d.head.meters)} m',
       size: strings.format(RptStringKey.esMotorSize,
           {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
