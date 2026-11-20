@@ -1200,7 +1200,13 @@ Uint8List reportBlocksToPdf(
     // Running footer: hairline + `project - doc no - Page X of Y`.
     cs.writeln('$_inkHairline RG 0.5 w ${_n(_margin)} ${_n(_margin - 8)} m '
         '${_n(_pageW - _margin)} ${_n(_margin - 8)} l S');
-    final footer = '$footerBase - ${pageOf(i + 1)}';
+    // Fix round 6 (C6) — a sheet with a drawing title block numbers its
+    // pages ONCE, in the block's SHEET i of n: the running footer keeps
+    // the identity only (it used to print 'Page 1 of 3' beside
+    // 'SHEET 2 of 4').
+    final footer = sheetTitleBlock == null
+        ? '$footerBase - ${pageOf(i + 1)}'
+        : footerBase;
     cs.writeln('BT /F1 8 Tf $_inkMuted rg ${_n(_margin)} ${_n(_margin - 20)} '
         'Td (${_esc(footer)}) Tj ET');
     if (sheetTitleBlock != null) {

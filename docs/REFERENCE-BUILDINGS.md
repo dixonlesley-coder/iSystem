@@ -74,7 +74,11 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
+_(empty)_
+
+### Backlog closed (2026-11-20)
+
+- **(g) Break tanks of extra roof tanks — backlog K-1.** An extra roof-tank component's intermediate break tanks are now zoned by the same Round-70 routine as the main tank's (`_breakTankRegions` / `_breakTankZoneGroups`): their floors leave the component's roof-tank group and hang from the break tank's own datum. The shophouse's units B and C have no break tank, so no figure moved (`test/backlog_k1_extra_tank_break_tank_test.dart` pins the shape).
 
 ### Backlog closed (2026-11-14)
 
@@ -126,7 +130,12 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(d) Mains pressure — the delivered field.** The upfeed delivered field still reads GT 0 kPa and WM negative (W-2 adds a judge, it does not change the field).
+_(empty)_
+
+### Backlog closed (2026-11-20)
+
+- **Downfeed ground tank in the delivered field — fix round 6 C7.** The open ground tank now reads 0 kPa (was the roof tank's gravity walked back: apartment 394.042, shophouse 115.345, tower 1139.324 kPa) and the transfer riser reads the transfer pump's discharge (outlet = (H − suction friction) x 9.81: 168.997 / 478.657 / 1263.520 kPa).
+- **(d) Mains pressure — the delivered field — backlog K-2.** Upstream of GT the pipe is on mains pressure: WM now reads the available mains head 10 m x 9.81 = 98.1 kPa (was −13.979 kPa flowing / −4.905 kPa no-flow, the pump solve back-calculated from GT); GT stays the pump-side datum 0 kPa; the tank inlet keeps 10 − (−0.5) − 0.312966 (0.694444 L/s on DN25 over 3.5 m) = 10.187034 m, printed on the calc report's mains line. Every other office figure is unchanged. The apartment, shophouse and tower meters read 98.1 kPa too (were 376.860 / 110.180 / 1128.601 kPa from the roof tank's gravity), see `test/backlog_k2_mains_feed_reference_test.dart`.
 
 ### Backlog closed (2026-11-14)
 
@@ -232,6 +241,10 @@ _(empty)_
 
 - **(b) Recirculation pump way only with the duty-feed opt-in — partly closed by backlog G-3.** A circulator pump DRAWN on the loop was already a placed machine (minted by default); since G-3 a system whose return is DRAWN also mints its solved recirculation way in the default sync even with no pump symbol drawn. The tower draws no return (the app ASSUMES it), so its HW recirc way stays behind the "Feed solved MEP duties" opt-in (on in this fixture): no tower figure moves.
 
+### Backlog closed (2026-11-20)
+
+- **Legend row of the fire break tank — backlog K-4 (left by Z-5).** The G-003 master legend keyed BT on its symbol type, so a drawing whose only roof-typed tank is a break tank would print `RT  Roof tank`. A break tank now adds `BT  Fire break tank` (its roof-tank glyph) and `RT  Roof tank` is keyed only for a genuine roof tank: the tower lists both rows (RT on the top storey is genuine). No figure moved.
+
 ### Backlog closed (2026-11-14)
 
 - **(e) Standpipe zoning — backlog Z (Z-1 engine, Z-2 app, Z-3 this redraw).** Owner decision: tall buildings get DESIGNED fire zones, marked by drawing the break. The fixture now breaks at Lantai 15 (index 14): BT (roof-typed, 56.0 m, 90 000 L) filled from riser a's top, relay room FP2 / FP2S / FJ2 + header FH2 on Lantai 15. Each zone is its own rating system (a storage tank is a hydraulic break, Round 51); `fireZones` numbers them 1 / 2. Hand figures (NFPA 14 / 20, `// VERIFY`; residual 690 / 9.81 = 70.336 m; friction = max(15 m allowance, the sized index path), HW C 120, hf = 10.67 L Q^1.852 / (C^1.852 D^4.8704)):
@@ -294,16 +307,17 @@ judged.
 **SNI 03-7065 presets (backlog T-3, 2026-11-14).** The apartment picks 'Rumah
 susun' (100 L/penghuni/day): 9 600 L/day (was 11 520), reserve 3.125 days (was
 2.6). The shophouse picks 'Ruko / rukan' (100 L/penghuni dan pegawai/day): 1 500
-L/day (was 1 800); auto GT 500 L (was 650; M-601 '0.5 m3 (auto)'), RT 250 L
+L/day (was 1 800); auto GT 500 L (was 650; M-601 '500 L (auto)'), RT 250 L
 unchanged; meter feed 0.045139 → 0.034722 L/s (DN15, v 0.255 → 0.196); W-2 4.524 →
 4.515 m; transfer line and TP unchanged; reserve 2250 / 1500 = 1.5 days
 (unchanged). House, office and tower keep their occupancy defaults.
 
-**Auto marks on the drawings (backlog T-2, 2026-11-14).** House M-601 TK-01
-'- (*)' → '0.7 m3 (auto)', M-201 'TK-01 Roof tank' → 'TK-01 Roof tank · 0.7 m3
-(auto)'; shophouse GT '0.7 m3 (auto)', RT '0.3 m3 (auto)'; office GT '10.0 m3
-(auto)' (riser '10 m3 (auto)'); each sheet carries '(auto) = sized by the app from
-daily demand; not entered'. Before T-2 the schedule and the riser read the live
+**Auto marks on the drawings (backlog T-2, 2026-11-14; strings as printed since
+W-7 / fix round 6 C4).** House M-601 TK-01 '- (*)' → '650 L (auto)', M-201
+'TK-01 Roof tank' → 'TK-01 Roof tank · 650 L (auto)'; shophouse GT '500 L
+(auto)', RT '250 L (auto)'; office GT '10 m3 (auto)' (schedule and riser alike);
+each riser page carrying an '(auto)' tag also carries '(auto) = sized by the app
+from daily demand; not entered', and G-003 defines it (fix round 6 C5). Before T-2 the schedule and the riser read the live
 network and printed an auto tank as 'capacity not set'.
 
 **Tower storage to one day (backlog T-1, 2026-11-14).** Owner: "enlarge tanks
@@ -393,9 +407,20 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
 
 ### Backlog (not cured in this pass)
-- Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
-  detail sheet; it keeps the honest overlap stamp. Only the submittal package
-  issues detail sheets.
+
+_(empty)_
+
+### Backlog closed (2026-11-20)
+- **Standalone plan export issues its detail sheets — backlog K-3.** The
+  standalone plan exports (`exportAnnotatedPlanPdf`, Ctrl+P, and the plan DXF
+  `exportDrawingDxf`) now issue the package's pages for that plan from the ONE
+  builder (`buildIssuedPlanSet` + `issuedPlanSheetFiles`): the plan at the
+  set's shared scale with its DETAIL bubbles, then each M-5nn detail sheet its
+  bubbles point at (its own, or — a typical floor — the earlier plan's that
+  issues them) beside it as `<name>-detail.pdf` / `-detail-2.pdf` (`.dxf`).
+  Every file is byte-identical to the package's
+  (`test/issued_drawing_parity_test.dart` 'K-3', apartment: Lantai 1 plan +
+  M-501; Lantai 4 plan + M-503).
 
 ### Backlog closed (2026-11-13)
 - I-4 Reviewer observations: the house demand-vs-declared note, the apartment drain

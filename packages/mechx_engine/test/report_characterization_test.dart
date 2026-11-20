@@ -144,8 +144,14 @@ void main() {
       // working pressure 1323 kPa ...' instead. Verified as the SOLE delta:
       // substituting the old 'Component pressure (churn)' line back
       // reproduces 0xd2ca2618 exactly. Line count unchanged.
+      // Re-baselined 2026-11-20 (fix round 6 C1): exactly four lines move —
+      // every pump head prints through the ONE `formatPumpHead` (the M-601
+      // precision: 1 dp, 2 dp below 1 m): HW recirculation head 0.1 -> 0.11 m,
+      // standpipe 'fire pump 96 m' -> '96.3 m', the rating row 'rated ... @
+      // 96 m' -> '96.3 m', jockey '@ 140 m' -> '139.9 m'. Verified as the SOLE
+      // delta by diffing against the pre-change output. Line count unchanged.
       expect(md.split('\n').length, 95);
-      expect(fnv1a32(md), 0x1ad7b2fb);
+      expect(fnv1a32(md), 0x587a3e5b);
     });
   });
 
@@ -410,6 +416,8 @@ void main() {
       // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
       // Verified as the SOLE delta: dropping that line reproduces 0x1ecdcdbc (with the rest of this pin)
       // exactly. Lines 197 -> 198.
+      // Re-baselined 2026-11-20 (fix round 6 C1): the embedded mechanical
+      // body carries the same four head lines (formatPumpHead).
       expect(md.split('\n').length, 198);
       // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
       // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
@@ -427,7 +435,7 @@ void main() {
       // working pressure 1323 kPa ...' instead. Verified as the SOLE delta:
       // substituting the old 'Component pressure (churn)' line back
       // reproduces 0xd0e4e060 exactly. Line count unchanged.
-      expect(fnv1a32(md), 0x2d65fc09);
+      expect(fnv1a32(md), 0x4b01b8c1);
     });
   });
 

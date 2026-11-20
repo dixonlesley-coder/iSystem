@@ -205,6 +205,13 @@ enum CircuitLengthSource {
   /// A real length derived from the calibrated layout + §10 elevations via
   /// [electricalCableLength].
   geo,
+
+  /// Fix round 6 (T9) — an MEP-synced way the engineer has not measured on an
+  /// UNPLACED board: the minted allowance ([ElectricalCircuit.length]) plus
+  /// the true elevation delta between the board's floor
+  /// ([ElectricalPanel.floorIndex]) and the machine's floor (its
+  /// [ElectricalCircuit.loadPos]) — golden rule 3, never pixels.
+  autoVertical,
 }
 
 /// [resolveCircuitLength], but also reporting WHICH basis won — a length-source
@@ -230,6 +237,17 @@ enum CircuitLengthSource {
 }) {
   final from = panel.layoutPos;
   if (from == null) {
+    // Fix round 6 (T9) — an MEP-synced way (its machine is a drawn node) whose
+    // length is not the engineer's: the allowance PLUS the vertical distance
+    // from the board's floor to the machine's floor. The tower's Lantai 15
+    // relay pumps fed from the Lantai 1 MEP board printed '10.0 m'.
+    final up = autoVerticalLegM(circuit, panel, building);
+    if (up > 0) {
+      return (
+        length: Length(circuit.length.meters + up),
+        source: CircuitLengthSource.autoVertical
+      );
+    }
     return (length: circuit.length, source: CircuitLengthSource.manual);
   }
 
@@ -257,4 +275,23 @@ enum CircuitLengthSource {
     return (length: circuit.length, source: CircuitLengthSource.manual);
   }
   return (length: geo, source: CircuitLengthSource.geo);
+}
+
+/// Fix round 6 (T9, 2026-11-20) — the vertical leg (m) an MEP-synced way adds
+/// to its minted allowance: the true floor-elevation delta
+/// (`BuildingLevels.riserLength`, the slab datum [electricalCableLength]
+/// uses) between [panel]'s floor and the machine's floor. 0 for a way that is
+/// not MEP-synced, whose length the engineer entered, whose board or machine
+/// floor is unknown, or on one floor. Pure.
+double autoVerticalLegM(
+    ElectricalCircuit circuit, ElectricalPanel panel, BuildingLevels building) {
+  if (circuit.lengthUserSet) return 0;
+  if (circuit.sourceEquipmentId == null || circuit.feedsPanelId != null) {
+    return 0;
+  }
+  final a = panel.floorIndex, b = circuit.loadPos?.floorIndex;
+  final n = building.levelCount;
+  if (a == null || b == null || a == b) return 0;
+  if (a < 0 || b < 0 || a >= n || b >= n) return 0;
+  return building.riserLength(a, b).meters;
 }

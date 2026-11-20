@@ -1,14 +1,17 @@
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart'
     show EarthingSystem, EarthingSystemInfo;
+import 'package:mechx_engine/electrical/genset_backup.dart'
+    show gensetBackupDemandW;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart'
@@ -698,17 +701,15 @@ void main() {
       final r = computeSystem(profile, small);
       final demandKva = r.supply.demandVa.inKilovoltAmperes;
       expect(demandKva, greaterThan(5)); // the premise: undersized set
-      // Round 16 — the LESSER of the kVA ratio and the kW ratio (the set's
-      // kW rating is 0.8 × 5 kVA = 4 kW against the demand W).
-      final demandKw = r.supply.demandW / 1000;
-      final pct = (math.min(5 / demandKva, 5 * kGeneratorPf / demandKw) * 100)
-          .round();
+      // Fix round 6 (C8) — the label is the BACKED share (every board backed
+      // here: the whole demand), never the rating ratio; an undersized set
+      // is the genset judges' finding, not this label's.
       final v = labels(
           buildElectricalOverview(project: small, result: r, sourceChain: true));
-      expect(v, contains('backs $pct% of load'));
+      expect(v, contains(_c8Share(small, r)));
       final h = labels(buildElectricalSourceSpine(
           project: small, result: r, horizontal: true));
-      expect(h, contains('backs $pct% of load'));
+      expect(h, contains(_c8Share(small, r)));
 
       // An oversized set backs the whole load — never "250% of load".
       const big = ElectricalProject(
@@ -721,7 +722,7 @@ void main() {
       expect(
         labels(buildElectricalOverview(
             project: big, result: br, sourceChain: true)),
-        contains('backs 100% of load'),
+        contains(_c8Share(big, br)),
       );
     });
 
@@ -1322,4 +1323,13 @@ void main() {
           isFalse);
     });
   });
+}
+
+/// Fix round 6 (C8) — the genset label is the BACKED share: the load the set
+/// backs ([gensetBackupDemandW]) against the building demand.
+String _c8Share(ElectricalProject p, ElectricalSystemResult r) {
+  final b = gensetBackupDemandW(p, r).watts, d = r.supply.demandW;
+  final pct = (b / d * 100).clamp(0, 100).round();
+  return 'backs ${(b / 1000).toStringAsFixed(1)} of '
+      '${(d / 1000).toStringAsFixed(1)} kW ($pct%)';
 }

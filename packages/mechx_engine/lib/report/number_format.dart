@@ -115,3 +115,21 @@ String formatTankCapacity(double litres) {
   }
   return '$s m3';
 }
+
+/// Fix round 6 (C1, 2026-11-20) — the ONE pump-head formatter every printed
+/// surface uses (M-601 schedule, riser `Q · H · kW`, pump-set detail, calc
+/// report fire / jockey / zone / recirculation lines): the schedule's
+/// precision — 1 dp, 2 dp below 1 m, so a 0.03 m circulator never prints
+/// '0.0 m' and a 142.536 m fire pump prints '142.5' everywhere (the report
+/// used to round it to '143'). No unit.
+String formatPumpHead(double meters) {
+  if (!meters.isFinite) return kNonFiniteNumber;
+  return meters.toStringAsFixed(meters.abs() < 1 ? 2 : 1);
+}
+
+/// Fix round 6 (C5, 2026-11-20) — the app-sized capacity mark (backlog T-2)
+/// and its ONE definition: the riser legend of every page that prints it and
+/// the G-003 master legend.
+const String kAutoMark = '(auto)';
+const String kAutoMarkMeaning =
+    'Sized by the app from daily demand; not entered';

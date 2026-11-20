@@ -199,6 +199,33 @@ class PlanMarkLine {
       {this.dashed = false, this.heavy = false});
 }
 
+/// Fix round 6 part 3 (T4, 2026-11-20) — the ONE run BREAK mark of a detail
+/// window: a double slash across the run at its window-edge end ([x], [y]),
+/// leaning 45 deg across the run's direction toward ([tx], [ty]), each stroke
+/// [lenMm] long and [gapMm] apart along the run. Plain lines, so the PDF and
+/// DXF draw the same mark.
+List<PlanMarkLine> planBreakMarkLines(double x, double y, double tx, double ty,
+    {double lenMm = 3.0, double gapMm = 1.2}) {
+  final dx = tx - x, dy = ty - y;
+  final l = math.sqrt(dx * dx + dy * dy);
+  if (l < 1e-9) return const [];
+  final ux = dx / l, uy = dy / l; // along the run, into the window
+  // The stroke direction: the run's normal rotated 45 deg.
+  final nx = -uy, ny = ux;
+  final sx = (nx + ux) / math.sqrt2, sy = (ny + uy) / math.sqrt2;
+  final out = <PlanMarkLine>[];
+  for (final k in const [1.0, 2.0]) {
+    final cx = x + ux * gapMm * k, cy = y + uy * gapMm * k;
+    out.add(PlanMarkLine(cx - sx * lenMm / 2, cy - sy * lenMm / 2,
+        cx + sx * lenMm / 2, cy + sy * lenMm / 2));
+  }
+  return out;
+}
+
+/// Fix round 6 part 3 (T4) — the legend note of the break mark.
+const String kPlanBreakMarkNote =
+    '// = pipe continues beyond the detail (break)';
+
 class PlanMarkCircle {
   final double cx, cy, r;
   final bool filled;
@@ -245,6 +272,8 @@ List<LabelBox> planDetailClusterRects({
   required double linkPx,
   required double marginPx,
   List<LabelBox> existing = const [],
+  List<({double x, double y})> nodesPx = const [],
+  double nodeRadiusPx = 0,
 }) {
   final n = seeds.length;
   final parent = List<int>.generate(n, (i) => i);
@@ -298,9 +327,44 @@ List<LabelBox> planDetailClusterRects({
     ));
   }
   // Merge overlapping / near boxes to a fixed point.
+  // Fix round 6 part 2 (T4) — and grow every box to take in WHOLE any drawn
+  // node whose symbol (radius [nodeRadiusPx]) it cuts, so a detail window
+  // never ends mid-symbol (M-512 Detail C cut the relay jockey P-04).
+  bool growToNodes() {
+    var grew = false;
+    for (var i = 0; i < rects.length; i++) {
+      var b = rects[i];
+      for (final p in nodesPx) {
+        final inside = p.x >= b.minX &&
+            p.x <= b.maxX &&
+            p.y >= b.minY &&
+            p.y <= b.maxY;
+        final cuts = p.x + nodeRadiusPx > b.minX &&
+            p.x - nodeRadiusPx < b.maxX &&
+            p.y + nodeRadiusPx > b.minY &&
+            p.y - nodeRadiusPx < b.maxY;
+        final whole = p.x - nodeRadiusPx >= b.minX &&
+            p.x + nodeRadiusPx <= b.maxX &&
+            p.y - nodeRadiusPx >= b.minY &&
+            p.y + nodeRadiusPx <= b.maxY;
+        if ((inside || cuts) && !whole) {
+          b = (
+            minX: math.min(b.minX, p.x - nodeRadiusPx),
+            minY: math.min(b.minY, p.y - nodeRadiusPx),
+            maxX: math.max(b.maxX, p.x + nodeRadiusPx),
+            maxY: math.max(b.maxY, p.y + nodeRadiusPx),
+          );
+          grew = true;
+        }
+      }
+      rects[i] = b;
+    }
+    return grew;
+  }
+
   var merged = true;
   while (merged) {
-    merged = false;
+    merged = growToNodes() && nodeRadiusPx > 0;
     outer:
     for (var i = 0; i < rects.length; i++) {
       for (var j = i + 1; j < rects.length; j++) {
@@ -550,10 +614,15 @@ PlanMarks planDetailScaleBar(
       ? '${v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1)} m'
       : '${(v * 1000).round()} mm';
   final ty = y0 + textMm * 1.4;
+  // Fix round 6 (T5) — on a short bar the end figure would run into the
+  // '0' ('0' + '500 mm' read '0500 mm'): the '0' is dropped when the end
+  // label does not clear it by half a text height (the bar's left end is
+  // its zero).
+  final endX = x0 + len - helveticaTextWidth(fig(m), textMm);
+  final zeroClear = endX >= x0 + helveticaTextWidth('0', textMm) + textMm / 2;
   return PlanMarks(lines: lines, texts: [
-    PlanMarkText(x0, ty, textMm, '0'),
-    PlanMarkText(x0 + len - helveticaTextWidth(fig(m), textMm), ty, textMm,
-        fig(m)),
+    if (zeroClear) PlanMarkText(x0, ty, textMm, '0'),
+    PlanMarkText(endX, ty, textMm, fig(m)),
   ]);
 }
 

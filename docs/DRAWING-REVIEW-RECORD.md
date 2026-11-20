@@ -1291,3 +1291,297 @@ Failed sheets only, viewed as rendered PNGs after each round (sets `drawings-s`,
 
 Observation, not a failure: tower M-201 p18 (Lantai 1) draws its fixture branches in a narrow band
 while the sheet has spare height; every element is keyed and legible.
+
+## Third review (2026-11-20)
+
+An independent reviewer reviewed the regenerated sets (`drawings-y`) against `docs/DRAFTING-CHECKLIST.md`. Copied verbatim from its report (PNG paths relative to that set).
+
+### (a) Scope actually reviewed
+
+| Building | In-scope pages | Looked at as an image (full page, 2-up montage at ~1450 px wide, and/or 300 dpi crop) | Judged from text / script only |
+|---|---|---|---|
+| house | 10 | 10 (M-101, M-501, M-102, M-502, M-201 p1-2, E-301, E-601, M-601 p1-2) | 0 |
+| shophouse | 18 | 16 (M-101..103, M-501, E-101, E-102, M-201 p1-3, E-301, M-601 p2-3, E-601 p1, p2, p3, p5) | 2 (M-601 p1 cover page, E-601 p4) |
+| office | 23 | 15 (M-201 p1-4, M-601 p2, E-201 p1, p4, p6, E-301, E-401, E-601 p1, p2, p6, samples M-102, M-503, E-101) | 8 (M-601 p1, E-201 p2, p3, p5, E-601 p3, p4, p5 + one overlap) |
+| apartment | 62 | 36 (M-201 p1-10, M-601 p2-3, E-301, E-401 p1-4, E-501, E-201 p3, p15, E-601 p1-4, M-101, M-501, M-112, M-507, E-101, E-103, samples M-503, M-108, M-111, E-102, extra M-104, M-504, M-506) | 26 (E-201 p1-2, p4-14; E-601 p5-15; M-601 p1) |
+| tower | 127 | 43 (M-201 p1-19, M-601 p2-4, E-301 p1-4, E-401 p1, p2, p4, p7, p8, E-501, E-601 p4, M-101, M-501, M-115, M-512, M-116, M-513, M-514, M-130, M-522, M-523, E-101, E-102, samples M-103, M-128, M-505, M-521) | 84 (E-201 p1-34; E-601 p1-3, p5-34; E-401 p3, p5, p6; E-103, E-104; M-601 p1; samples M-108, M-112, M-124, M-511, M-515) |
+| **total** | **240** | **120** | **120** |
+
+Limits, to be read before relying on a PASS:
+
+- The brief asked for the PNG of every in-scope page. That was not reached for the pages in the last column. They are
+  almost all panel pages (E-201 / E-601). For those I relied on: (1) a text comparison showing E-201 and E-601 carry the
+  same strings on all 61 board pages, (2) a script summing the DAYA rows against the printed total on every board,
+  (3) a word-box overlap scan of every PDF in the five sets (no hit outside rotated plan tags), and (4) the pages of
+  the same layout that I did open. A small overprint on an unopened page could be missed.
+- Tower samples M-108, M-112, M-124 and M-511 are flagged "repeat of" another sheet in INDEX.md; I opened the sheet
+  they repeat (or a sibling), not the sample itself. M-515, E-103, E-104 and E-401 p3, p5, p6 were not opened.
+- Most pages were viewed as 2-up montages (about 58 % of the 150 dpi PNG); dense regions were re-rendered from the
+  PDF at 300 dpi. Montage-only pages could hide a defect of a few pixels.
+- Items 1, 2, 3, 5, 7, 23, 25 rest on the scripted pre-check (0 FAIL, minimum text 7.00 pt on all 316 sheets) plus what
+  I saw; I found nothing contradicting it. I did not open any DXF.
+- Earlier in the session several first-pass images were dropped from my working context; the pages concerned were
+  viewed again before a verdict was written, except the apartment riser, apartment plans and apartment electrical
+  sheets, whose verdicts come from notes written at the time of the first viewing.
+
+Scripted checks (all in-scope panel pages):
+
+- E-201 vs E-601: identical text on 1 + 5 + 6 + 15 + 34 = 61 board pages (only title-block and legend wrapping differ).
+- DAYA rows vs printed CONNECTED: house 7 834; shophouse 21 196, 3 x 5 800, 7 156; office 128 167, 4 x 18 900, 63 966;
+  apartment 159 719, 101 879, 172 111, 12 x 5 900; tower LVMDP 633 653 + 281 250 = 914 903, PP-E 352 402, MEP 588 712,
+  30 x 22 000. All equal the printed totals. (Tower PP-E prints 352.402 on its own board and 352.403 on the LVMDP way:
+  1 W rounding.)
+
+### (b) Per-page verdicts
+
+"text" in the note column = judged from text / script only. Item numbers are the checklist's.
+
+#### house
+
+| Sheet | File / page | Verdict | Items failed | Note |
+|---|---|---|---|---|
+| M-101 | plan-1-Lantai 1 p1 | PASS | - | Tags equal the riser (CW-R1 DN20 3.5 m, D-R1 DN75 3.2 m, RW-R1 DN100 3.2 m). |
+| M-501 | plan-1-Lantai 1-detail p1 | FAIL | 14 | T7: runs in Detail A and B carry no size. |
+| M-102 | plan-2-Lantai 2 p1 | PASS | - | TK-01 tagged. |
+| M-502 | plan-2-Lantai 2-detail p1 | FAIL | 14 | T7: untagged drain runs; key table sits inside the Detail A window. |
+| M-201 | riser-sld p1 | PASS | - | "TK-01 Roof tank · 650 L (auto)". |
+| M-201 | riser-sld p2 | PASS | - | "(auto) = ..." note is here only, the tag is on p1 (observation 1). |
+| E-301 | electrical-overview-sld p1 | PASS | - | PLN 4.4 kVA, demand 7.1 kVA warning, TN-C-S. |
+| M-601 | equipment-schedule p1 | PASS | - | Title page. |
+| M-601 | equipment-schedule p2 | PASS | - | TK-01 650 L (auto); Panel Rumah 6.5 kW / 40 A. |
+| E-601 | panel-schedules p1 | PASS | - | 9 ways, 7 834 W, 6.5 kW / 32.5 A. |
+
+#### shophouse
+
+| Sheet | File / page | Verdict | Items failed | Note |
+|---|---|---|---|---|
+| M-101 | plan-1-Lantai 1 p1 | PASS | - | Dense, two key tables, legible. |
+| M-102 | plan-2-Lantai 2 p1 | PASS | - | |
+| M-103 | plan-3-Lantai 3 p1 | PASS | - | TK-02/04/06 tagged, boosters keyed. |
+| M-501 | plan-3-Lantai 3-detail p1 | FAIL | 14 | T7: two drain branches per window with no size. |
+| E-101 | elec-plan-1-Lantai 1 p1 | PASS | - | Panels listed "belum ditempatkan" (observation 6). |
+| E-102 | elec-plan-3-Lantai 3 p1 | PASS | - | |
+| M-201 | riser-sld p1 | PASS | - | |
+| M-201 | riser-sld p2 | FAIL | 6, 11 | T6: AC-01 / AC-02 cassette symbols sit on the cold-water run. |
+| M-201 | riser-sld p3 | PASS | - | Pump-set detail lists 3 boosters + 3 transfer pumps. |
+| E-301 | electrical-overview-sld p1 | PASS | - | Four feeders labelled cable / device / length. |
+| M-601 | equipment-schedule p1-3 | PASS | - | p1 text only. |
+| E-601 | panel-schedules p1-5 | PASS | - | p4 text only. |
+
+#### office
+
+| Sheet | File / page | Verdict | Items failed | Note |
+|---|---|---|---|---|
+| M-201 | riser-sld p1 | FAIL | 9, 14, 17 | T3: "Sprinkler head x6" listed, no sprinkler drawn or tagged; legend has no SP. |
+| M-201 | riser-sld p2 | PASS | - | |
+| M-201 | riser-sld p3 | PASS | - | PLANT continuation marks carry no pipe id (observation 3). |
+| M-201 | riser-sld p4 | PASS | - | TK-02 prints "· -" (capacity not set, observation 4). |
+| M-601 | equipment-schedule p1-2 | PASS | - | p1 text only. |
+| E-201 | electrical-sld p1-6 | PASS | - | p2, p3, p5 text only. |
+| E-301 | electrical-overview-sld p1 | PASS | - | |
+| E-401 | electrical-riser p1 | PASS | - | |
+| E-601 | panel-schedules p1-6 | PASS | - | p3, p4, p5 text only. |
+| M-102 | plan-2-Lantai 2 p1 (sample) | PASS | - | |
+| M-503 | plan-3-Lantai 3-detail p1 (sample) | PASS | - | |
+| E-101 | elec-plan-1-Lantai 1 p1 (sample) | PASS | - | Observation 6. |
+
+#### apartment
+
+| Sheet | File / page | Verdict | Items failed | Note |
+|---|---|---|---|---|
+| M-201 | riser-sld p1 (Lantai 12) | FAIL | 9, 11, 14, 17 | T3: sprinkler heads not drawn; SP-R1 on the same line as FH-R1. |
+| M-201 | riser-sld p2 (Lantai 12 PLANT) | FAIL | 6 | T8: leader tick through a continuation mark. |
+| M-201 | riser-sld p3-7 | PASS | - | |
+| M-201 | riser-sld p8 (Lantai 1) | FAIL | 6 | T8: key circle 1 struck by a riser line; continuation text struck by the SP line. |
+| M-201 | riser-sld p9 (Lantai 1 PLANT) | FAIL | 11, 17 | T8: four continuation marks on one line; services share a line. |
+| M-201 | riser-sld p10 | PASS | - | Detail blocks. |
+| M-601 | equipment-schedule p1-3 | PASS | - | p1 text only. |
+| E-201 | electrical-sld p1-15 | PASS | - | p3, p15 viewed; rest text only. |
+| E-301 | electrical-overview-sld p1 | PASS | - | PLN 197 kVA, genset 300 kVA, ATS drawn. |
+| E-401 | electrical-riser p1-4 | PASS | - | |
+| E-501 | electrical-power-one-line p1 | PASS | - | Bus boxes without ratings (observation 7). |
+| E-601 | panel-schedules p1-15 | PASS | - | p1-4 viewed; rest text only. |
+| M-101 | plan-1-Lantai 1 p1 | PASS | - | Dense around the pump room; legible on the crop. |
+| M-501 | plan-1-Lantai 1-detail p1 | FAIL | 6, 13 | T5: scale-bar labels of Detail C and D merge to "0500 mm". |
+| M-112 | plan-12-Lantai 12 p1 | PASS | - | |
+| M-507 | plan-12-Lantai 12-detail p1 | PASS | - | |
+| E-101, E-103 | elec-plan-1 / -12 p1 | PASS | - | Observation 6. |
+| M-503, M-108, M-111, E-102 | samples | PASS | - | M-503 prints "Ln" with a TIPIKAL note. |
+| M-104, M-504, M-506 | extra sheets opened | PASS | - | |
+
+#### tower
+
+| Sheet | File / page | Verdict | Items failed | Note |
+|---|---|---|---|---|
+| M-201 | riser-sld p1 (Lantai 30) | FAIL | 9, 11, 14, 17 | T3. |
+| M-201 | riser-sld p2-11 | PASS | - | Fixture clusters dense but every key readable on the 300 dpi crops. |
+| M-201 | riser-sld p12 (Lantai 15 PLANT) | PASS | - | TK-04 Fire break tank · 90 m3; P-03 / P-09 / P-04 with Q, H, kW. Observation 3. |
+| M-201 | riser-sld p13-17 | PASS | - | |
+| M-201 | riser-sld p18 (Lantai 2 / 1) | FAIL | 6, 8, 17, 18, 24 | T1: zone-1 fire plant drawn and keyed on Lantai 2. |
+| M-201 | riser-sld p19 | FAIL | 18, 24 | T2: standby transfer pump printed as "BOOSTER PUMP". |
+| M-601 | equipment-schedule p1-4 | PASS | - | p1 text only. Observation 5. |
+| E-201 | electrical-sld p1-34 | PASS | - | Text only (identical to E-601). T9 concerns p4. |
+| E-301 | electrical-overview-sld p1-4 | PASS | - | Observation 8. |
+| E-401 | electrical-riser p1-8 | PASS | - | p3, p5, p6 text only. |
+| E-501 | electrical-power-one-line p1 | PASS | - | Observation 7. |
+| E-601 | panel-schedules p1-34 | PASS (p4 FAIL) | 24 on p4 | T9: 10.0 m cables to the Lantai 15 relay pumps. Other pages text only. |
+| M-101 | plan-1-Lantai 1 p1 | FAIL | 6 | T10: detail bubble B on the hydrant run. |
+| M-501 | plan-1-Lantai 1-detail p1 | PASS | - | |
+| M-115 | plan-15-Lantai 15 p1 | FAIL | 9, 24 | T4: legend says "Roof tank" for the fire break tank. |
+| M-512 | plan-15-Lantai 15-detail p1 | FAIL | 6, 9, 13, 14, 24 | T4, T5. |
+| M-116 | plan-16-Lantai 16 p1 | PASS | - | |
+| M-513, M-514 | plan-16 details | PASS | - | |
+| M-130 | plan-30-Lantai 30 p1 | PASS | - | Six sprinkler heads drawn and tagged here. |
+| M-522, M-523 | plan-30 details | PASS | - | |
+| E-101, E-102 | elec-plan-1 / -15 p1 | PASS | - | Observation 6. E-103, E-104 not opened. |
+| M-103, M-128, M-505, M-521 | samples opened | PASS | - | |
+| M-108, M-112, M-124, M-511, M-515 | samples not opened | PASS (script only) | - | See limits. |
+
+FAIL pages: house 2, shophouse 2, office 1, apartment 5, tower 7 — **17 pages**.
+
+### (c) FAIL list
+
+| # | Building | Page(s) | Item | What is wrong | PNG to re-check |
+|---|---|---|---|---|---|
+| T1 | tower | `riser-sld.pdf` p18 (M-201, Lantai 2 / Lantai 1) | 17, 18, 24 (also 6, 8) | The zone-1 fire pump room is drawn above the Lantai 2 / Lantai 1 floor line, in the Lantai 2 band: TK-03 (key 22), P-06 (23), P-07 (24), P-08 (25) and the header pipes (keys 15-18). The pipe key gives their LEVEL as "Lantai 2". The plan M-101 / M-501 puts TK-03, P-06, P-07, P-08 on Lantai 1, and the reference doc gives the pump datum as the Lantai 1 surface. The Lantai 1 hydrant boxes are drawn in the same band, and the Lantai 2 boxes above the "LANJUT KE Lantai 3" marks. Smaller defects on the same page: "Water meter" is printed under a riser junction box well to the right of the meter symbol with no leader; keys 16 (a 25-FH-BS pipe) and 23 (pump P-06) both end on one pump symbol; the leader of "100-FH-BS - 6.0 m" runs into "150-FH-BS - 2.0 m". | `tower/png/Menara Contoh 30-riser-sld-p18.png` |
+| T2 | tower | `riser-sld.pdf` p19 (M-201, PUMP-SET DETAIL) | 18, 24 | The third pump line reads "BOOSTER PUMP Q 8.3 L/s · H 128.8 m · 18.5 kW". That duty is P-02, which M-601 and the calc report call "Transfer pump (standby)". The booster is P-05, 3.2 L/s @ 21.5 m, printed correctly on the first line. | `tower/png/Menara Contoh 30-riser-sld-p19.png` |
+| T3 | office, apartment, tower | office `riser-sld.pdf` p1; apartment `riser-sld.pdf` p1; tower `riser-sld.pdf` p1 (top floors) | 9, 14, 17 (apartment and tower also 11) | BRANCHES lists "Sprinkler head x6" but no sprinkler head or branch is drawn, the sprinkler riser's top carries no size or tag, and the legend has no "SP - Sprinkler" entry although the riser is drawn. On the apartment and tower pages the sprinkler riser is drawn on the same vertical line as FH-R1 (two junction squares on one red line, two "LANJUT KE Lantai n" marks for one line), so SP-R1 cannot be told from the hydrant riser. On the office page it is a separate, untagged thin red line. The plans (office M-104, apartment M-112, tower M-130) do show and tag the six heads. | `office/png/Kantor Contoh-riser-sld-p1.png`, `apartment/png/Apartemen Contoh-riser-sld-p1.png`, `tower/png/Menara Contoh 30-riser-sld-p1.png` |
+| T4 | tower | `plan-15-Lantai 15.pdf` p1 (M-115); `plan-15-Lantai 15-detail.pdf` p1 (M-512) | 9, 24 (M-512 also 14) | The legend symbol row reads "Roof tank" for TK-04. M-201 p12 prints "TK-04 Fire break tank · 90 m3" and M-601 "Fire break tank (fire zone relay)". On M-512, Detail C cuts the relay pump set: the jockey P-04 falls outside the window and the thin dash-dot runs leaving the window to the west carry no size. | `tower/png/Menara Contoh 30-plan-15-Lantai 15-p1.png`, `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png` |
+| T5 | apartment, tower | apartment `plan-1-Lantai 1-detail.pdf` p1 (M-501, Detail C and D); tower `plan-15-Lantai 15-detail.pdf` p1 (M-512, Detail A and D) | 6, 13 | On the small detail windows the two scale-bar labels run together and read "0500 mm". Only these two sheets (four bars) in the five sets. | `apartment/png/Apartemen Contoh-plan-1-Lantai 1-detail-p1.png`, `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png` |
+| T6 | shophouse | `riser-sld.pdf` p2 (M-201, Lantai 1, unit A) | 6, 11 | The two cassette AC symbols (AC-01, key 23, and AC-02) are drawn on the "15-CW-PPR-BOOSTER - 2.0 m" cold-water run; the blue line passes through both squares. A cassette has no pipe connection. | `shophouse/png/Ruko Contoh-riser-sld-p2.png` |
+| T7 | house, shophouse | house `plan-1-Lantai 1-detail.pdf` p1 (M-501), `plan-2-Lantai 2-detail.pdf` p1 (M-502); shophouse `plan-3-Lantai 3-detail.pdf` p1 (M-501) | 14 | Runs inside 1:10 detail windows carry neither a size tag nor a key. House M-501: Detail A (WC with one cold-water and one drain run) has no tag at all; Detail B has two untagged cold-water runs. House M-502: the thick drain from the WC in Detail A and three drain runs in Detail B. Shophouse M-501: two drain branches in each of the three windows (only D-Rn and the vent key are tagged). On house M-502 the pipe-key table is also placed inside the Detail A frame. | `house/png/Rumah Contoh-plan-1-Lantai 1-detail-p1.png`, `house/png/Rumah Contoh-plan-2-Lantai 2-detail-p1.png`, `shophouse/png/Ruko Contoh-plan-3-Lantai 3-detail-p1.png` |
+| T8 | apartment | `riser-sld.pdf` p2, p8, p9 (M-201) | 6 (p2, p8); 11, 17 (p9) | p2 (Lantai 12 PLANT): the leader tick of "50-CW-PPR-TRANSFER - 2.3 m" crosses the mark "LANJUTAN DARI Lantai 12 (32-CW-PPR-BOOSTER)". p8 (Lantai 1): key circle 1 is struck by the hydrant riser line and by the leader of key 4; a "LANJUT KE Lantai 2" mark is struck by the sprinkler line. p9 (Lantai 1 PLANT): four "LANJUTAN DARI Lantai 1 (...)" marks are stacked on one red line, including the two cold-water ones, and the PRV, water meter and transfer pump share one horizontal with the gravity line. These verdicts come from notes taken at first viewing; the pages were not re-opened. | `apartment/png/Apartemen Contoh-riser-sld-p2.png`, `-p8.png`, `-p9.png` |
+| T9 | tower | `panel-schedules.pdf` p4 and `electrical-sld.pdf` p4 (MEP board, ways W9-W11) | 24 | The MEP board is on Lantai 1 (E-401 p7). Its ways to the relay fire pumps P-03, P-09 and P-04 print a cable length of "10.0 m". M-201 p12, M-115 and E-102 place those pumps on Lantai 15, FFL +56.00. The same length is printed for every way on the board. | `tower/png/Menara Contoh 30-panel-schedules-p4.png`, `tower/png/Menara Contoh 30-elec-plan-15-Lantai 15-p1.png` |
+| T10 | tower | `plan-1-Lantai 1.pdf` p1 (M-101) | 6 | The detail bubble "B" circle sits on the FH-L1 DN100 run and covers one of its flow arrows. | `tower/png/Menara Contoh 30-plan-1-Lantai 1-p1.png` |
+
+### (e) Cross-surface consistency
+
+"=" means the same value, unit and rounding on every surface named. Reference = `docs/REFERENCE-BUILDINGS.md`.
+
+| Building | Quantity | M-201 riser | M-601 schedule | Calc report | Reference doc | Result |
+|---|---|---|---|---|---|---|
+| house | TK-01 roof tank | 650 L (auto) | 650 L (auto) | 650 L | 650 L (text says "0.7 m3 (auto)") | = on the set; doc wording stale |
+| house | Water reserve | - | - | 0.60 m3/day, 1.1 days | 1.08 days | = |
+| house | Tank fill | - | - | 0.181 L/s, refill 1 h | - | - |
+| shophouse | Ground / roof tanks | 500 L / 250 L (auto) | 500 L / 250 L (auto) | 500 L / 250 L | 500 L / 250 L (text says "0.7 / 0.3 m3") | = on the set; doc wording stale |
+| shophouse | Transfer pumps P-01/03/05 | 0.07 L/s, 17.2 m, 0.37 kW | 0.07 L/s @ 17.2 m, 0.37 kW | same | 0.069444 L/s @ 17.242 m | = |
+| shophouse | Boosters P-02/04/06 | 0.56 L/s, 22.1 m, 0.37 kW | same | same; "booster +22.1 m" | - | = |
+| shophouse | Water reserve / mains | - | - | 2.25 m3, 1.5 days; required 4.51 m of 10.0 m | 1.5 days; 4.515 m | = |
+| office | TK-01 | 10 m3 (auto) | 10 m3 (auto) | 10 m3 | 10 000 L | = |
+| office | P-02 domestic | 3.9 L/s, 38.5 m, 2.2 kW | 3.9 L/s @ 38.5 m, 2.20 kW | same | - | = |
+| office | P-01 fire | 31.5 L/s, 98.5 m, 55.0 kW | 31.5 L/s @ 98.5 m, 55.00 kW | "fire pump 99 m", "rated 31.5 L/s @ 99 m", 55.0 kW | - | **rounding differs** (98.5 vs 99) |
+| office | Water reserve / mains | - | - | 1.0 days; required 4.81 m | 1.0 day; 4.813 m | = |
+| apartment | Tanks | 20 m3 / 10 m3 / 60 m3 | 20 / 10 / 60 m3 | 20 m3, 10 m3, "tank 60 m3" | 20 000 / 10 000 / 60 000 L | = |
+| apartment | P-01 transfer | 2.8 L/s, 48.8 m, 2.2 kW | 2.8 L/s @ 48.8 m, 2.20 kW | same | - | = |
+| apartment | P-02 booster | 1.1 L/s, 22.2 m, 0.37 kW | same | same | - | = |
+| apartment | P-03 / P-04 fire | 31.5 L/s, 125.0 m, 75.0 kW | 31.5 L/s @ 125.0 m, 75.00 kW | "125 m", 75.0 kW | 31.545 L/s @ 125.036 m, 75 kW | = (report rounds to 125) |
+| apartment | P-05 jockey | 0.32 L/s, 180.1 m, 1.1 kW | 0.32 L/s @ 180.1 m, 1.10 kW | "0.32 L/s @ 180 m" | - | **rounding differs** (180.1 vs 180) |
+| apartment | Water reserve | - | - | 30 m3, 3.1 days | 3.125 days | = |
+| tower | Tanks | 150 m3 / 30 m3 / 120 m3 / 90 m3 | same | 150 m3, 30 m3, "tank 120 m3", **"tank 90000 L"** | 150 000 / 30 000 / 120 000 / 90 000 L | **unit differs** for TK-04 in the report (L vs m3) |
+| tower | P-01 / P-02 transfer | 8.3 L/s, 128.8 m, 18.5 kW | same | same | 8.33333 L/s @ 128.830 m, 18.5 kW | = values; **P-02 named "BOOSTER PUMP" on M-201 p19** (T2) |
+| tower | P-05 booster | 3.2 L/s, 21.5 m, 1.1 kW | same | same | - | = |
+| tower | Zone 1 pump P-06 / P-07 | 47.3 L/s, 142.5 m, 110.0 kW | 47.3 L/s @ 142.5 m, 110.00 kW | zone line "47.32 L/s @ 142.5 m"; curve line "rated 47.3 L/s @ 143 m" | 47.3176 L/s @ 142.536 m, 110 kW | **rounding differs** inside the report (142.5 vs 143); **floor differs** M-201 p18 vs M-101 (T1) |
+| tower | Zone 2 pump P-03 / P-09 | 47.3 L/s, 146.5 m, 132.0 kW | same | zone line "146.5 m"; headline and curve "147 m" | 146.536 m, 132 kW | **rounding differs** inside the report |
+| tower | Jockeys P-08 / P-04 | 204.6 m / 210.2 m, 0.47 L/s, 1.5 kW | same | one line only: "0.47 L/s @ 210 m" | 204.551 / 210.151 m | P-08 absent from the report's jockey line; rounding differs |
+| tower | HW recirc pump | - | 0.02 L/s @ 0.03 m, 0.37 kW | "0.02 L/s ... head 0.0 m ... 0.37 kW" | - | **rounding differs** (0.03 vs 0.0) |
+| tower | Fire zones | Lantai 15 PLANT at FFL +56.00 | - | zone 1 Lantai 1-15, churn 1958 kPa, PN25; zone 2 Lantai 16-30, 2013 kPa, PN25; break tank 85 172 L required | 1957.6 / 2012.5 kPa, PN25, 85 172 L | = |
+| tower | Water reserve / mains | - | - | 180 m3, 1.2 days; required 4.56 m | 1.2 days; 4.555 m | = |
+| office | LVMDP | - | 128.2 kW, 250 A | E-301 / E-401 / E-601: 250A 4P, 128.2 kW / 149.1 kVA; report 128 167 W, 149.1 kVA | - | = |
+| apartment | LVMDP / PP-E / MEP | - | 159.7 kW 315 A / 101.9 kW 200 A / 88.8 kW 160 A | E-301 and E-601 same; 185.4 / 119.8 / 104.4 kVA; E-501 essential 119.8 kVA, genset basis 119.9 kVA; report same | PLN 197 kVA, genset 300 kVA | = |
+| tower | LVMDP / PP-E / MEP | - | 914.9 kW 1600 A / 352.4 kW 630 A / 299.3 kW 630 A | E-301, E-401, E-601 same; 1056.8 / 414.1 / 351.7 kVA; E-501 essential 414.1 kVA, basis 416.6 kVA; report same | 914 903 W, 352 403 W, 299 267 W, 1056.8 kVA | = |
+| tower | Sources | - | TX 1600 kVA, G 800 kVA, 250 kvar | E-301 p1, E-401 p8, E-501 same; MV CB + relay, CT 60/5 A | same | = |
+| tower | Fire pump ways | - | - | E-601 p4: P-06 207.5 A MCCB 250 FRC 3x95+50; P-03 249.1 A MCCB 250 FRC 3x120+70; PP-E feeder 2x(FRC 4x240+120) | same | = values; **10.0 m length vs Lantai 15 location** (T9) |
+
+Mismatches found: T1 (floor of the zone-1 fire plant, riser vs plan), T2 (pump name), T4 (tank name, plan legend vs
+riser / schedule), T9 (cable length vs pump location), the tower report's "90000 L" against "90 m3" elsewhere, and
+the rounding differences between the calc report and the schedule / riser for fire-pump and jockey heads and the HW
+recirculation head. No tank capacity, pump Q / H / kW, reserve-days or main electrical figure differs in value
+between the drawings and the schedules.
+
+
+### Fix round 6 (2026-11-20)
+
+Regenerated set: `drawings-z` (scratchpad); `tool/ref_drawings_precheck.py` reports FAIL 0 on all five buildings, the new classes included, and every new class fires on `drawings-y`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| T1 tower fire plant in the Lantai 2 band | The riser's pitch escalation scales the service-lane pitch (up to 3x) without growing the floor band: hydrant lane -2.2 x 14 x 3 = 92.4 units above a 75-unit half band, so the ground-floor fire room (and every Lantai 1 hydrant node) was drawn and keyed one band up. The domestic plant is on lane 0, so it stayed. The water meter label and the two keys on one pump were the same crowding. | `riserLanePitch` caps the lane pitch so the outermost lane the riser draws (`riserLaneMaxOf`) keeps its symbol inside the band. Lantai 1 now issues with a PLANT row (M-201 p17). | T1: a riser key row naming equipment (TK-/P-nn) gives the floor the plans draw it on. |
+| T2 standby transfer pump captioned BOOSTER | The pump-set detail read the solve's `transferPumpNodeIdsProvider` (the duty pump only). | `scheduledTransferPumpNodeIdsProvider` = transfers + standby pumps whose duty pump is one (the M-601 rule). | T2: per duty (Q, H), TRANSFER captions = M-601 transfer rows. |
+| T3 sprinkler heads listed, not drawn; SP on the FH line | Collapsed terminals (`collapseRiserTerminals`) removed every head; BRANCHES listed them; two risers of different services shared a column (same plan x, or re-spaced untagged columns). | One representative terminal kept per collapsed group (its take-off tagged, SP keyed); BRANCHES lists only kinds the page draws (none on a PLANT page); service sub-columns in `riserLayoutPositions`; half a pitch between neighbouring riser columns of different services. | T3: every BRANCHES kind appears drawn / keyed on the page. |
+| T6 cassette ACs on the CW run | A pipe-less node had no service lane and sat on the band centre (the cold-water lane). | `kRiserSelfContainedAcLane` (the air lane). | none (geometric; unit test `fix6_t1_riser_lane_test.dart`). |
+| T8 leader through a mark; stacked marks | Identical continuation marks of neighbouring risers piled up with nothing to tell them apart; cut marks at the band edge were identical. | Marks of one text on risers closer than a mark's width name their pipe; several cut marks at the edge carry their pipe tag. | T8: identical continuation marks stacked on one line (key-table cells excluded). |
+| T9 relay pump cables 10.0 m | The MEP sync mints every way at the 10 m allowance; nothing added the board-to-machine height. | `autoVerticalLegM`: allowance + riserLength(board floor, machine floor) for an MEP way the engineer has not measured (`CircuitLengthSource.autoVertical`, `lengthUserSet`). | none (figures pinned in `test/fix6_t9_mep_length_test.dart`). |
+| T5 scale bar '0500 mm' | A short bar printed its '0' and its end figure on top of each other. | The '0' is dropped unless the end label clears it. | T5: '0' abutting a scale figure / a fused '0nnn'. |
+| C1 heads rounded differently | Each surface formatted heads itself. | `formatPumpHead` everywhere. | C1: a report head within 0.5 m of an M-601 head but printed differently. |
+| C2 '90000 L' | The zone break-tank line formatted its own capacity. | `formatTankCapacity`. | C2: 'tank NNNN L' in the report. |
+| C3 one jockey line | The jockey line read the single project rating. | One line per fire zone from the zone's basis. | (pinned) |
+| C4 stale doc strings | Doc written before W-7. | Updated. | n/a |
+| C5 (auto) undefined | The note rode the extras page only. | Riser legend keys '(auto)' on every page printing it; G-003 defines it. | C5. |
+| C6 duplicate fire rows; two counters | No zone in the service text; the report renderer printed a running page footer beside the title block. | '- zone n' on a zoned project; no 'Page x of y' with a title block. | C6. |
+| C7 GT 394 / 1139 kPa | The downfeed field walked the roof tank's gravity back down the transfer riser. | `transferPumpHead(fieldOut:)` / `transferSideFieldProvider`. | none (not on a drawing; pinned in `test/fix6_c7_transfer_field_test.dart`). |
+| C8 'backs 70% of load' | The label printed the set's rating against the demand. | `backs 352.4 of 914.9 kW (39%)` (the backed load). | C8. |
+| C9 G-003 dashes, FRC only | Swatches used the generic dash; cables listed only typed families. | `SldLine.dashDot` for the fire services; every printed family. | C9 (cables). |
+| (pre-check item 6 on the regenerated shophouse) | The drainage-exit note was placed before the page-edge stubs were reserved. | Notes placed after every line is reserved. | item 6 (existing). |
+
+Left open in this round (no change): T4 (per-plan legend symbol rows still use the component label, M-512 Detail C window edge), T7 (runs in 1:10 detail windows untagged), T10 (detail bubble over a run / flow chevron), observations 9 (M-505 unlabelled fixture), 11 (second key table inside a detail window) and 7 (E-501 bus boxes without ratings).
+
+PNGs to re-check in `drawings-z`: T1 `tower/png/Menara Contoh 30-riser-sld-p17.png`; T2 `tower/png/Menara Contoh 30-riser-sld-p18.png`; T3 `office/png/Kantor Contoh-riser-sld-p1.png`, `apartment/png/Apartemen Contoh-riser-sld-p1.png`, `tower/png/Menara Contoh 30-riser-sld-p1.png`; T5 `apartment/png/Apartemen Contoh-plan-1-Lantai 1-detail-p1.png`, `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png`; T6 `shophouse/png/Ruko Contoh-riser-sld-p3.png`; T8 `apartment/png/Apartemen Contoh-riser-sld-p9.png`, `-p10.png`; T9 `tower/png/Menara Contoh 30-panel-schedules-p4.png`; C5 `house/png/Rumah Contoh-riser-sld-p1.png` and `*-00-cover-sheets-p<last>.png`; C6 `tower/png/Menara Contoh 30-equipment-schedule-p2.png`; C8 `tower/png/Menara Contoh 30-electrical-overview-sld-p1.png`; C9 `tower/png/Menara Contoh 30-00-cover-sheets-p5.png`.
+
+### Fix round 6 part 2 (2026-11-20)
+
+Regenerated set: `drawings-z2` (scratchpad); `tool/ref_drawings_precheck.py` FAIL 0 on all five buildings; the new classes T4, T10, A and O7 fire on `drawings-y`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| T4 plan legend 'Roof tank' | `DrawingChrome.legendSymbols` printed each symbol's type label. | `legendSymbolNames` + `planLegendSymbolRows(fireBreakTankIds:)`: 'Fire break tank' row with its glyph. | T4 (a break tank's plan prints its name). |
+| T4 Detail C cuts the jockey | Detail windows were sized from label clusters only. | A window grows to take in whole any pump / booster symbol it cuts; a clear one stays out. Runs leaving a window still end at the edge without a break mark (not done). | none (unit test). |
+| T7 untagged runs in 1:10 windows | Everything outside the callout box was left unlabelled as plan context. | A 1:10 window labels every node and run it shows unless another detail owns it. | none (geometry; unit test `drawing_review_s_test.dart`). |
+| T10 bubble B on FH-L1 | The first-ring bubble skipped the run / chevron test; later details' boundaries were not yet registered. | All boundaries first; every candidate tested against runs + chevrons; side-midpoint candidates. | T10 (a bubble struck by a line). |
+| Obs 7 E-501 ratings | The one-line nodes carried no rating input. | Root board incomer, busbar and transferred board incomer passed from the system result. | O7 (E-501 ratings exist and equal E-301's). |
+| New A key number on two circles | Intended: both surfaces key identical tags once. | The title says so ('same tag = same key'). | A. |
+| New B P-05 MCB | Rounds 38 / 43 / 54: an MCCB's 10 x In magnetic trip fails ADS on the 126 m run, so the MCB is kept with cascade back-up; 2.5 mm2 fails the MCB's own loop limit, so 4 mm2 (the 7th cable-raised-for-ads). | Pin comments carry the arithmetic. | n/a |
+
+Not done: T4 break marks at window edges, Obs 9 (M-505 is a coarser-than-1:10 window), Obs 11 (a split key-table block may still sit in a window).
+
+PNGs to re-check in `drawings-z2`: T4 `tower/png/Menara Contoh 30-plan-15-Lantai 15-p1.png`, `-plan-15-Lantai 15-detail-p1.png`; T7 `house/png/Rumah Contoh-plan-1-Lantai 1-detail-p1.png`, `house/png/Rumah Contoh-plan-2-Lantai 2-detail-p1.png`, `shophouse/png/Ruko Contoh-plan-3-Lantai 3-detail-p1.png`; T10 `tower/png/Menara Contoh 30-plan-1-Lantai 1-p1.png`; Obs 7 `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png`, `apartment/png/Apartemen Contoh-electrical-power-one-line-p1.png`; New A `tower/png/Menara Contoh 30-riser-sld-p17.png`, `apartment/png/Apartemen Contoh-riser-sld-p9.png`.
+
+### Fix round 6 part 3 (2026-11-20)
+
+Regenerated set: `drawings-z3` (scratchpad); pre-check FAIL 0 on all five buildings; class O11 fires on `drawings-y`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| Obs 11 key table in a window | The key table took any clear spot, a window's empty paper included. | `placePlanKeyTable(avoid:)` refuses every detail window. | O11 |
+| T4 break marks | A cut run simply ended at the window edge. | `planBreakMarkLines` double slash at the edge; legend note only when drawn. | none (unit test) |
+| Item 1 / Obs 9 key-only margins | (not changed) | Measured: key-only labels for margins of windows coarser than 1:10 took the tower from 65 to 78 drawing files with overlap stamps; NOT enabled, as instructed. | none |
+
+### Fix round 6 part 4 (2026-11-20)
+
+Regenerated set: `drawings-z4` (scratchpad); pre-check FAIL 0 on all five buildings; drawing files and page counts equal to `drawings-z3`; the new key-circle class fires on `drawings-z3`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| Obs 9 / T7 coarse windows (M-505 Detail B) | The margin of a window coarser than 1:10 was left unlabelled as plan context (required labels there added 13-14 tower sheets). | Margin items are OPTIONAL tags (`placeOptionalPlanLabel`, `optionalLabelIds`), placed after every required tag and only in a legal spot; one that fails stays context (never keyed, counted or paginated). Placed / skipped: office 6 / 4, apartment 23 / 11, tower 57 / 33. The part-3 `keyOnlyIds` path is gone (replaced by this one). | none (unit tests) |
+| Key 7 on its own run (M-512 Detail C) | Fix round 4 tested the element's own run only against a tight box round the digits, so the pipe could pass through the circle beside the number. | `_placeKeyTag` also rejects its own run within 0.85 r of the circle centre. | item 6 'no stroke through a plan / detail key circle' (`key_circle_run_hits`): 33 files on `drawings-z3`, 0 on `drawings-z4`. |
+
+PNGs to re-check in `drawings-z4`: `tower/png/Menara Contoh 30-plan-5-Lantai 5-detail-p1.png` (M-505), `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png` (M-512).
+
+## Reviewer re-check of fix round 6 (2026-11-20)
+
+| Item | Sheet checked | Result |
+|---|---|---|
+| T1 | tower M-201 p17 | PASS - fire pump room in the PLANT row |
+| T2 | tower M-201 p18 | PASS - two TRANSFER PUMP captions |
+| T3 | office M-201 p1 | PASS - sprinkler head drawn + keyed, SP its own column |
+| T6 | shophouse M-201 p3 | PASS |
+| T8 | apartment M-201 p9 | PASS |
+| C8 | tower E-301 | PASS - "backs 352.4 of 914.9 kW (39%)" |
+| T4 legend | tower M-115 | PASS |
+| T7 1:10 | house M-501 | PASS |
+| T9 WH-01 | hand check | 2 x 0.126 x 8.658 x 3.69 = 8.05 V = 3.49 % |
+| T9 P-05 loop | hand check | 2 x 0.126 x 5.52 = 1.39 ohm vs the 1.92 ohm limit - PASS |
+| Obs 11 (part 3) | tower M-512, M-505 | PASS - key tables outside the windows |
+| T4 break marks (part 3) | tower M-512 Detail C | PASS - break marks drawn, legend note printed |
+| Obs 9 / T7 coarse windows (part 4, optional tags) | PASS | tower M-505 Detail B (drawings-z4): every CW run tagged, bottom-right fixture reads UR; page counts unchanged |
+| Key 7 off its own run (part 4) | PASS | tower M-512 Detail C (drawings-z4): circle 7 sits beside the DN150 run, leader only |
+

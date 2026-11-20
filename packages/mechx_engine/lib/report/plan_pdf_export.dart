@@ -458,6 +458,8 @@ Uint8List planToPdf({
   Set<String> hiddenNodeIds = const {},
   PlanFixedFit? fixedFit,
   Set<String> unlabelledIds = const {},
+  Set<String> optionalLabelIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) =>
     _planPdfBuild(
       net: net,
@@ -484,6 +486,8 @@ Uint8List planToPdf({
       hiddenNodeIds: hiddenNodeIds,
       fixedFit: fixedFit,
       unlabelledIds: unlabelledIds,
+      optionalLabelIds: optionalLabelIds,
+      keyTableAvoidPx: keyTableAvoidPx,
     ).bytes;
 
 /// Drawing review R1 — the detail callouts the plan sheet needs so it is
@@ -569,6 +573,17 @@ List<PlanDetailCallout> planSheetDetails({
           linkPx: kPlanDetailLinkMm * pxPerMm * f,
           marginPx: kPlanDetailMarginMm * pxPerMm * f,
           existing: [for (final d in details) d.rectPx],
+          // Fix round 6 part 2 (T4) — no window cuts a drawn plant symbol
+          // (a pump / tank / unit: M-512 Detail C cut the relay jockey).
+          nodesPx: [
+            for (final nd in net.nodes)
+              if (nd.sheetId == sheetId &&
+                  nd.floorIndex == floorIndex &&
+                  (nd.component == NodeComponent.pump ||
+                      nd.component == NodeComponent.boosterSet))
+                (x: nd.x, y: nd.y),
+          ],
+          nodeRadiusPx: kPlanGlyphClearMm * pxPerMm,
         );
         final n = planDetailPack(sizesM: [
           for (final b in r)
@@ -626,6 +641,8 @@ List<PlanDetailCallout> planSheetDetails({
       extraOccupiedPx: plot.occupiedMm,
       hiddenNodeIds: plot.hiddenNodeIds,
       unlabelledIds: plot.unlabelledIds,
+      optionalLabelIds: plot.optionalLabelIds,
+      keyTableAvoidPx: plot.keyTableAvoidPx,
       fixedFit: const PlanFixedFit(),
       layoutOnly: true,
     ).ann.overlapCount;
@@ -876,6 +893,8 @@ const double kPlanDetailMarginMm = 4;
   PlanFixedFit? fixedFit,
   bool layoutOnly = false,
   Set<String> unlabelledIds = const {},
+  Set<String> optionalLabelIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
@@ -1088,6 +1107,8 @@ const double kPlanDetailMarginMm = 4;
     details: details,
     extraMarks: extraMarks,
     unlabelledIds: unlabelledIds,
+    optionalLabelIds: optionalLabelIds,
+    keyTableAvoidPx: keyTableAvoidPx,
   );
   final scaleDenominator = (pointsPerMeter == null || metersPerPixel == null)
       ? null

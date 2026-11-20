@@ -72,16 +72,23 @@ void main() {
     final net = _building();
     final drawn = collapseRiserTerminals(net);
     // Every head + every bare branch line goes; R (riser end) and the header
-    // H (the take-off stub into the riser end) stay.
-    expect(drawn.nodes.map((n) => n.id).toSet(),
-        {'R0', 'H0', 'R1', 'H1', 'R2', 'H2'});
-    expect(drawn.edges.map((e) => e.id).toSet(),
-        {'t0', 't1', 't2', 'r1', 'r2'});
+    // H (the take-off stub into the riser end) stay. Fix round 6 (T3) — and
+    // ONE representative head per floor, the fewest hops from the riser end
+    // (R -> H -> B -> S: 3 hops on every line, the least id S<f>_0_0) with
+    // the pipe reaching it, so the counted kind is drawn.
+    expect(drawn.nodes.map((n) => n.id).toSet(), {
+      for (var f = 0; f < 3; f++) ...['R$f', 'H$f', 'B${f}_0', 'S${f}_0_0'],
+    });
+    expect(drawn.edges.map((e) => e.id).toSet(), {
+      'r1', 'r2',
+      for (var f = 0; f < 3; f++) ...['t$f', 'h${f}_0', 's${f}_0_0'],
+    });
     final sheet = buildMechanicalRiserSld(
         network: net, building: _building3, focus: ServiceType.fireSprinkler);
     final heads =
-        _labels(sheet).where((t) => t.contains('Sprinkler head')).toList();
-    // Stated ONCE per floor, as a count (3 lines x 6 heads = 18).
+        _labels(sheet).where((t) => t.contains('Sprinkler head x')).toList();
+    // Stated ONCE per floor, as a count (3 lines x 6 heads = 18); the drawn
+    // representative carries the plain kind name (or a key).
     expect(heads, List.filled(3, 'Sprinkler head x18'));
     expect(sheet.overlapCount, 0);
   });
@@ -109,7 +116,8 @@ void main() {
       final keptHeads = drawn.nodes
           .where((n) => n.component == NodeComponent.sprinklerHead)
           .length;
-      expect(keptHeads, total > kRiserTerminalCollapseMin ? 0 : 3 * total);
+      // Fix round 6 (T3) — one representative per collapsed floor.
+      expect(keptHeads, total > kRiserTerminalCollapseMin ? 3 : 3 * total);
       expect(drawn.edges.where((e) => e.kind == EdgeKind.riser).length, 2);
       final sheet = buildMechanicalRiserSld(
           network: net,

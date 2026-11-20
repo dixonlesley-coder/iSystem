@@ -36,6 +36,7 @@ import 'fire_store.dart'
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sizing_store.dart';
+import 'tank_fill_store.dart' show mainsFeedFieldProvider;
 
 Pressure get _targetResidual =>
     SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
@@ -502,7 +503,9 @@ PressureSolution _coldUpfeed(Network net, Map<String, EdgeSizing> sizing,
 /// IS [solveProvider] (same object). [solveProvider] stays the single-source
 /// SIZING basis (its `requiredPumpHead` sizes the movers); the heatmap, the
 /// node probe, the over-pressure judge and the SNI-minimum judge read this.
-final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
+/// Backlog K-2 — the PUMP-SIDE field; [upfeedDeliveredProvider] overlays the
+/// mains side of each meter feed on it.
+final _upfeedPumpSideDeliveredProvider = Provider<PressureSolution?>((ref) {
   final base = ref.watch(solveProvider);
   if (base == null) return null;
   final transfers = ref.watch(transferPumpNodeIdsProvider);
@@ -532,6 +535,50 @@ final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
           targetResidual: _targetResidual),
       extra);
 });
+
+/// Backlog K-2 (2026-11-20) — the UPFEED delivered field: the pump-side
+/// field ([_upfeedPumpSideDeliveredProvider], byte-identical at every pump-
+/// side node) with the MAINS side of each meter feed ([mainsFeedFieldProvider])
+/// in place of the solve's back-calculation from the ground tank (which read
+/// the meter below 0 kPa). A DELIVERY node is never overwritten (every judge
+/// reads the solved figure); no meter feed ⇒ the same object.
+final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
+  final s = ref.watch(_upfeedPumpSideDeliveredProvider);
+  if (s == null) return null;
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds, {
+    ...ref.watch(transferSideFieldProvider),
+    ...ref.watch(mainsFeedFieldProvider),
+  });
+  if (mains.isEmpty) return s;
+  return PressureSolution(
+    residualPressure: {
+      ...s.residualPressure,
+      for (final e in mains.entries) e.key: e.value.residual,
+    },
+    requiredPumpHead: s.requiredPumpHead,
+    criticalNodeId: s.criticalNodeId,
+    targetHeldByDesign: s.targetHeldByDesign,
+    noFlowStaticPressure: {
+      ...s.noFlowStaticPressure,
+      for (final e in mains.entries) e.key: e.value.noFlow,
+    },
+    deliveryNodeIds: s.deliveryNodeIds,
+  );
+});
+
+/// Backlog K-2 — the mains-side entries of [mains] for nodes the solve
+/// [field] holds that are not [delivery] nodes.
+Map<String, ({Pressure residual, Pressure noFlow})> _mainsSideOf(
+    Map<String, Pressure> field,
+    Set<String> delivery,
+    Map<String, ({Pressure residual, Pressure noFlow})> mains) {
+  if (mains.isEmpty) return const {};
+  return {
+    for (final e in mains.entries)
+      if (field.containsKey(e.key) && !delivery.contains(e.key))
+        e.key: e.value,
+  };
+}
 
 /// mech-building-2 — upfeed DELIVERY nodes over the SNI fixture pressure
 /// limits (judge-only; see the engine's [upfeedOverPressure]). Empty on a
@@ -652,7 +699,9 @@ final downfeedMoverHeadsProvider = Provider<Map<String, Head>>((ref) {
 /// sized booster it IS [downfeedProvider] (same object). [downfeedProvider]
 /// stays the UNBOOSTED field the booster duties are sized on; the heatmap,
 /// node probe and over-pressure judgement read this one.
-final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
+/// Backlog K-2 — the PUMP-SIDE field; [downfeedDeliveredProvider] overlays
+/// the mains side of each meter feed on it.
+final _downfeedPumpSideDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   final base = ref.watch(downfeedProvider);
   if (base == null) return null;
   final heads = ref.watch(downfeedMoverHeadsProvider);
@@ -696,6 +745,40 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
       }),
   ];
   return _withExtraDownfeed(_mergeDownfeedTanks(main, others), extra);
+});
+
+/// Backlog K-2 (2026-11-20) — the DOWNFEED delivered field: the gravity /
+/// booster field ([_downfeedPumpSideDeliveredProvider]) with the MAINS side
+/// of each meter feed ([mainsFeedFieldProvider]) in place of the gravity
+/// walk back through the transfer riser (a meter is on mains pressure, never
+/// on the roof tank's head). Delivery nodes are never overwritten; no meter
+/// feed ⇒ the same object.
+final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
+  final s = ref.watch(_downfeedPumpSideDeliveredProvider);
+  if (s == null) return null;
+  // Fix round 6 (C7) — and the transfer side (an open ground tank at 0 kPa,
+  // the transfer riser on the pump's discharge); the mains side wins on the
+  // meter feed.
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds, {
+    ...ref.watch(transferSideFieldProvider),
+    ...ref.watch(mainsFeedFieldProvider),
+  });
+  if (mains.isEmpty) return s;
+  return DownfeedSolution(
+    residualPressure: {
+      ...s.residualPressure,
+      for (final e in mains.entries) e.key: e.value.residual,
+    },
+    criticalNodeId: s.criticalNodeId,
+    minResidual: s.minResidual,
+    boosterHeadRequired: s.boosterHeadRequired,
+    targetHeldByDesign: s.targetHeldByDesign,
+    noFlowStaticPressure: {
+      ...s.noFlowStaticPressure,
+      for (final e in mains.entries) e.key: e.value.noFlow,
+    },
+    deliveryNodeIds: s.deliveryNodeIds,
+  );
 });
 
 /// Round 32 (binding-1) — the SNI 8153 MINIMUM residual a solve's critical
@@ -1664,6 +1747,8 @@ Head? transferPumpHead({
   required FlowRate flow,
   required double Function(NetEdge e) lengthOf,
   required double Function(NetNode n) elevationOf,
+  Map<String, ({double flowing, double noFlow})>? fieldOut,
+  double? developedHeadM,
 }) {
   final hwC = const SniProfile().hazenWilliamsC(PipeMaterial.pvc);
   String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
@@ -1688,6 +1773,8 @@ Head? transferPumpHead({
   var upstreamFriction = 0.0;
   var node = mover.nodeId;
   final seen = <String>{node};
+  // Fix round 6 (C7) — friction from the pump up to each suction node.
+  final cumUp = <String, double>{node: 0.0};
   while (!_isStorageTank(net.nodeById(node)) || node == mover.nodeId) {
     NetEdge? inE;
     for (final e in supplyAt(node)) {
@@ -1702,6 +1789,7 @@ Head? transferPumpHead({
     if (!seen.add(up)) break;
     upstreamFriction += friction(inE);
     node = up;
+    cumUp[node] = upstreamFriction;
   }
   final source = net.nodeById(node);
   if (source == null) return null;
@@ -1718,8 +1806,10 @@ Head? transferPumpHead({
   double? worst;
   final visited = <String>{mover.nodeId};
   final stack = <(String, double)>[(mover.nodeId, 0.0)];
+  final downFr = <String, double>{};
   while (stack.isNotEmpty) {
     final (at, fr) = stack.removeLast();
+    if (at != mover.nodeId) downFr[at] = fr;
     final outs = [
       for (final e in supplyAt(at))
         if (sizing[e.id]?.flowFromId == at) e,
@@ -1739,7 +1829,43 @@ Head? transferPumpHead({
     }
   }
   if (worst == null) return null;
-  return Head(math.max(0, worst));
+  final head = math.max(0.0, worst);
+  // Fix round 6 (C7, 2026-11-20) — the TRANSFER side of the delivered
+  // field, from the SAME walk and terms the head is sized on: the source
+  // tank is a free surface (0); a suction node reads the tank's gravity less
+  // the friction from the tank; the pump (its outlet) and every node down to
+  // the tanks it fills read the developed head ([developedHeadM], else the
+  // sized head) less the rise from the pump and the friction from it — the
+  // worst tank's inlet keeps exactly [kTankInletResidualHeadM]. The no-flow
+  // figure drops the friction terms. The filled tanks are not written (each
+  // is a free surface / its own downfeed source).
+  if (fieldOut != null && pumpNode != null) {
+    final h = developedHeadM ?? head;
+    final zPump = elevationOf(pumpNode);
+    if (_isStorageTank(source)) {
+      fieldOut[source.id] = (flowing: 0.0, noFlow: 0.0);
+    }
+    for (final e in cumUp.entries) {
+      if (e.key == source.id || e.key == mover.nodeId) continue;
+      final n = net.nodeById(e.key);
+      if (n == null) continue;
+      final g = base - elevationOf(n);
+      fieldOut[e.key] =
+          (flowing: g - (upstreamFriction - e.value), noFlow: g);
+    }
+    final suction = base - zPump - upstreamFriction;
+    fieldOut[mover.nodeId] = (flowing: suction + h, noFlow: base - zPump + h);
+    for (final e in downFr.entries) {
+      final n = net.nodeById(e.key);
+      if (n == null) continue;
+      final rise = elevationOf(n) - zPump;
+      fieldOut[e.key] = (
+        flowing: suction + h - rise - e.value,
+        noFlow: base - zPump + h - rise,
+      );
+    }
+  }
+  return Head(head);
 }
 
 /// Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — the solved duty
@@ -1771,6 +1897,102 @@ final ejectorDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   return out;
 });
 
+/// Fix round 6 (C7) — the drawn supply movers (`supplyMovers`) with the
+/// root flows the duties are sized on: ONE list for [supplyMoverDutiesProvider]
+/// and the transfer side of the delivered field ([transferSideFieldProvider]).
+final _supplyMoversProvider = Provider<List<SupplyMover>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  final peak = ref.watch(supplyPeakFlowProvider);
+  return supplyMovers(net, sizing,
+      excludeEdgeIds: legs,
+      rootFlowOf: (root) {
+        final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
+            edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
+            flushSystem: flushSystemForRoot(net, kSupplyService, root,
+                ref.watch(supplyFlushValveNodeIdsProvider)),
+            excludeEdgeIds: legs);
+        return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
+      });
+});
+
+/// Fix round 6 (C7, 2026-11-20) — the TRANSFER side of the delivered field:
+/// for every sized transfer pump ([transferPumpHead]'s walk, developing its
+/// sized duty head), its source tank at 0 kPa (an open tank is atmospheric),
+/// its suction pipe, its outlet and its riser up to the tank(s) it fills. A
+/// standby pump on a mirrored parallel leg ([parallelLegEdgeIdsProvider])
+/// reads its duty twin's outlet (it shares the discharge header). Empty with
+/// no transfer pump.
+final transferSideFieldProvider =
+    Provider<Map<String, ({Pressure residual, Pressure noFlow})>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final duties = ref.watch(supplyMoverDutiesProvider);
+  final heads = <String, ({double flowing, double noFlow})>{};
+  final outletOf = <String, ({double flowing, double noFlow})>{};
+  for (final m in ref.watch(_supplyMoversProvider)) {
+    if (!m.transfer) continue;
+    final d = duties[m.nodeId];
+    if (d == null) continue;
+    final f = <String, ({double flowing, double noFlow})>{};
+    transferPumpHead(
+      net: net,
+      sizing: sizing,
+      mover: m,
+      flow: m.flow,
+      lengthOf: (e) => edgeLength(e, net,
+              calibrationBySheet: project.calibrations,
+              building: project.building,
+              mounting: project.mounting)
+          .meters,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters,
+      fieldOut: f,
+      developedHeadM: d.head.meters,
+    );
+    heads.addAll(f);
+    if (f[m.nodeId] case final o?) outletOf[m.nodeId] = o;
+  }
+  if (heads.isEmpty) return const {};
+  // A standby pump beside a transfer pump (both ends on its legs' ends).
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  for (final e in net.edges) {
+    if (!legs.contains(e.id)) continue;
+    for (final id in [e.fromId, e.toId]) {
+      final n = net.nodeById(id);
+      if (n == null || heads.containsKey(id)) continue;
+      if (n.component != NodeComponent.pump &&
+          n.component != NodeComponent.boosterSet) {
+        continue;
+      }
+      // Its duty twin: a transfer pump sharing a neighbour with it.
+      final nb = {
+        for (final x in net.edges)
+          if (x.fromId == id) x.toId else if (x.toId == id) x.fromId,
+      };
+      for (final o in outletOf.entries) {
+        final onb = {
+          for (final x in net.edges)
+            if (x.fromId == o.key) x.toId else if (x.toId == o.key) x.fromId,
+        };
+        if (nb.intersection(onb).isNotEmpty) {
+          heads[id] = o.value;
+          break;
+        }
+      }
+    }
+  }
+  return {
+    for (final e in heads.entries)
+      e.key: (
+        residual: pressureFromHead(Head(e.value.flowing)),
+        noFlow: pressureFromHead(Head(e.value.noFlow)),
+      ),
+  };
+});
+
 /// Round 16 — the solved duty of EVERY drawn supply mover, keyed by node id:
 /// the root pump / inline boosters sized in series ([seriesMoverHeads]) on
 /// the flow through each, and each transfer pump on its lift
@@ -1783,18 +2005,7 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final legs = ref.watch(parallelLegEdgeIdsProvider);
-  final peak = ref.watch(supplyPeakFlowProvider);
-  final movers = supplyMovers(net, sizing,
-      excludeEdgeIds: legs,
-      rootFlowOf: (root) {
-        final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
-            edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
-            flushSystem: flushSystemForRoot(net, kSupplyService, root,
-                ref.watch(supplyFlushValveNodeIdsProvider)),
-            excludeEdgeIds: legs);
-        return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
-      });
+  final movers = ref.watch(_supplyMoversProvider);
   if (movers.isEmpty) return const {};
   final out = <String, PumpDuty>{};
 
@@ -2716,18 +2927,10 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   }
   // Round 70 — the floors an intermediate break tank feeds are zoned from
   // that tank, never from the source tank's datum.
+  final sizing = ref.watch(sizingProvider);
   final regions = tankId == null
       ? const <String, Set<String>>{}
-      : downfeedTankRegions(
-          net: net,
-          service: ServiceType.coldWater,
-          sourceTankId: tankId,
-          sizing: ref.watch(sizingProvider),
-          deliveryNodeIds: {
-            for (final n in net.nodes)
-              if (n.role == NodeRole.fixture) n.id,
-          },
-        );
+      : _breakTankRegions(net, tankId, sizing);
   final regionOf = <String>{for (final r in regions.values) ...r};
   if (fedByTank != null && regionOf.isNotEmpty) {
     fedByTank = fedByTank.difference(regionOf);
@@ -2787,15 +2990,26 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   }
   // Reference shophouse F1 — every OTHER roof-tank component is zoned from
   // its own tank (plus its own booster lift), exactly like the main tank.
-  // (Its intermediate break tanks are not split out — recorded.)
+  // Backlog K-1 — and, exactly like the main tank, the floors one of ITS
+  // intermediate break tanks feeds ([_breakTankRegions] from that roof tank)
+  // leave its group and are zoned from the break tank's own datum (below,
+  // after the main tank's break tanks).
   final extraTanks = ref.watch(extraDownfeedTanksProvider);
+  final extraRegions = <Map<String, Set<String>>>[];
   if (extraTanks.isNotEmpty) {
     final heads = ref.watch(downfeedMoverHeadsProvider);
     final top = project.building.levelCount - 1;
     for (final x in extraTanks) {
       final w = _downfeedTankWalk(net, x.tank);
+      final xRegions = _breakTankRegions(net, x.tank, sizing);
+      extraRegions.add(xRegions);
+      final xRegionOf = <String>{for (final r in xRegions.values) ...r};
       int? lo, hi;
-      for (final id in (w.fed.intersection(w.delivery).toList()..sort())) {
+      for (final id in (w.fed
+          .intersection(w.delivery)
+          .difference(xRegionOf)
+          .toList()
+        ..sort())) {
         final n = net.nodeById(id)!;
         if (lo == null || n.floorIndex < lo) lo = n.floorIndex;
         if (hi == null || n.floorIndex > hi) hi = n.floorIndex;
@@ -2825,7 +3039,47 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
       ));
     }
   }
-  // Round 70 — each break tank zones the floors it feeds from its own datum.
+  // Round 70 — each break tank zones the floors it feeds from its own datum:
+  // the main tank's, then (backlog K-1) each other roof-tank component's, in
+  // [extraDownfeedTanksProvider] order — ONE routine for both.
+  for (final r in [regions, ...extraRegions]) {
+    groups.addAll(_breakTankZoneGroups(net, project, r,
+        effective: effective, maxFix: maxFix));
+  }
+  return groups;
+});
+
+/// Round 70 — the intermediate break-tank regions of ONE downfeed roof
+/// [tank]'s cold-water network ([downfeedTankRegions] with every fixture a
+/// delivery node). Backlog K-1 — read for the main tank AND for every other
+/// roof-tank component ([extraDownfeedTanksProvider]), so the two can never
+/// zone a break tank differently. Empty for a single-tank component.
+Map<String, Set<String>> _breakTankRegions(
+        Network net, String tank, Map<String, EdgeSizing> sizing) =>
+    downfeedTankRegions(
+      net: net,
+      service: ServiceType.coldWater,
+      sourceTankId: tank,
+      sizing: sizing,
+      deliveryNodeIds: {
+        for (final n in net.nodes)
+          if (n.role == NodeRole.fixture) n.id,
+      },
+    );
+
+/// Round 70 — one zone group per break tank of [regions]
+/// ([_breakTankRegions]): the floors its demand fixtures sit on, zoned from
+/// the break tank's OWN elevation (a free water surface restarts the static
+/// head). A region with no demand fixture opens no group. Ordered as
+/// [regions] (highest tank first).
+List<DownfeedZoneGroup> _breakTankZoneGroups(
+  Network net,
+  ProjectState project,
+  Map<String, Set<String>> regions, {
+  required Pressure effective,
+  required Pressure maxFix,
+}) {
+  final groups = <DownfeedZoneGroup>[];
   for (final MapEntry(key: t, value: nodes) in regions.entries) {
     int? lo, hi;
     for (final id in nodes) {
@@ -2857,7 +3111,7 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
     ));
   }
   return groups;
-});
+}
 
 /// Reference office O2 — the UPFEED zone datum: the elevation of the
 /// equivalent free surface the DELIVERED upfeed field implies

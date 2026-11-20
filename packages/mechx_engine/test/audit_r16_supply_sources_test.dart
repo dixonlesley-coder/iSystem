@@ -14,8 +14,12 @@ import 'dart:math' as math;
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/genset_backup.dart'
+    show gensetBackupDemandW;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/electrical/power_factor.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
@@ -99,10 +103,8 @@ void main() {
       final spine =
           _labels(buildElectricalSourceSpine(project: p, result: sys).prims);
       expect(spine, contains('GENSET ${rung.toInt()} kVA'));
-      final pct =
-          (math.min(1.0, math.min(rung / kva, rung * kGeneratorPf / kw)) * 100)
-              .round();
-      expect(spine, contains('backs $pct% of load'));
+      // Fix round 6 (C8) — the label is the backed share, not the rating.
+      expect(spine, contains(_c8Share(p, sys)));
       final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
           projectName: 'P',
           date: '2026-10-18',
@@ -303,4 +305,13 @@ void main() {
       expect(tx.qty, 2);
     });
   });
+}
+
+/// Fix round 6 (C8) — the genset label is the BACKED share: the load the set
+/// backs ([gensetBackupDemandW]) against the building demand.
+String _c8Share(ElectricalProject p, ElectricalSystemResult r) {
+  final b = gensetBackupDemandW(p, r).watts, d = r.supply.demandW;
+  final pct = (b / d * 100).clamp(0, 100).round();
+  return 'backs ${(b / 1000).toStringAsFixed(1)} of '
+      '${(d / 1000).toStringAsFixed(1)} kW ($pct%)';
 }

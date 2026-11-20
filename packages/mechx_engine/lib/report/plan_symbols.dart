@@ -18,6 +18,7 @@ import 'dart:math' as math;
 import '../geometry/building.dart';
 import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
+import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/custom_fixture.dart';
 import '../standards/sni.dart' show PlumbingFixture;
@@ -572,6 +573,45 @@ List<NodeComponent> planLegendSymbols(Network net,
   ];
 }
 
+/// Fix round 6 part 2 (T4, 2026-11-20) — the plan legend's symbol ROWS of
+/// a sheet + floor: [planLegendSymbols] over the genuine components (every
+/// node but the fire zone break tanks, [fireBreakTankIds] — the zone chain's
+/// derived naming), then ONE 'Fire break tank' row drawn with the break
+/// tank's own glyph, right after the tank rows. [names] parallels [symbols]
+/// ([DrawingChrome.legendSymbolNames]). No break tank on the sheet ⇒ exactly
+/// [planLegendSymbols] and the component labels.
+({List<NodeComponent> symbols, List<String> names}) planLegendSymbolRows(
+    Network net,
+    {required String sheetId,
+    required int floorIndex,
+    Set<String> fireBreakTankIds = const {}}) {
+  bool here(NetNode n) =>
+      n.sheetId == sheetId && n.floorIndex == floorIndex && n.component != null;
+  final genuine = {
+    for (final n in net.nodes)
+      if (here(n) && !fireBreakTankIds.contains(n.id)) n.component!,
+  };
+  final breakTanks = [
+    for (final c in NodeComponent.values)
+      if (net.nodes.any((n) =>
+          here(n) && fireBreakTankIds.contains(n.id) && n.component == c))
+        c,
+  ];
+  final symbols = <NodeComponent>[];
+  final names = <String>[];
+  for (final c in NodeComponent.values) {
+    if (genuine.contains(c)) {
+      symbols.add(c);
+      names.add(c.label);
+    }
+    if (breakTanks.isNotEmpty && c == breakTanks.last) {
+      symbols.add(breakTanks.first);
+      names.add(kFireBreakTankLabel);
+    }
+  }
+  return (symbols: symbols, names: names);
+}
+
 /// Round 34 (fire-hvac-drawings-air-terminals-and-heads-carry-no-data) — the
 /// installer's tag of an AIR TERMINAL (supply / linear diffuser, return /
 /// exhaust grille): its design airflow and, when chosen, its face size —
@@ -890,6 +930,7 @@ PlanKeyTable? placePlanKeyTable(
   PlanKeyRegistry keys, {
   required double textSize,
   required LabelBox bounds,
+  List<LabelBox> avoid = const [],
 }) {
   if (keys.isEmpty) return null;
   final ts = textSize;
@@ -913,7 +954,11 @@ PlanKeyTable? placePlanKeyTable(
       [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) + ts,
   ];
   final pitch = 1.5 * ts;
-  final tableW = colW.fold(0.0, (a, b) => a + b);
+  // Fix round 6 part 2 (New A) — the block is at least as wide as its
+  // title (which states the one-key-per-tag rule), so the title never runs
+  // past the space the table reserves.
+  final tableW = math.max(colW.fold(0.0, (a, b) => a + b),
+      helveticaTextWidth(kPipeKeyTableTitle, ts) + ts);
   double blockH(int n) => (n + 2) * pitch + 0.5 * ts;
   // Is the box [b] clear of every mark, run and grid line (and of the blocks
   // already chosen)?
@@ -942,6 +987,15 @@ PlanKeyTable? placePlanKeyTable(
       maxX: b.maxX + margin,
       maxY: b.maxY + margin,
     );
+    // Fix round 6 part 3 (Obs 11) — never inside a detail window.
+    for (final w in avoid) {
+      if (b.minX < w.maxX &&
+          w.minX < b.maxX &&
+          b.minY < w.maxY &&
+          w.minY < b.maxY) {
+        return false;
+      }
+    }
     return !layout.hitsBox(g) &&
         !layout.hitsRun(b, clearance: math.max(0.25 * ts, margin)) &&
         !layout.hitsGrid(b);
@@ -998,7 +1052,7 @@ PlanKeyTable? placePlanKeyTable(
   final texts = <PlacedLabelLine>[];
   final rules = <LabelSegment>[];
   for (final (x0, yTop, i0, n) in plan) {
-    texts.add((text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts));
+    texts.add((text: kPipeKeyTableTitle, x: x0, y: yTop - ts));
     final gridTop = yTop - pitch - 0.3 * ts;
     final gridBot = gridTop - (n + 1) * pitch;
     for (final r in [0, 1, n + 1]) {
@@ -1521,10 +1575,84 @@ LeaderedLabelPlacement placePlanLabel({
   double ownHalfWidth = 0,
   PlanKeyRegistry? keys,
   bool keyOnly = false,
+}) =>
+    _placePlanLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: textSize,
+        layout: layout,
+        splitLines: splitLines,
+        ownRunId: ownRunId,
+        recordBounds: recordBounds,
+        anchorPoint: anchorPoint,
+        extraStations: extraStations,
+        beyondEnds: beyondEnds,
+        ownHalfWidth: ownHalfWidth,
+        keys: keys,
+        keyOnly: keyOnly)!;
+
+/// Fix round 6 part 4 (Obs 9 / T7) — an OPTIONAL tag: [placePlanLabel]'s
+/// own slots under its own reservation rules, committed ONLY when the tag
+/// finds a legal spot (a clear slot, or on a keyed sheet a clear uncrossed
+/// escape within the keyed leader cap). Where [placePlanLabel] would key the
+/// element or print a counted overprint, this returns null and changes
+/// NOTHING in [layout] / [keys]: a failed optional tag never stamps the
+/// sheet, never makes a key and never paginates. Callers place every
+/// required tag first.
+LeaderedLabelPlacement? placeOptionalPlanLabel({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required PlanLabelLayout layout,
+  List<String>? splitLines,
+  String? ownRunId,
+  ({double x, double y})? anchorPoint,
+  double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
+}) =>
+    _placePlanLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: textSize,
+        layout: layout,
+        splitLines: splitLines,
+        ownRunId: ownRunId,
+        anchorPoint: anchorPoint,
+        ownHalfWidth: ownHalfWidth,
+        keys: keys,
+        optional: true);
+
+LeaderedLabelPlacement? _placePlanLabel({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required PlanLabelLayout layout,
+  List<String>? splitLines,
+  String? ownRunId,
+  bool recordBounds = false,
+  ({double x, double y})? anchorPoint,
+  List<({double x, double y})> extraStations = const [],
+  bool beyondEnds = true,
+  double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
+  bool keyOnly = false,
+  bool optional = false,
 }) {
   // Drawing backlog I-3 (a) — a tag inside a keyed cluster goes straight to
   // its key circle.
-  if (keyOnly && keys != null) {
+  if (keyOnly && !optional && keys != null) {
     return _placeKeyTag(
         layout: layout,
         keys: keys,
@@ -1906,6 +2034,7 @@ LeaderedLabelPlacement placePlanLabel({
       (best == null ||
           bestScore.$1 != 0 ||
           bestScore.$5 > kPlanKeyedLeaderMaxFactor * ts + eps)) {
+    if (optional) return null;
     return _placeKeyTag(
         layout: layout,
         keys: keys,
@@ -1915,6 +2044,7 @@ LeaderedLabelPlacement placePlanLabel({
         ownRunId: ownRunId);
   }
   if (best == null) {
+    if (optional) return null;
     // Degenerate (no station within the cap): first escape row at the midpoint.
     final (cx, cy) = along.first;
     final b = block(escapeForms.first, cx, cy, 1, du + lh);
@@ -1927,6 +2057,7 @@ LeaderedLabelPlacement placePlanLabel({
   // Round 29 (drawings-3-6) — so is a tier-2 slot whose LEADER strikes
   // through a placed label (it reads as tagging that label's element).
   if (bestScore.$1 == 3 || (bestScore.$1 == 2 && bestLeaderStrikesLabel)) {
+    if (optional) return null;
     layout._unresolved++;
   }
   return commit(best, anchor: bestA, end: bestE);
@@ -2001,9 +2132,14 @@ LeaderedLabelPlacement _placeKeyTag({
         );
         var cost = 0.0;
         if (layout.hitsBox(box)) cost += 1;
-        // Fix round 4 (R3) — the element's OWN run may pass under the circle
-        // but never through its NUMBER (a key on its own pipe printed the pipe
-        // through its digits); any other run keeps the 0.85 r test.
+        // Fix round 6 part 4 (key 7, tower M-512 Detail C) — the element's
+        // OWN run (and its flow chevron) never passes THROUGH the circle:
+        // fix round 4 tested it only against a tight box round the digits,
+        // so a key hugging its own pipe printed with the pipe through the
+        // circle beside its number. Its own run is tested on the true
+        // circle (within 0.85 r of the centre — it may still meet the
+        // rim, where the key sits against its pipe); any other run keeps
+        // the long-standing 0.85 r box.
         final numBox = (
           minX: cx - tw / 2 - 0.1 * ts,
           minY: cy - 0.5 * ts,
@@ -2012,7 +2148,12 @@ LeaderedLabelPlacement _placeKeyTag({
         );
         for (final rr in layout._runs) {
           final own = rr.id != null && rr.id == ownRunId;
-          if (_segHitsBox(rr.seg, own ? numBox : inkBox, 0)) cost += 1;
+          if (own
+              ? (_segHitsBox(rr.seg, numBox, 0) ||
+                  _segPointDist(rr.seg, cx, cy) < 0.85 * r)
+              : _segHitsBox(rr.seg, inkBox, 0)) {
+            cost += 1;
+          }
         }
         if (lead) {
           final ex = cx - ux * r, ey = cy - uy * r;
@@ -2081,6 +2222,17 @@ LeaderedLabelPlacement _placeKeyTag({
     lines: [line],
     keyCircle: (x: b.x, y: b.y, r: r),
   );
+}
+
+/// Distance from (px, py) to the segment [s]. Pure.
+double _segPointDist(LabelSegment s, double px, double py) {
+  final dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+  final ll = dx * dx + dy * dy;
+  final t = ll == 0
+      ? 0.0
+      : (((px - s.x1) * dx + (py - s.y1) * dy) / ll).clamp(0.0, 1.0);
+  final qx = s.x1 + t * dx - px, qy = s.y1 + t * dy - py;
+  return math.sqrt(qx * qx + qy * qy);
 }
 
 /// Legacy entry point (N3): place [text] for the edge (ax,ay)→(bx,by) against
@@ -2323,3 +2475,11 @@ Map<String, String> planEdgeElevationLabels(
   MountingHeights mounting = const MountingHeights(),
 }) =>
     runCentrelineLabels(net, building, mounting: mounting);
+
+/// Fix round 6 part 2 (New A, 2026-11-20) — the ONE pipe-key table title of
+/// the plans and the risers. Both surfaces key IDENTICAL tag texts once (one
+/// row per distinct tag, its number printed on every segment that carries
+/// it); the title says so, so a key number seen on two circles reads as the
+/// rule.
+const String kPipeKeyTableTitle =
+    'KETERANGAN PIPA / PIPE KEY (same tag = same key)';

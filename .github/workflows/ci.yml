@@ -1,6 +1,6 @@
 name: CI
 
-# Gate on every push and pull request, in two jobs:
+# Gate on every pull request and on every push to main, in two jobs:
 #   verify          (Linux)   the pure Dart engine tests, the Flutter app tests
 #                             incl. golden screenshots, and a clean `flutter
 #                             analyze`.
@@ -10,9 +10,12 @@ name: CI
 # workflow). The Windows job exists because the v1.24.0 release gate failed
 # three times on tests that only fail on Windows (last-bit sin / cos, and file
 # times read at one-second resolution) — found at release time, not on the PR.
+# `push` is limited to main: a commit on a PR branch is gated once, by its
+# `pull_request` run (both triggers used to run both jobs twice per commit).
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Cancel an in-progress run when new commits land on the same ref.

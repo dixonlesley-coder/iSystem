@@ -42,7 +42,8 @@ import '../../store/app_state.dart';
 import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
 import '../../store/fire_store.dart' show fireBreakTankIdsProvider;
-import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
+import '../../store/electrical_feed.dart'
+    show riserEquipmentDetailsProvider, scheduledTransferPumpNodeIdsProvider;
 import '../../store/layer_store.dart'
     show DisciplineLayer, DisciplineLayerInfo, servicesFor;
 import '../../store/models/sheet.dart' show Sheet;
@@ -1179,7 +1180,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     // Round 12 — each node's OWN duty (the shared per-node map the issued
     // riser + the panel feed read), never one system duty on every unit.
     final detailByNode = ref.watch(riserEquipmentDetailsProvider);
-    final transferPumps = ref.watch(transferPumpNodeIdsProvider);
+    final transferPumps = ref.watch(scheduledTransferPumpNodeIdsProvider);
     final fireBreakTanks = ref.watch(fireBreakTankIdsProvider);
     // G2: the hot-water recirculation loop exists when the engine sizes one
     // (the provider is non-null) — draw the HWR return.

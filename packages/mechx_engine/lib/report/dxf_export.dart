@@ -115,10 +115,14 @@ String networkToDxf({
   PlanMarks extraMarks = PlanMarks.empty,
   String? scaleRowOverride,
   Set<String> unlabelledIds = const {},
+  Set<String> optionalLabelIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
       unlabelledIds: unlabelledIds,
+      optionalLabelIds: optionalLabelIds,
+      keyTableAvoidPx: keyTableAvoidPx,
       details: details,
       extraMarks: extraMarks,
       scaleRowOverride: scaleRowOverride,
@@ -387,6 +391,8 @@ String _professionalDxf({
   PlanMarks extraMarks = PlanMarks.empty,
   String? scaleRowOverride,
   Set<String> unlabelledIds = const {},
+  Set<String> optionalLabelIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -630,6 +636,8 @@ String _professionalDxf({
       details: details,
       extraMarks: extraMarks,
       unlabelledIds: unlabelledIds,
+      optionalLabelIds: optionalLabelIds,
+      keyTableAvoidPx: keyTableAvoidPx,
     );
     // Page point → sheet px → model mm (y-up): X = (x − offX) / scale ·
     // mmPerPx + minX · mmPerPx; Y = (y − (pageH − offY)) / scale · mmPerPx −
@@ -677,6 +685,8 @@ String _professionalDxf({
       details: details,
       extraMarks: extraMarks,
       unlabelledIds: unlabelledIds,
+      optionalLabelIds: optionalLabelIds,
+      keyTableAvoidPx: keyTableAvoidPx,
     );
   }
 

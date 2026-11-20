@@ -10,6 +10,9 @@
 //   valve its residual ([mainsPressureCheck]) — judge-only, never resizes.
 // W-3: a transfer pump lifts to the WORST of the tanks it fills (the app's
 //   `transferPumpHead`), each inlet owed [kTankInletResidualHeadM].
+// K-2: the delivered pressure field upstream of a ground tank is on MAINS
+//   pressure ([mainsFeedHeads]): the same available head, lift and sized
+//   feed friction [mainsPressureCheck] judges — one source.
 //
 // Every default here is `// VERIFY` and listed once in
 // `SniProfile.tankFillBasis`.
@@ -149,6 +152,11 @@ class MainsPressureCheck {
   /// lift + friction + inlet residual (m).
   Head get required => Head(liftM + frictionM + inletResidualM);
 
+  /// Backlog K-2 — the head the mains leaves at the tank inlet (the float
+  /// valve): available − lift − friction (m). [ok] exactly when it is at
+  /// least [inletResidualM].
+  Head get inletHead => Head(available.meters - liftM - frictionM);
+
   /// True when the mains head reaches the requirement.
   bool get ok => available.meters >= required.meters - 1e-9;
 }
@@ -168,26 +176,16 @@ MainsPressureCheck? mainsPressureCheck({
   final meter = net.nodeById(feed.meterId);
   final tank = net.nodeById(feed.tankId);
   if (meter == null || tank == null || feed.edgeIds.isEmpty) return null;
-  var friction = 0.0;
-  FlowRate? flow;
-  for (final id in feed.edgeIds) {
-    final e = net.edgeById(id);
-    final sz = sized[id];
-    if (e == null || sz == null || sz.diameter.meters <= 0) return null;
-    flow ??= sz.flow;
-    friction += headLossHazenWilliams(
-      flow: sz.flow,
-      length: Length(lengthOf(e)),
-      diameter: sz.diameter,
-      hazenWilliamsC: coldWaterHazenWilliamsC(e),
-    ).meters;
-  }
+  final frictions = _feedFrictions(net, feed, sized, lengthOf);
+  if (frictions == null) return null;
+  final friction = frictions.fold(0.0, (a, f) => a + f);
+  final flow = sized[feed.edgeIds.first]!.flow;
   final fill = tankFillFlow(tank);
   return MainsPressureCheck(
     meterId: feed.meterId,
     tankId: feed.tankId,
     available: available,
-    flow: flow!,
+    flow: flow,
     fillBasis: fill != null &&
         (fill.cubicMetersPerSecond - flow.cubicMetersPerSecond).abs() <=
             1e-12,
@@ -195,6 +193,82 @@ MainsPressureCheck? mainsPressureCheck({
     frictionM: friction,
     inletResidualM: kTankInletResidualHeadM,
   );
+}
+
+/// The Hazen–Williams friction (m) of each pipe of [feed] at its SIZED flow
+/// over its length at its sized bore, in meter → tank order — the ONE term
+/// [mainsPressureCheck] sums and [mainsFeedHeads] accumulates. Null when a
+/// feed pipe is unsized.
+List<double>? _feedFrictions(
+  Network net,
+  MeterFeed feed,
+  Map<String, ({FlowRate flow, Diameter diameter})> sized,
+  double Function(NetEdge e) lengthOf,
+) {
+  final out = <double>[];
+  for (final id in feed.edgeIds) {
+    final e = net.edgeById(id);
+    final sz = sized[id];
+    if (e == null || sz == null || sz.diameter.meters <= 0) return null;
+    out.add(headLossHazenWilliams(
+      flow: sz.flow,
+      length: Length(lengthOf(e)),
+      diameter: sz.diameter,
+      hazenWilliamsC: coldWaterHazenWilliamsC(e),
+    ).meters);
+  }
+  return out;
+}
+
+/// Backlog K-2 — one node of a mains feed on MAINS pressure.
+typedef MainsFeedHead = ({String nodeId, Head flowing, Head noFlow});
+
+/// Backlog K-2 (2026-11-20) — the MAINS-side heads of [feed]: the meter and
+/// every node of its chain up to (never including) the ground tank, whose
+/// free surface stays the pump-side datum. At node i, with z the
+/// [elevationOf] and F the cumulative sized feed friction from the meter
+/// ([_feedFrictions], the same terms [mainsPressureCheck] judges):
+///   flowing = available − (z_i − z_meter) − F_i,
+///   no-flow = available − (z_i − z_meter).
+/// The meter itself reads the available mains head. The tank inlet's
+/// remaining head is [MainsPressureCheck.inletHead]. Null when a feed pipe is
+/// unsized (the field then keeps the solve's value — never a fabricated
+/// one). Meter → tank order.
+List<MainsFeedHead>? mainsFeedHeads({
+  required Network net,
+  required MeterFeed feed,
+  required Map<String, ({FlowRate flow, Diameter diameter})> sized,
+  required Head available,
+  required double Function(NetEdge e) lengthOf,
+  required double Function(NetNode n) elevationOf,
+}) {
+  final meter = net.nodeById(feed.meterId);
+  if (meter == null || net.nodeById(feed.tankId) == null) return null;
+  if (feed.edgeIds.isEmpty) return null;
+  final frictions = _feedFrictions(net, feed, sized, lengthOf);
+  if (frictions == null) return null;
+  final z0 = elevationOf(meter);
+  final out = <MainsFeedHead>[
+    (nodeId: meter.id, flowing: available, noFlow: available),
+  ];
+  var cur = meter.id;
+  var f = 0.0;
+  for (var i = 0; i < feed.edgeIds.length; i++) {
+    final e = net.edgeById(feed.edgeIds[i])!;
+    final next = e.fromId == cur ? e.toId : e.fromId;
+    f += frictions[i];
+    if (next == feed.tankId) break;
+    final n = net.nodeById(next);
+    if (n == null) return null;
+    final lift = elevationOf(n) - z0;
+    out.add((
+      nodeId: next,
+      flowing: Head(available.meters - lift - f),
+      noFlow: Head(available.meters - lift),
+    ));
+    cur = next;
+  }
+  return out;
 }
 
 /// Backlog W-4 (2026-11-14) — the daily water demand (litres / day) of

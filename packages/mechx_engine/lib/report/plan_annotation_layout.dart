@@ -25,8 +25,7 @@ import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../units.dart' show Length;
-import 'drawing_chrome.dart'
-    show LabelBox, helveticaTextWidth, kMinPlotTextMm;
+import 'drawing_chrome.dart' show LabelBox, helveticaTextWidth, kMinPlotTextMm;
 import 'plan_detail.dart';
 import 'plan_symbols.dart';
 
@@ -92,9 +91,7 @@ class PlanSheetPlot {
   /// model-mm layout (legacy callers).
   final PlanPageFrame? frame;
   const PlanSheetPlot(
-      {required this.scaleDenominator,
-      this.occupiedPx = const [],
-      this.frame});
+      {required this.scaleDenominator, this.occupiedPx = const [], this.frame});
 }
 
 /// Drawing backlog L-1 — the plan PDF's page geometry for one sheet: sheet
@@ -299,6 +296,12 @@ class PlanAnnotations {
   /// Drawing review R1 — the sheet-pixel anchor of every annotated element
   /// on the floor (runs at their mid-point, nodes, riser markers).
   final List<({double x, double y})> elementAnchorsPx;
+
+  /// Fix round 6 part 4 — of the OPTIONAL tags (a coarse detail window's
+  /// margin), how many found a legal spot and printed, and how many were
+  /// skipped (left as plan context; never keyed nor counted).
+  final int optionalPlaced;
+  final int optionalSkipped;
   const PlanAnnotations(
       {this.grid = const [],
       this.upDown = const [],
@@ -308,7 +311,9 @@ class PlanAnnotations {
       this.keyTable,
       this.marks = PlanMarks.empty,
       this.unresolvedAnchorsPx = const [],
-      this.elementAnchorsPx = const []});
+      this.elementAnchorsPx = const [],
+      this.optionalPlaced = 0,
+      this.optionalSkipped = 0});
 }
 
 /// Round 24 — the minimum PAPER width (mm) at which a sized duct is drawn
@@ -470,6 +475,8 @@ PlanAnnotations layoutPlanAnnotations({
   List<PlanDetailCallout> details = const [],
   PlanMarks extraMarks = PlanMarks.empty,
   Set<String> unlabelledIds = const {},
+  Set<String> optionalLabelIds = const {},
+  List<LabelBox> keyTableAvoidPx = const [],
   Map<String, String> flowFromIds = const {},
 }) {
   // Drawing review R1 — an element anchored inside a detail boundary is
@@ -582,6 +589,9 @@ PlanAnnotations layoutPlanAnnotations({
   final mLines = <PlanMarkLine>[];
   final mCircles = <PlanMarkCircle>[];
   final mTexts = <PlanMarkText>[];
+  // Fix round 6 part 2 (T10) — EVERY detail boundary is registered before
+  // any bubble is placed: a bubble placed first used to sit on a later
+  // detail's boundary (tower M-130 bubble B).
   for (final d in details) {
     if (d.keyed) continue;
     final r = d.rectPx;
@@ -597,6 +607,13 @@ PlanAnnotations layoutPlanAnnotations({
       mLines.add(PlanMarkLine(ax, ay, bx, by, dashed: true));
       layout.addRun(null, ax, ay, bx, by);
     }
+  }
+  for (final d in details) {
+    if (d.keyed) continue;
+    final r = d.rectPx;
+    final c00 = map(r.minX, r.minY), c11 = map(r.maxX, r.maxY);
+    final x0 = math.min(c00.x, c11.x), x1 = math.max(c00.x, c11.x);
+    final y0 = math.min(c00.y, c11.y), y1 = math.max(c00.y, c11.y);
     // The bubble (letter) + caption at the first clear corner.
     final rb = kPlanDetailBubbleMm * u;
     final lts = kPlanDetailLetterMm * u;
@@ -616,6 +633,15 @@ PlanAnnotations layoutPlanAnnotations({
         (x0, y1, -1.0, 1.0, step),
         (x1, y0, 1.0, -1.0, step),
         (x0, y0, -1.0, -1.0, step),
+        // Fix round 6 part 2 (T10) — on the first ring the bubble may also
+        // sit at a side's midpoint, tangent to the boundary (no leader), so
+        // a corner on a run does not push it out onto a long leader.
+        if (step == 1.0) ...[
+          ((x0 + x1) / 2, y1, 0.0, 1.0, step),
+          ((x0 + x1) / 2, y0, 0.0, -1.0, step),
+          (x1, (y0 + y1) / 2, 1.0, 0.0, step),
+          (x0, (y0 + y1) / 2, -1.0, 0.0, step),
+        ],
       ],
     ]) {
       for (final capSide in [sx, -sx]) {
@@ -653,10 +679,22 @@ PlanAnnotations layoutPlanAnnotations({
         );
         final leaderClear =
             !far || (!layout.hitsRun(lb, clearance: 0) && !layout.hitsBox(lb));
+        // Fix round 6 part 2 (T10) — the bubble is tested against every run
+        // and flow chevron on the FIRST ring too (it used to skip the run test
+        // there, so bubble B sat on the FH-L1 run over its chevron). Its box
+        // is inset a hair so the detail's own dashed boundary, which it only
+        // touches at the corner, is no obstacle.
+        final inset = 0.08 * rb;
+        final bbIn = (
+          minX: bb.minX + inset,
+          minY: bb.minY + inset,
+          maxX: bb.maxX - inset,
+          maxY: bb.maxY - inset
+        );
         if (!layout.hitsBox(bb) &&
             !layout.hitsBox(cb) &&
             !layout.hitsRun(cb, clearance: 0.1 * ts) &&
-            (!far || !layout.hitsRun(bb, clearance: 0)) &&
+            !layout.hitsRun(bbIn, clearance: 0) &&
             leaderClear) {
           bubbleBox = bb;
           capBox = cb;
@@ -687,14 +725,14 @@ PlanAnnotations layoutPlanAnnotations({
       layout.addRun(null, leadX, leadY, ex, ey);
     }
     mCircles.add(PlanMarkCircle(bx, by, rb));
-    mTexts.add(PlanMarkText(
-        bx - helveticaTextWidth(d.letter, lts) / 2, by - 0.36 * lts, lts, d.letter));
+    mTexts.add(PlanMarkText(bx - helveticaTextWidth(d.letter, lts) / 2,
+        by - 0.36 * lts, lts, d.letter));
     mTexts.add(PlanMarkText(capX, by - 0.36 * ts, ts, d.caption));
   }
   for (final l in extraMarks.lines) {
     final a = map(l.x1, l.y1), b = map(l.x2, l.y2);
-    mLines.add(PlanMarkLine(a.x, a.y, b.x, b.y,
-        dashed: l.dashed, heavy: l.heavy));
+    mLines.add(
+        PlanMarkLine(a.x, a.y, b.x, b.y, dashed: l.dashed, heavy: l.heavy));
     layout.addRun(null, a.x, a.y, b.x, b.y);
   }
   for (final c in extraMarks.circles) {
@@ -948,6 +986,7 @@ PlanAnnotations layoutPlanAnnotations({
     final mx = (a.x + c.x) / 2, my = (a.y + c.y) / 2;
     anchors.add((x: mx, y: my));
     if (inDetail(mx, my) || unlabelledIds.contains(e.id)) continue;
+    if (optionalLabelIds.contains(e.id)) continue; // placed last (optional)
     final before = layout.unresolvedCount;
     final pa = map(a.x, a.y), pc = map(c.x, c.y);
     labels.add(PlanPlacedLabel(
@@ -1009,9 +1048,12 @@ PlanAnnotations layoutPlanAnnotations({
       if (tag == null || tag.isEmpty) continue;
       anchors.add((x: n.x, y: n.y));
       if (inDetail(n.x, n.y) || unlabelledIds.contains(n.id)) continue;
+      if (optionalLabelIds.contains(n.id)) continue; // placed last (optional)
       final before = layout.unresolvedCount;
       final p = map(n.x, n.y);
-      labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id,
+      labels.add(PlanPlacedLabel(
+          PlanLabelKind.equipment,
+          n.id,
           pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null,
               keyOnly: inKeyed(n.x, n.y)),
           ts));
@@ -1041,12 +1083,75 @@ PlanAnnotations layoutPlanAnnotations({
     }
     final before = layout.unresolvedCount;
     final p = map(marker.x, marker.y);
-    labels.add(PlanPlacedLabel(PlanLabelKind.riser, e.id,
+    labels.add(PlanPlacedLabel(
+        PlanLabelKind.riser,
+        e.id,
         pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split,
             keyOnly: inKeyed(marker.x, marker.y)),
         ts));
     if (layout.unresolvedCount > before) {
       unresolvedAt.add((x: marker.x, y: marker.y));
+    }
+  }
+
+  // Fix round 6 part 4 (Obs 9 / T7) — OPTIONAL tags last, after every
+  // required one (so none can displace a required tag): each is placed only
+  // where it finds a legal spot; one that does not stays unlabelled context
+  // — never keyed, never counted in the overlap stamp, never paginating.
+  var optionalPlaced = 0, optionalSkipped = 0;
+  if (optionalLabelIds.isNotEmpty) {
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.run || !optionalLabelIds.contains(e.id)) continue;
+      final l = edgeLabels[e.id];
+      if (l == null) continue;
+      final a = net.nodeById(e.fromId);
+      final c = net.nodeById(e.toId);
+      if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
+      final mx = (a.x + c.x) / 2, my = (a.y + c.y) / 2;
+      if (inDetail(mx, my) || unlabelledIds.contains(e.id)) continue;
+      final pa = map(a.x, a.y), pc = map(c.x, c.y);
+      final placed = placeOptionalPlanLabel(
+          ax: pa.x,
+          ay: pa.y,
+          bx: pc.x,
+          by: pc.y,
+          text: l.text,
+          splitLines: l.split,
+          textSize: ts,
+          layout: layout,
+          ownRunId: e.id,
+          ownHalfWidth: runHalfWidths[e.id] ?? 0,
+          keys: keys);
+      if (placed == null) {
+        optionalSkipped++;
+        continue;
+      }
+      optionalPlaced++;
+      labels.add(PlanPlacedLabel(PlanLabelKind.run, e.id, placed, ts));
+    }
+    for (final n in net.nodes) {
+      if (!onFloor(n) || !optionalLabelIds.contains(n.id)) continue;
+      final tag = allNodeTags[n.id];
+      if (tag == null || tag.isEmpty) continue;
+      if (inDetail(n.x, n.y) || unlabelledIds.contains(n.id)) continue;
+      final p = map(n.x, n.y);
+      final x0 = p.x + kPlanEquipmentTagGapMm * u;
+      final placed = placeOptionalPlanLabel(
+          ax: x0,
+          ay: p.y,
+          bx: x0 + helveticaTextWidth(tag, ts),
+          by: p.y,
+          text: tag,
+          textSize: ts,
+          layout: layout,
+          anchorPoint: (x: p.x, y: p.y),
+          keys: keys);
+      if (placed == null) {
+        optionalSkipped++;
+        continue;
+      }
+      optionalPlaced++;
+      labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id, placed, ts));
     }
   }
 
@@ -1067,6 +1172,19 @@ PlanAnnotations layoutPlanAnnotations({
     final pad = 80 * ts;
     keyTable = placePlanKeyTable(layout, keys,
         textSize: ts,
+        // Fix round 6 part 3 (Obs 11) — no block inside a detail window.
+        avoid: [
+          for (final w in keyTableAvoidPx)
+            () {
+              final a = map(w.minX, w.minY), c = map(w.maxX, w.maxY);
+              return (
+                minX: math.min(a.x, c.x),
+                minY: math.min(a.y, c.y),
+                maxX: math.max(a.x, c.x),
+                maxY: math.max(a.y, c.y)
+              );
+            }(),
+        ],
         bounds: (
           minX: x0 - pad,
           minY: y0 - pad,
@@ -1084,5 +1202,7 @@ PlanAnnotations layoutPlanAnnotations({
       keyTable: keyTable,
       marks: PlanMarks(lines: mLines, circles: mCircles, texts: mTexts),
       unresolvedAnchorsPx: unresolvedAt,
-      elementAnchorsPx: anchors);
+      elementAnchorsPx: anchors,
+      optionalPlaced: optionalPlaced,
+      optionalSkipped: optionalSkipped);
 }

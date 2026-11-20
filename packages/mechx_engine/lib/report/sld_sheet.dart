@@ -46,11 +46,17 @@ class SldLine extends SldPrim {
   /// canvas walked dash segments). Default false ⇒ solid, byte-identical.
   final bool dashed;
 
+  /// Fix round 6 (C9) — true ⇒ the plans' DASH-DOT (fire services: PDF
+  /// `[10 3 2 3]`, DXF `DASHDOT`), so a legend swatch draws the exact line
+  /// style the plans use. Default false ⇒ byte-identical.
+  final bool dashDot;
+
   const SldLine(this.x1, this.y1, this.x2, this.y2,
       {this.weight = SldWeight.thin,
       this.role = SldRole.normal,
       this.layer,
-      this.dashed = false});
+      this.dashed = false,
+      this.dashDot = false});
 }
 
 class SldRect extends SldPrim {

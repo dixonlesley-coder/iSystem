@@ -618,8 +618,29 @@ AdvancedStudy computeAdvancedStudy(
   // for the genset-start dip screen come from the sized motor/pump circuits.
   PowerOneLine? powerOneLine;
   final arrangement = serviceArrangementOf(project, sys);
+  // Fix round 6 part 2 (Obs 7) — the E-501 boxes print the figures E-301
+  // prints for the same equipment: the root board's incomer, its busbar, and
+  // the transfer switch's backed board.
+  String? head(ElectricalPanelResult? p) => p == null
+      ? null
+      : '${p.name} ${_n(p.incomer.breaker.ratingA.amperes)}A '
+          '${p.incomer.poles}P';
+  final rootIds = [
+    for (final id in sys.order)
+      if (project.panels.where((m) => m.id == id).firstOrNull?.fedByCircuitId ==
+          null)
+        id,
+  ];
+  final root = rootIds.length == 1 ? sys.panels[rootIds.single] : null;
+  final xferBoards = arrangement.transfer?.boards ?? const <String>[];
+  final xferPanel = xferBoards.length == 1
+      ? sys.panels.values.where((p) => p.name == xferBoards.single).firstOrNull
+      : null;
   if (project.sources != null) {
     powerOneLine = buildPowerOneLine(
+      mainPanelSub: head(root),
+      mainBusRatingA: root?.busbar.ampacityA.amperes,
+      transferSub: head(xferPanel),
       project.sources!,
       demand: sys.supply.demandVa,
       // Round 13 — the genset backs max(fraction × demand, the essential
@@ -2163,3 +2184,6 @@ String? powerOneLineUtilitySub(
   }
   return 'MV via TX $fig kVA';
 }
+
+String _n(double v) =>
+    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);

@@ -89,7 +89,9 @@ class RainfallController extends Notifier<double> {
 /// Backlog W-2 (2026-11-14) — the AVAILABLE MAINS (PDAM) pressure at the
 /// water meter, as head (m). Default [kDefaultMainsHeadM] (10 m, `// VERIFY`,
 /// deliberately low). Judge-only input: the mains-pressure check at each
-/// meter feeding a ground tank reads it; no size depends on it.
+/// meter feeding a ground tank reads it; no size depends on it. Backlog K-2
+/// — the delivered field's MAINS side (meter -> ground tank,
+/// `mainsFeedFieldProvider`) starts from it too.
 final mainsHeadProvider =
     NotifierProvider<MainsHeadController, double>(MainsHeadController.new);
 

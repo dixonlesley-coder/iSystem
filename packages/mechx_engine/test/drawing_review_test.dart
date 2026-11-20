@@ -209,7 +209,7 @@ void main() {
           final keyed = s.prims.whereType<SldCircle>().isNotEmpty;
           final table = s.prims
               .whereType<SldLabel>()
-              .any((l) => l.text == 'KETERANGAN PIPA / PIPE KEY');
+              .any((l) => l.text == kPipeKeyTableTitle);
           expect(table, keyed, reason: '$name $range');
         }
       });
@@ -298,7 +298,7 @@ void main() {
           textSize: ts, bounds: (minX: 0, minY: 0, maxX: 1200, maxY: 1200));
       expect(table, isNotNull);
       final texts = table!.texts.map((t) => t.text).toList();
-      expect(texts, contains('KETERANGAN PIPA / PIPE KEY'));
+      expect(texts, contains(kPipeKeyTableTitle));
       expect(texts, containsAll(['CW-L3 \u00b7 DN15', '4.1 m - CL +3.70']));
       expect(layout.unresolvedCount, 0);
     });

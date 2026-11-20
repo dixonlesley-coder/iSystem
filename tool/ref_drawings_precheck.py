@@ -480,6 +480,44 @@ def key_circle_hits(pdf, clear=0.3):
     return out
 
 
+def key_circle_run_hits(pdf, frac=0.85):
+    """Fix round 6 part 4 (Obs 12, item 6) - {page: [key]}: a KEY circle
+    (its own text a number) that a stroke passes THROUGH - a run, its own
+    run included, a chevron, a frame - on a plan or detail sheet. Fix round
+    4's glyph test (R3) shrinks the digit quads, so a pipe through the
+    circle beside its digit (tower M-512 Detail C, key 7) escaped it. A
+    stroke counts when it comes within [frac] r of the centre; the key's
+    own leader ends ON the circle (distance r) and never counts."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            segs = _page_lines(pg)
+            hits = []
+            for cx, cy, r in page_circles(pg):
+                own = [k for k in range(len(chars))
+                       if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                              for x, y in quads[k])]
+                key = ''.join(chars[k]['text'] for k in
+                              sorted(own, key=lambda k: chars[k]['x0']))
+                if not re.fullmatch(r'\d{1,3}', key):
+                    continue
+                for x1, y1, x2, y2, *_ in segs:
+                    dx, dy = x2 - x1, y2 - y1
+                    ll = dx * dx + dy * dy
+                    t = 0.0 if ll == 0 else max(0.0, min(1.0, (
+                        (cx - x1) * dx + (cy - y1) * dy) / ll))
+                    px, py = x1 + t * dx, y1 + t * dy
+                    if ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 < frac * r:
+                        hits.append(key)
+                        break
+            if hits:
+                out[i] = hits
+    return out
+
+
 def symbol_text_hits(pdf):
     """Fix round 3 (S1) - {page: [text]}: on a power one-line, a text run
     (consecutive glyphs on one line) that touches a symbol circle it is not
@@ -870,6 +908,396 @@ def red_text_lines(pgp):
             rows[round(c['top'])].append(c)
     return [''.join(c['text'] for c in sorted(v, key=lambda q: q['x0']))
             for _, v in sorted(rows.items())]
+# ── Fix round 6 (third review, 2026-11-20) ──────────────────────────────────
+
+EQUIP_TAG = re.compile(r'^((?:TK|P|AHU|FCU|EF|SF|BP|WH)-\d+)\b')
+
+
+def key_table_rows(pdf):
+    """Fix round 6 - every riser / plan KETERANGAN PIPA row as
+    (page, key, tag, length, level), read from the column headers' x."""
+    out = []
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+            heads = [w for w in ws if w['text'].strip() == 'KEY']
+            for h in heads:
+                row = [w for w in ws if abs(w['top'] - h['top']) < 0.5
+                       and w['x0'] > h['x0']]
+                tag = next((w for w in row if w['text'].startswith(
+                    'SIZE-SERVICE')), None)
+                ln = next((w for w in row if w['text'].strip() == 'LENGTH'),
+                          None)
+                lv = next((w for w in row if w['text'].strip() == 'LEVEL'),
+                          None)
+                if not (tag and ln and lv):
+                    continue
+                nxt = [w['x0'] for w in heads if abs(w['top'] - h['top'])
+                       < 0.5 and w['x0'] > lv['x0']]
+                right = min(nxt) - 2 if nxt else lv['x0'] + 120
+                rows = defaultdict(dict)
+                for w in ws:
+                    if w['top'] <= h['top'] + 1 or w['top'] > h['top'] + 400:
+                        continue
+                    if not (h['x0'] - 2 <= w['x0'] < right):
+                        continue
+                    col = ('level' if w['x0'] >= lv['x0'] - 1 else
+                           'length' if w['x0'] >= ln['x0'] - 1 else
+                           'tag' if w['x0'] >= tag['x0'] - 1 else 'key')
+                    r = rows[round(w['top'], 0)]
+                    r[col] = (r.get(col, '') + ' ' + w['text']).strip()
+                for top in sorted(rows):
+                    r = rows[top]
+                    if r.get('key', '').isdigit():
+                        out.append((i, r['key'], r.get('tag', ''),
+                                    r.get('length', ''), r.get('level', '')))
+    return out
+
+
+def plan_tag_floors(bdir, project):
+    """{equipment tag: {floor names}} from every mechanical plan / detail
+    sheet (`plan-<n>-<floor>[-detail[-k]]`)."""
+    out = defaultdict(set)
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        st = stem_of(f)
+        if '-elec-plan-' in st:
+            continue
+        m = re.search(r'-plan-\d+-(.+?)(?:-detail(?:-\d+)?)?$', st)
+        if not m:
+            continue
+        for t in set(re.findall(r'\b((?:TK|P)-\d+)\b', pdftext(f))):
+            out[t].add(m.group(1))
+    return out
+
+
+def round6_checks(bdir, project, pages, emit, lines):
+    """Fix round 6 classes T1..T10 / C-items that a script can see."""
+    risers = [f for f in glob.glob(os.path.join(bdir, '*-riser-sld.pdf'))]
+    # T1 - an equipment row of the riser key table names the floor the
+    # plans draw that equipment on.
+    lines += ['', '## Fix round 6 - T1 riser key LEVEL vs the plan floor']
+    floors = plan_tag_floors(bdir, project)
+    for f in risers:
+        bad, n = [], 0
+        for (pgno, key, tag, _, level) in key_table_rows(f):
+            m = EQUIP_TAG.match(tag)
+            if not m or m.group(1) not in floors or ',' in level:
+                continue
+            n += 1
+            # A roof tank parks on the roof band (ATAP) of the top floor.
+            if level == 'ATAP' and m.group(1).startswith('TK-'):
+                continue
+            if level and level not in floors[m.group(1)]:
+                bad.append(f'p{pgno} key {key} {m.group(1)} LEVEL {level}, '
+                           f'plan {"/".join(sorted(floors[m.group(1)]))}')
+        emit('T1', 'FAIL' if bad else 'PASS', short(stem_of(f), project),
+             '; '.join(bad[:6]) if bad else f'{n} keyed equipment rows on '
+             'their plan floor')
+
+    # T2 - the pump-set detail names each mover as the schedule does: per
+    # duty (Q, H) the TRANSFER captions equal the schedule's transfer rows.
+    lines += ['', '## Fix round 6 - T2 pump-set captions vs M-601']
+    sched = glob.glob(os.path.join(bdir, '*-equipment-schedule.pdf'))
+    stext = pdftext(sched[0]) if sched else ''
+    for f in risers:
+        caps = re.findall(r'(TRANSFER|BOOSTER) PUMP Q (\S+) L/s · H (\S+) m',
+                          pdftext(f))
+        bad = []
+        for (q, h) in sorted({(q, h) for _, q, h in caps}):
+            rows = [l for l in stext.splitlines()
+                    if f'{q} L/s @ {h} m' in l]
+            if not rows:
+                continue
+            want = sum(1 for l in rows if 'Transfer pump' in l)
+            got = sum(1 for n, qq, hh in caps
+                      if (qq, hh) == (q, h) and n == 'TRANSFER')
+            if want != got:
+                bad.append(f'{q} L/s @ {h} m: {got} TRANSFER caption(s), '
+                           f'{want} transfer row(s) on M-601')
+        emit('T2', 'FAIL' if bad else 'PASS', short(stem_of(f), project),
+             '; '.join(bad) if bad else f'{len(caps)} captions agree')
+
+    # T3 - every terminal kind the BRANCHES column counts is drawn (a label
+    # or a key row on the same page); T3/T8 - no two identical continuation
+    # marks are stacked on one line (two risers on one column, or marks
+    # piled at one corner).
+    lines += ['', '## Fix round 6 - T3 BRANCHES kinds drawn; T3/T8 stacked '
+              'continuation marks']
+    for f in risers:
+        miss, stack = [], []
+        keyrows = defaultdict(list)
+        for (pgno, _, tag, _, _) in key_table_rows(f):
+            keyrows[pgno].append(tag)
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+                hd = [w for w in ws if w['text'].strip() == 'BRANCHES']
+                kinds = []
+                for h in hd:
+                    lh = h['bottom'] - h['top']
+                    y = h['bottom']
+                    col = sorted((w for w in ws if abs(w['x0'] - h['x0']) <
+                                  25 and w['top'] > h['top'] + 0.5),
+                                 key=lambda w: w['top'])
+                    for w in col:
+                        if w['top'] - y > 1.5 * lh:
+                            break
+                        y = w['bottom']
+                        kinds.append((w, re.sub(r' x\d+$', '',
+                                                w['text'].strip())))
+                inlist = {id(w) for w, _ in kinds}
+                labels = [w['text'].strip() for w in ws if id(w) not in inlist]
+                labels += keyrows.get(i, [])
+                for _, k in kinds:
+                    if len(k) < 2:
+                        continue
+                    if not any(t == k or t.startswith(k + ' ') or
+                               re.search(r'(^|\s)' + re.escape(k) + r'(\s|$)',
+                                         t) for t in labels):
+                        miss.append(f'p{i} "{k}"')
+                # Key-table TAG cells (a keyed mark is listed in the table,
+                # one row under the other by design) are not drawn marks.
+                tagx = [w['x0'] for w in ws
+                        if w['text'].startswith('SIZE-SERVICE')]
+                marks = [w for w in ws
+                         if w['text'].strip().startswith(('LANJUT KE',
+                                                          'LANJUTAN DARI'))
+                         and not any(abs(w['x0'] - x) < 2 for x in tagx)]
+                for a in range(len(marks)):
+                    for b in range(a + 1, len(marks)):
+                        m1, m2 = marks[a], marks[b]
+                        lh = m1['bottom'] - m1['top']
+                        if (m1['text'].strip() == m2['text'].strip() and
+                                abs(m1['x0'] - m2['x0']) < 1.0 and
+                                abs(m1['top'] - m2['top']) < 1.6 * lh):
+                            stack.append(f'p{i} "{m1["text"].strip()}"')
+        emit('T3', 'FAIL' if miss else 'PASS', short(stem_of(f), project),
+             'listed, not drawn: ' + ', '.join(sorted(set(miss))[:8])
+             if miss else 'every BRANCHES kind is drawn')
+        emit('T8', 'FAIL' if stack else 'PASS', short(stem_of(f), project),
+             'stacked marks: ' + ', '.join(sorted(set(stack))[:8])
+             if stack else 'no stacked continuation marks')
+
+    # C-items (cross-surface consistency).
+    def one(pattern):
+        g = glob.glob(os.path.join(bdir, pattern))
+        return g[0] if g else None
+    rp = [f for f in glob.glob(os.path.join(bdir, '*-report.md'))
+          if not f.endswith(('-mep-report.md', '-electrical-report.md'))]
+    rtext = open(rp[0]).read() if rp else ''
+    rtext_n = re.sub(r'\*\*', '', rtext)
+    lines += ['', '## Fix round 6 - C1 pump heads, C2 tank capacities, '
+              'C5 (auto) mark, C6 M-601, C8 genset share, C9 G-003 cables']
+    heads = set(re.findall(r'L/s @ (\d+(?:\.\d+)?) m', stext))
+    bad = []
+    for v in re.findall(r'(?:@|pump|head|jockey)\s+\+?(\d+(?:\.\d+)?) m\b',
+                        rtext_n):
+        for h in heads:
+            if v != h and abs(float(v) - float(h)) <= 0.5 and \
+                    float(h) > 0 and v not in heads:
+                bad.append(f'report {v} m vs M-601 {h} m')
+    emit('C1', 'FAIL' if bad else 'PASS', 'calc report vs M-601',
+         '; '.join(sorted(set(bad))[:6]) if bad else
+         f'{len(heads)} schedule heads, none printed at another precision')
+    raw = sorted(set(re.findall(r'tank \d{4,} L\b', rtext_n)))
+    emit('C2', 'FAIL' if raw else 'PASS', 'calc report tank capacities',
+         ', '.join(raw[:6]) if raw else 'no capacity printed as raw litres')
+    autos, defined = [], True
+    for f in risers:
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                t = pg.extract_text() or ''
+                if '(auto)' in t and 'Sized by the app from daily demand' \
+                        not in t and '(auto) = sized' not in t:
+                    autos.append(f'p{i}')
+    any_auto = any('(auto)' in pdftext(f) for f in risers)
+    cov = one('*-00-cover-sheets.pdf')
+    if any_auto and cov and 'Sized by the app from daily demand' not in \
+            pdftext(cov):
+        defined = False
+    bad5 = ([f'riser {",".join(autos)} prints (auto) undefined'] if autos
+            else []) + ([] if defined else ['G-003 does not define (auto)'])
+    emit('C5', 'FAIL' if bad5 else 'PASS', '(auto) mark',
+         '; '.join(bad5) if bad5 else 'defined wherever printed')
+    bad6 = []
+    if sched:
+        with pdfplumber.open(sched[0]) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                t = pg.extract_text() or ''
+                if re.search(r'Page \d+ of \d+', t) and 'SHEET' in t:
+                    bad6.append(f'p{i} two page counters')
+        svc = Counter()
+        for l in stext.splitlines():
+            m = re.match(r'^(P-\d+) (Fire .*?) \d+(?:\.\d+)? L/s', l)
+            if m:
+                svc[m.group(2).strip()] += 1
+        bad6 += [f'{k} x{n}' for k, n in svc.items() if n > 1]
+    emit('C6', 'FAIL' if bad6 else 'PASS', 'M-601',
+         '; '.join(bad6) if bad6 else 'one numbering; fire rows distinct')
+    bad8 = []
+    for pat in ('*-electrical-overview-sld.pdf', '*-electrical-riser.pdf'):
+        f = one(pat)
+        if f and re.search(r'backs \d+% of load', pdftext(f)):
+            bad8.append(f'{short(stem_of(f), project)}: rating printed as '
+                        'the backed share')
+    emit('C8', 'FAIL' if bad8 else 'PASS', 'genset backed share',
+         '; '.join(bad8) if bad8 else 'no rating-as-share label')
+    fams = r'\b(NYY|NYM|FRC|NYYHY|NYA|N2XSY|NA2XY|N2XY|NYFGbY)\b'
+    sld = one('*-electrical-sld.pdf')
+    if sld and cov:
+        used = set(re.findall(fams, pdftext(sld)))
+        listed = set(re.findall(fams, pdftext(cov)))
+        miss = sorted(used - listed)
+        emit('C9', 'FAIL' if miss else 'PASS', 'G-003 cable families',
+             f'printed on E-201, not on G-003: {", ".join(miss)}' if miss
+             else f'{len(used)} families all listed')
+
+    # T5 - a detail window's scale-bar end labels never run together
+    # ('0' + '500 mm' read as '0500 mm').
+    bad5 = []
+    for f in glob.glob(os.path.join(bdir, '*-detail*.pdf')):
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                ws = pg.extract_words(x_tolerance=1.5)
+                zeros = [w for w in ws if w['text'] == '0']
+                for z in zeros:
+                    for w in ws:
+                        if w is z or not re.match(r'^\d+(\.\d+)?$',
+                                                  w['text']):
+                            continue
+                        unit = any(u['text'] in ('mm', 'm') and
+                                   abs(u['top'] - w['top']) < 0.5 and
+                                   0 <= u['x0'] - w['x1'] < 3 for u in ws)
+                        if unit and abs(w['top'] - z['top']) < 0.5 and \
+                                0 <= w['x0'] - z['x1'] < 0.6 * (
+                                    z['bottom'] - z['top']):
+                            bad5.append(f'{short(stem_of(f), project)} '
+                                        f'p{i} "0" + "{w["text"]}"')
+                for w in ws:
+                    if re.match(r'^0\d+$', w['text']):
+                        bad5.append(f'{short(stem_of(f), project)} p{i} '
+                                    f'"{w["text"]}"')
+    emit('T5', 'FAIL' if bad5 else 'PASS', 'detail scale bars',
+         '; '.join(sorted(set(bad5))[:6]) if bad5 else
+         'every scale-bar label clear of the next')
+
+    # T10 - a detail BUBBLE (a circle holding a capital letter) on a plan is
+    # struck by no line other than its own leader (which ends on its edge).
+    bad10 = []
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        if '-elec-plan-' in f or '-detail' in f:
+            continue
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                H = float(pg.height)
+                chars = [ch for ch in pg.chars if ch['text'].strip()]
+                quads = [glyph_quad(ch, H) for ch in chars]
+                lines10 = _page_lines(pg)
+                for cx, cy, r in page_circles(pg):
+                    own = [chars[k]['text'] for k in range(len(chars))
+                           if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                                  for x, y in quads[k])]
+                    t = ''.join(own)
+                    if not re.fullmatch(r'[A-Z]{1,2}', t):
+                        continue
+                    for (x1, y1, x2, y2, _, col) in lines10:
+                        if _grey(col):
+                            continue
+                        d1 = ((x1 - cx) ** 2 + (y1 - cy) ** 2) ** 0.5
+                        d2 = ((x2 - cx) ** 2 + (y2 - cy) ** 2) ** 0.5
+                        if abs(d1 - r) < 0.6 or abs(d2 - r) < 0.6:
+                            continue  # a leader ending on the edge
+                        if _seg_point_dist(cx, cy, x1, y1, x2, y2) < r - 0.5:
+                            bad10.append(f'{short(stem_of(f), project)} p{i} '
+                                         f'bubble {t}')
+                            break
+    emit('T10', 'FAIL' if bad10 else 'PASS', 'plan detail bubbles',
+         '; '.join(sorted(set(bad10))[:6]) if bad10 else
+         'no bubble struck by a run / chevron')
+
+    # New A - a pipe-key table states its one rule (identical tags share one
+    # key, printed on every segment that carries it).
+    badA = []
+    for f in glob.glob(os.path.join(bdir, '*.pdf')):
+        if f.endswith(REPORT_SUFFIXES):
+            continue
+        t = pdftext(f)
+        if 'KETERANGAN PIPA' in t and 'same tag = same key' not in t:
+            badA.append(short(stem_of(f), project))
+    emit('A', 'FAIL' if badA else 'PASS', 'pipe-key table rule',
+         'title without the rule: ' + ', '.join(sorted(badA)[:6]) if badA
+         else 'every pipe-key table states it')
+
+    # Obs 7 - E-501's board / switch boxes print a rating, the one E-301
+    # prints for the same board.
+    e501 = one('*-electrical-power-one-line.pdf')
+    e301 = one('*-electrical-overview-sld.pdf')
+    if e501 and e301:
+        r501 = set(re.findall(r'\b\d+A \dP\b', pdftext(e501)))
+        r301 = set(re.findall(r'\b\d+A \dP\b', pdftext(e301)))
+        bad7 = ([] if r501 else ['no board rating on E-501']) + [
+            f'{t} not on E-301' for t in sorted(r501 - r301)]
+        emit('O7', 'FAIL' if bad7 else 'PASS', 'E-501 ratings',
+             '; '.join(bad7) if bad7 else
+             f'{", ".join(sorted(r501))} as on E-301')
+
+    # T4 - a plan carrying a fire zone break tank keys it 'Fire break tank'
+    # in its legend (the riser's derived name), never only 'Roof tank'.
+    bad4 = []
+    bt = set()
+    for f in risers:
+        bt |= set(re.findall(r'\b(TK-\d+) Fire break tank', pdftext(f)))
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        if '-elec-plan-' in f:
+            continue
+        t = pdftext(f)
+        for tag in bt:
+            if re.search(r'\b' + re.escape(tag) + r'\b', t) and \
+                    'Fire break tank' not in t:
+                bad4.append(f'{short(stem_of(f), project)} ({tag})')
+    emit('T4', 'FAIL' if bad4 else 'PASS', 'plan legend break tank',
+         '; '.join(sorted(bad4)[:6]) if bad4 else
+         f'{len(bt)} break tank(s) keyed by name')
+
+    # Obs 11 - a key-table header never sits inside a detail window (a
+    # framed rectangle on a detail sheet, not the page border / title block).
+    bad11 = []
+    for f in glob.glob(os.path.join(bdir, '*-detail*.pdf')):
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                W, H = float(pg.width), float(pg.height)
+                ws = pg.extract_words(keep_blank_chars=True, x_tolerance=1.5)
+                heads = [w for w in ws if w['text'].startswith('KETERANGAN PIPA')]
+                caps = [w for w in ws if re.fullmatch(r'DETAIL [A-Z]{1,2}',
+                                                      w['text'].strip())]
+                frames = []
+                segs = _page_lines(pg)
+                # A window frame: its bottom edge just above a DETAIL caption,
+                # starting at the caption's left; its left edge rising from
+                # that corner.
+                for c in caps:
+                    hz = [sg for sg in segs if abs(sg[1] - sg[3]) < 0.5 and
+                          0 <= c['top'] - sg[1] < 20 and
+                          abs(min(sg[0], sg[2]) - c['x0']) < 3]
+                    for (x1, y1, x2, y2, _, _) in hz:
+                        vt = [sg for sg in segs if abs(sg[0] - sg[2]) < 0.5
+                              and abs(sg[0] - min(x1, x2)) < 1 and
+                              abs(max(sg[1], sg[3]) - y1) < 1]
+                        if vt:
+                            top = min(min(v[1], v[3]) for v in vt)
+                            frames.append({'x0': min(x1, x2),
+                                           'x1': max(x1, x2),
+                                           'top': top, 'bottom': y1})
+                            break
+                for h in heads:
+                    for r in frames:
+                        if r['x0'] <= h['x0'] <= r['x1'] and \
+                                r['top'] <= h['top'] <= r['bottom']:
+                            bad11.append(f'{short(stem_of(f), project)} p{i}')
+    emit('O11', 'FAIL' if bad11 else 'PASS', 'key table vs detail windows',
+         'key table inside a window: ' + ', '.join(sorted(set(bad11))[:6])
+         if bad11 else 'no key-table block inside a detail window')
+
 
 def run_building(root, b):
     bdir = os.path.join(root, b)
@@ -1384,6 +1812,27 @@ def run_building(root, b):
             else:
                 emit(8, 'PASS', lab, 'key leaders capped, uncrossed, clear')
 
+    # Fix round 6 part 4 (item 6) - no stroke passes through a key circle
+    # on a plan or detail sheet (its own run included).
+    lines += ['', '## Item 6 - no stroke through a plan / detail key circle '
+              '(scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-plan-\d+-.+$', st) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = key_circle_run_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} key circle(s) with a stroke '
+                     'through: ' + ', '.join(f'key {k}' for k in h[:8]))
+            else:
+                emit(6, 'PASS', lab, 'no stroke through a key circle')
+
     # R2 (item 6) - a riser key circle never sits on (or tight to) a symbol.
     lines += ['', '## Item 6 - riser key circles clear of every symbol '
               '(scripted part)']
@@ -1766,6 +2215,9 @@ def run_building(root, b):
         else:
             emit(25, 'PASS', lab, f'{len(dstr)} DXF strings all in the PDF '
                  'and vice versa')
+
+    # Fix round 6 classes.
+    round6_checks(bdir, project, pages, emit, lines)
 
     # 24 — cross-document figures.
     lines += ['', '## Item 24 - cross-document figures']

@@ -791,6 +791,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
   /// wins in `resolveCircuitLengthDetailed`).
   bool get _lengthFromLayout => lengthSource == CircuitLengthSource.geo;
 
+  /// Fix round 6 (T9) — the MEP way's auto length (allowance + vertical).
+  bool get _lengthAuto => lengthSource == CircuitLengthSource.autoVertical;
+
   /// The length actually in force (geo or manual), falling back to the model's
   /// own typed length when the host resolved none.
   Length get _lengthInForce => effectiveLength ?? circuit.length;
@@ -920,7 +923,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
       rows.add(ElectricalResultRow(
         label: 'Length',
         value: '${fmtNum(_lengthInForce.meters)} m'
-            ' — ${_lengthFromLayout ? 'from layout' : 'manual'}',
+            ' — ${_lengthFromLayout ? 'from layout' : _lengthAuto ? 'auto' : 'manual'}',
       ));
     }
     return rows;
@@ -1117,6 +1120,15 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           if (_lengthFromLayout)
                             const ElectricalHint(
                                 'From layout — remove from layout to edit'),
+                          // Fix round 6 (T9) — an MEP way's auto length: the
+                          // allowance typed above plus the board-to-machine
+                          // vertical; typing a length makes it the engineer's.
+                          if (_lengthAuto)
+                            ElectricalHint(
+                                '(auto) ${fmtNum(_lengthInForce.meters)} m = '
+                                '${fmtNum(circuit.length.meters)} m allowance + '
+                                '${fmtNum(_lengthInForce.meters - circuit.length.meters)} m '
+                                'board-to-machine vertical; type a length to override'),
                         ],
                       ),
                     ),

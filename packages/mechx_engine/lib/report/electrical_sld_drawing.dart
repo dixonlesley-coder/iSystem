@@ -2034,21 +2034,18 @@ void _emitOpenCoupler(
   );
 }
 
-///
-/// Round 16 — the coverage is the LESSER of the kVA ratio and the kW ratio
-/// (the set's kW rating = 0.8 × kVA against the demand W): a 100 kVA / 80 kW
-/// set does not back 100 % of a 90 kW load. [demandW] ≤ 0 ⇒ the kVA ratio
-/// alone (byte-identical).
-String? _gensetBackupPctLabel(
-    double genKva, ApparentPower demandVa, double demandW) {
-  final demandKva = demandVa.inKilovoltAmperes;
-  if (demandKva <= 0 || genKva <= 0) return null;
-  var ratio = genKva / demandKva;
-  if (demandW > 0) {
-    ratio = math.min(ratio, genKva * kGeneratorPf / (demandW / 1000));
-  }
-  final pct = math.min(100.0, ratio * 100).round();
-  return 'backs $pct% of load';
+/// Fix round 6 (C8, 2026-11-20) — the BACKED SHARE beside the genset: the
+/// load the set actually backs ([gensetBackupDemandW], the essential / backed
+/// boards — the figure the calc report and E-501's essential bus print)
+/// against the building demand, `backs 352.4 of 914.9 kW (39%)`. It used to
+/// print the set's RATING against the demand ('backs 70% of load' for an
+/// 800 kVA set: 640 kW / 914.9 kW), which no other surface printed and
+/// which read as the backed share. Null without a demand or a backed load.
+String? _gensetBackupPctLabel(double backupW, double demandW) {
+  if (demandW <= 0 || backupW <= 0) return null;
+  final pct = math.min(100.0, backupW / demandW * 100).round();
+  return 'backs ${(backupW / 1000).toStringAsFixed(1)} of '
+      '${(demandW / 1000).toStringAsFixed(1)} kW ($pct%)';
 }
 
 /// The BATTERY node labels: headline (+ sized bank kWh when the demand gives an
@@ -2326,7 +2323,7 @@ _Spine _buildSourceSpine(
           backupVa, gen, gensetBackupDemandW(project, result),
           minKvaForStart: gensetStartFloorFor(project, result),
           minKvaForAds: gensetAdsFloorFor(result));
-      final genKva = genFig.totalKva;
+      // (genFig.totalKva: the set rating, printed in its own label.)
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
       _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
@@ -2339,7 +2336,8 @@ _Spine _buildSourceSpine(
       // the honest coverage figure (capped at 100%), printed only when a demand
       // exists to compare against.
       final pct =
-          _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
+          _gensetBackupPctLabel(
+          gensetBackupDemandW(project, result).watts, result.supply.demandW);
       if (pct != null) {
         prims.add(SldLabel(sideX + 34, gcy + 24, pct,
             size: 7.5, role: SldRole.source));
@@ -2458,7 +2456,7 @@ _Spine _buildSourceSpine(
             backupVa, gen, gensetBackupDemandW(project, result),
             minKvaForStart: gensetStartFloorFor(project, result),
             minKvaForAds: gensetAdsFloorFor(result));
-        final genKva = genFig.totalKva;
+        // (genFig.totalKva: the set rating, printed in its own label.)
         if (transfer != null) {
           // Fix round 3 (O3) — the transfer switch on the genset drop.
           final tsY = (prevDropBottom + cy - 13) / 2;
@@ -2478,7 +2476,8 @@ _Spine _buildSourceSpine(
             _gensetModeLine(gen.mode.label, transfer),
             size: 7.5, role: SldRole.source));
         final pct =
-            _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
+            _gensetBackupPctLabel(
+          gensetBackupDemandW(project, result).watts, result.supply.demandW);
         if (pct != null) {
           prims.add(SldLabel(dropX + 20, cy + 24, pct,
               size: 7.5, role: SldRole.source));
@@ -2696,7 +2695,7 @@ _Spine _buildSourceSpineH(
         backupVa, gen, gensetBackupDemandW(project, result),
         minKvaForStart: gensetStartFloorFor(project, result),
         minKvaForAds: gensetAdsFloorFor(result));
-    final genKva = genFig.totalKva;
+    // (genFig.totalKva: the set rating, printed in its own label.)
     final gcy = nextCy;
     // Fix round 3 (O3) — the transfer switch on the genset drop, from the
     // ONE declared service arrangement E-501 draws.
@@ -2720,7 +2719,8 @@ _Spine _buildSourceSpineH(
         size: 7, role: role));
     // The honest coverage figure — this set against the building's diversified
     // demand, capped at 100%; printed only when a demand exists.
-    final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
+    final pct = _gensetBackupPctLabel(
+          gensetBackupDemandW(project, result).watts, result.supply.demandW);
     if (pct != null) {
       prims.add(SldLabel(lvX - 104, gcy + 23, pct, size: 7, role: role));
     }
