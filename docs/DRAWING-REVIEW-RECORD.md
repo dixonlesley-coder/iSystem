@@ -1582,6 +1582,6 @@ PNGs to re-check in `drawings-z4`: `tower/png/Menara Contoh 30-plan-5-Lantai 5-d
 | T9 P-05 loop | hand check | 2 x 0.126 x 5.52 = 1.39 ohm vs the 1.92 ohm limit - PASS |
 | Obs 11 (part 3) | tower M-512, M-505 | PASS - key tables outside the windows |
 | T4 break marks (part 3) | tower M-512 Detail C | PASS - break marks drawn, legend note printed |
-| Obs 9 / T7 coarse windows (part 4, optional tags) | | |
-| Key 7 off its own run (part 4) | | |
+| Obs 9 / T7 coarse windows (part 4, optional tags) | PASS | tower M-505 Detail B (drawings-z4): every CW run tagged, bottom-right fixture reads UR; page counts unchanged |
+| Key 7 off its own run (part 4) | PASS | tower M-512 Detail C (drawings-z4): circle 7 sits beside the DN150 run, leader only |
 
