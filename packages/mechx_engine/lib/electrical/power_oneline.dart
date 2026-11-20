@@ -188,6 +188,13 @@ PowerOneLine buildPowerOneLine(
   // resolved by the caller against the essential designation); null ⇒ the
   // generator's own `backupFraction`.
   double? backupFraction,
+  // Fix round 6 part 2 (Obs 7) — the ratings E-301 prints for the same
+  // equipment: the main board's name + incomer ('LVMDP 1600A 4P'), the main
+  // bus's busbar ampacity, and the transfer switch's backed board + its
+  // incomer ('PP-E 630A 4P'). Null ⇒ the bare labels (byte-identical).
+  String? mainPanelSub,
+  double? mainBusRatingA,
+  String? transferSub,
   // Round 65 r2 — the number of SEPARATE transformer sections
   // (`serviceSections`): above 1 the LV bus is SECTION 1 and every further
   // section is its own bus node ('bus-s2' …) fed by its own transformer edge
@@ -235,14 +242,16 @@ PowerOneLine buildPowerOneLine(
     id: 'bus',
     kind: PowerNodeKind.bus,
     label: lvSections > 1 ? 'LV section 1' : 'Main LV bus',
-    sub: lvSections > 1
-        ? '${_fmt(voltage.volts)} V · TX-1'
-        : '${_fmt(voltage.volts)} V',
+    sub: (lvSections > 1
+            ? '${_fmt(voltage.volts)} V · TX-1'
+            : '${_fmt(voltage.volts)} V') +
+        (mainBusRatingA == null ? '' : ' · ${_fmt(mainBusRatingA)} A'),
   ));
-  nodes.add(const PowerNode(
+  nodes.add(PowerNode(
     id: 'main',
     kind: PowerNodeKind.mainPanel,
     label: 'Main panel',
+    sub: mainPanelSub,
   ));
   edge('bus', 'main');
 
@@ -389,7 +398,8 @@ PowerOneLine buildPowerOneLine(
       id: 'ats',
       kind: PowerNodeKind.ats,
       label: transferLabel ?? (manualTransfer ? 'COS' : 'ATS'),
-      sub: manualTransfer ? 'manual changeover' : 'transfer switch',
+      sub: (manualTransfer ? 'manual changeover' : 'transfer switch') +
+          (transferSub == null ? '' : ' · $transferSub'),
     ));
     gridOut = 'ats';
     if (essentialSplit) {

@@ -582,6 +582,9 @@ PlanAnnotations layoutPlanAnnotations({
   final mLines = <PlanMarkLine>[];
   final mCircles = <PlanMarkCircle>[];
   final mTexts = <PlanMarkText>[];
+  // Fix round 6 part 2 (T10) — EVERY detail boundary is registered before
+  // any bubble is placed: a bubble placed first used to sit on a later
+  // detail's boundary (tower M-130 bubble B).
   for (final d in details) {
     if (d.keyed) continue;
     final r = d.rectPx;
@@ -597,6 +600,13 @@ PlanAnnotations layoutPlanAnnotations({
       mLines.add(PlanMarkLine(ax, ay, bx, by, dashed: true));
       layout.addRun(null, ax, ay, bx, by);
     }
+  }
+  for (final d in details) {
+    if (d.keyed) continue;
+    final r = d.rectPx;
+    final c00 = map(r.minX, r.minY), c11 = map(r.maxX, r.maxY);
+    final x0 = math.min(c00.x, c11.x), x1 = math.max(c00.x, c11.x);
+    final y0 = math.min(c00.y, c11.y), y1 = math.max(c00.y, c11.y);
     // The bubble (letter) + caption at the first clear corner.
     final rb = kPlanDetailBubbleMm * u;
     final lts = kPlanDetailLetterMm * u;
@@ -616,6 +626,15 @@ PlanAnnotations layoutPlanAnnotations({
         (x0, y1, -1.0, 1.0, step),
         (x1, y0, 1.0, -1.0, step),
         (x0, y0, -1.0, -1.0, step),
+        // Fix round 6 part 2 (T10) — on the first ring the bubble may also
+        // sit at a side's midpoint, tangent to the boundary (no leader), so
+        // a corner on a run does not push it out onto a long leader.
+        if (step == 1.0) ...[
+          ((x0 + x1) / 2, y1, 0.0, 1.0, step),
+          ((x0 + x1) / 2, y0, 0.0, -1.0, step),
+          (x1, (y0 + y1) / 2, 1.0, 0.0, step),
+          (x0, (y0 + y1) / 2, -1.0, 0.0, step),
+        ],
       ],
     ]) {
       for (final capSide in [sx, -sx]) {
@@ -653,10 +672,22 @@ PlanAnnotations layoutPlanAnnotations({
         );
         final leaderClear =
             !far || (!layout.hitsRun(lb, clearance: 0) && !layout.hitsBox(lb));
+        // Fix round 6 part 2 (T10) — the bubble is tested against every run
+        // and flow chevron on the FIRST ring too (it used to skip the run test
+        // there, so bubble B sat on the FH-L1 run over its chevron). Its box
+        // is inset a hair so the detail's own dashed boundary, which it only
+        // touches at the corner, is no obstacle.
+        final inset = 0.08 * rb;
+        final bbIn = (
+          minX: bb.minX + inset,
+          minY: bb.minY + inset,
+          maxX: bb.maxX - inset,
+          maxY: bb.maxY - inset
+        );
         if (!layout.hitsBox(bb) &&
             !layout.hitsBox(cb) &&
             !layout.hitsRun(cb, clearance: 0.1 * ts) &&
-            (!far || !layout.hitsRun(bb, clearance: 0)) &&
+            !layout.hitsRun(bbIn, clearance: 0) &&
             leaderClear) {
           bubbleBox = bb;
           capBox = cb;

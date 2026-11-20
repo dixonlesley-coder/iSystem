@@ -1143,6 +1143,84 @@ def round6_checks(bdir, project, pages, emit, lines):
          '; '.join(sorted(set(bad5))[:6]) if bad5 else
          'every scale-bar label clear of the next')
 
+    # T10 - a detail BUBBLE (a circle holding a capital letter) on a plan is
+    # struck by no line other than its own leader (which ends on its edge).
+    bad10 = []
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        if '-elec-plan-' in f or '-detail' in f:
+            continue
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                H = float(pg.height)
+                chars = [ch for ch in pg.chars if ch['text'].strip()]
+                quads = [glyph_quad(ch, H) for ch in chars]
+                lines10 = _page_lines(pg)
+                for cx, cy, r in page_circles(pg):
+                    own = [chars[k]['text'] for k in range(len(chars))
+                           if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                                  for x, y in quads[k])]
+                    t = ''.join(own)
+                    if not re.fullmatch(r'[A-Z]{1,2}', t):
+                        continue
+                    for (x1, y1, x2, y2, _, col) in lines10:
+                        if _grey(col):
+                            continue
+                        d1 = ((x1 - cx) ** 2 + (y1 - cy) ** 2) ** 0.5
+                        d2 = ((x2 - cx) ** 2 + (y2 - cy) ** 2) ** 0.5
+                        if abs(d1 - r) < 0.6 or abs(d2 - r) < 0.6:
+                            continue  # a leader ending on the edge
+                        if _seg_point_dist(cx, cy, x1, y1, x2, y2) < r - 0.5:
+                            bad10.append(f'{short(stem_of(f), project)} p{i} '
+                                         f'bubble {t}')
+                            break
+    emit('T10', 'FAIL' if bad10 else 'PASS', 'plan detail bubbles',
+         '; '.join(sorted(set(bad10))[:6]) if bad10 else
+         'no bubble struck by a run / chevron')
+
+    # New A - a pipe-key table states its one rule (identical tags share one
+    # key, printed on every segment that carries it).
+    badA = []
+    for f in glob.glob(os.path.join(bdir, '*.pdf')):
+        if f.endswith(REPORT_SUFFIXES):
+            continue
+        t = pdftext(f)
+        if 'KETERANGAN PIPA' in t and 'same tag = same key' not in t:
+            badA.append(short(stem_of(f), project))
+    emit('A', 'FAIL' if badA else 'PASS', 'pipe-key table rule',
+         'title without the rule: ' + ', '.join(sorted(badA)[:6]) if badA
+         else 'every pipe-key table states it')
+
+    # Obs 7 - E-501's board / switch boxes print a rating, the one E-301
+    # prints for the same board.
+    e501 = one('*-electrical-power-one-line.pdf')
+    e301 = one('*-electrical-overview-sld.pdf')
+    if e501 and e301:
+        r501 = set(re.findall(r'\b\d+A \dP\b', pdftext(e501)))
+        r301 = set(re.findall(r'\b\d+A \dP\b', pdftext(e301)))
+        bad7 = ([] if r501 else ['no board rating on E-501']) + [
+            f'{t} not on E-301' for t in sorted(r501 - r301)]
+        emit('O7', 'FAIL' if bad7 else 'PASS', 'E-501 ratings',
+             '; '.join(bad7) if bad7 else
+             f'{", ".join(sorted(r501))} as on E-301')
+
+    # T4 - a plan carrying a fire zone break tank keys it 'Fire break tank'
+    # in its legend (the riser's derived name), never only 'Roof tank'.
+    bad4 = []
+    bt = set()
+    for f in risers:
+        bt |= set(re.findall(r'\b(TK-\d+) Fire break tank', pdftext(f)))
+    for f in glob.glob(os.path.join(bdir, '*-plan-*.pdf')):
+        if '-elec-plan-' in f:
+            continue
+        t = pdftext(f)
+        for tag in bt:
+            if re.search(r'\b' + re.escape(tag) + r'\b', t) and \
+                    'Fire break tank' not in t:
+                bad4.append(f'{short(stem_of(f), project)} ({tag})')
+    emit('T4', 'FAIL' if bad4 else 'PASS', 'plan legend break tank',
+         '; '.join(sorted(bad4)[:6]) if bad4 else
+         f'{len(bt)} break tank(s) keyed by name')
+
 
 def run_building(root, b):
     bdir = os.path.join(root, b)

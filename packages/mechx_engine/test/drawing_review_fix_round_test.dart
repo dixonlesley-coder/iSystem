@@ -185,7 +185,7 @@ void main() {
           : (mark.maxY <= table.minY ? table.minY - mark.maxY : -1.0);
       expect(math.max(gapX, gapY),
           greaterThanOrEqualTo(kPlanKeyTableMarginFactor * ts - 1e-9));
-      expect(kt.texts.first.text, 'KETERANGAN PIPA / PIPE KEY');
+      expect(kt.texts.first.text, kPipeKeyTableTitle);
       expect(layout.unresolvedCount, 0);
     });
   });

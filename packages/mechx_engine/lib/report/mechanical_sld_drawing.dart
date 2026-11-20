@@ -27,6 +27,7 @@ import 'drawing_chrome.dart' show helveticaTextWidth;
 import 'number_format.dart' show kAutoMark, kAutoMarkMeaning;
 import 'plan_symbols.dart'
     show
+        kPipeKeyTableTitle,
         planComponentPrims,
         planFixturePrims,
         planFlexibleJointPrims,
@@ -3931,6 +3932,10 @@ bool _segmentsCrossProper(double ax, double ay, double bx, double by, double cx,
       ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
 }
 
+/// Fix round 6 part 2 (New A) — the riser key table's title drops one line
+/// below the extras strip, clear of the key circles above it.
+const double _kKeyTitleDrop = 12;
+
 /// Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of a riser
 /// sheet: one row per key (key, size-service-material / tag, length, level),
 /// in column blocks of at most [maxRows] rows laid left to right from
@@ -3946,7 +3951,9 @@ double emitMechRiserKeyTable(
 }) {
   if (rows.isEmpty) return top;
   const pitch = 12.0;
-  const title = 'KETERANGAN PIPA / PIPE KEY';
+  const title = kPipeKeyTableTitle;
+  // ignore: parameter_assignments
+
   (String, String) split(String t) {
     final i = t.indexOf(' - ');
     return i < 0 ? (t, '-') : (t.substring(0, i), t.substring(i + 3));
@@ -3974,7 +3981,12 @@ double emitMechRiserKeyTable(
   final blockW = colW.fold(0.0, (a, b) => a + b);
   final fit = math.max(1, ((maxRight - left + 16) / (blockW + 16)).floor());
   final maxRows = (rows.length / fit).ceil();
-  prims.add(SldLabel(left, top + size, title, size: size, bold: true));
+  // Fix round 6 part 2 (New A) — the title (with the one-key-per-tag rule)
+  // reserves its own line ABOVE the grid: the grid starts one line lower,
+  // so a key circle placed in the extras strip never meets its text.
+  prims.add(SldLabel(left, top + size + _kKeyTitleDrop, title,
+      size: size, bold: true));
+  top += _kKeyTitleDrop;
   var bottom = top;
   for (var b = 0; b * maxRows < rows.length; b++) {
     final x0 = left + b * (blockW + 16);

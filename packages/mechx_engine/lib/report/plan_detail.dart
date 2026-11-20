@@ -245,6 +245,8 @@ List<LabelBox> planDetailClusterRects({
   required double linkPx,
   required double marginPx,
   List<LabelBox> existing = const [],
+  List<({double x, double y})> nodesPx = const [],
+  double nodeRadiusPx = 0,
 }) {
   final n = seeds.length;
   final parent = List<int>.generate(n, (i) => i);
@@ -298,9 +300,44 @@ List<LabelBox> planDetailClusterRects({
     ));
   }
   // Merge overlapping / near boxes to a fixed point.
+  // Fix round 6 part 2 (T4) — and grow every box to take in WHOLE any drawn
+  // node whose symbol (radius [nodeRadiusPx]) it cuts, so a detail window
+  // never ends mid-symbol (M-512 Detail C cut the relay jockey P-04).
+  bool growToNodes() {
+    var grew = false;
+    for (var i = 0; i < rects.length; i++) {
+      var b = rects[i];
+      for (final p in nodesPx) {
+        final inside = p.x >= b.minX &&
+            p.x <= b.maxX &&
+            p.y >= b.minY &&
+            p.y <= b.maxY;
+        final cuts = p.x + nodeRadiusPx > b.minX &&
+            p.x - nodeRadiusPx < b.maxX &&
+            p.y + nodeRadiusPx > b.minY &&
+            p.y - nodeRadiusPx < b.maxY;
+        final whole = p.x - nodeRadiusPx >= b.minX &&
+            p.x + nodeRadiusPx <= b.maxX &&
+            p.y - nodeRadiusPx >= b.minY &&
+            p.y + nodeRadiusPx <= b.maxY;
+        if ((inside || cuts) && !whole) {
+          b = (
+            minX: math.min(b.minX, p.x - nodeRadiusPx),
+            minY: math.min(b.minY, p.y - nodeRadiusPx),
+            maxX: math.max(b.maxX, p.x + nodeRadiusPx),
+            maxY: math.max(b.maxY, p.y + nodeRadiusPx),
+          );
+          grew = true;
+        }
+      }
+      rects[i] = b;
+    }
+    return grew;
+  }
+
   var merged = true;
   while (merged) {
-    merged = false;
+    merged = growToNodes() && nodeRadiusPx > 0;
     outer:
     for (var i = 0; i < rects.length; i++) {
       for (var j = i + 1; j < rects.length; j++) {

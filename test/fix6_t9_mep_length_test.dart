@@ -26,9 +26,22 @@
 //     at 10 m -> 1.41 % at 66 m.
 //   P-05 (Ib 2.1 A, 126 m): 2.5 mm2 fails the cumulative limit / grows to
 //     4 mm2 (0.54 %).
-// The device on P-05, P-04 and AHU-02 / F-02 is now an MCB 6 A (was the
-// MCCB 16 A frame): the long run's loop impedance is disconnected by the
-// smaller device. The judge-only `enclosure-temp-rise-exceeded` now also
+// The device on P-05, P-04 and AHU-02 / F-02 is now an MCB 6 A curve D (was
+// the MCCB 16 A frame). Confirmed from the dumped warning list (fix round 6
+// part 2, New B): each raises `mcb-backup-protection-required` — "kept as an
+// MCB because an MCCB (magnetic trip at 10 x In) would fail the earth-fault
+// loop (ADS) on this run" — plus `cascade-combination-unverified` (the 25 kA
+// MCB backed by the 630 A MCCB incomer on the 42.13 kA bus). Rule: Rounds
+// 38 / 43 / 54 (`faultAwareBreakerClass`, `mccbFrameRaiseRefusedIds` — a
+// class change never creates an ADS failure). Arithmetic for P-05 (U0 230 V,
+// TN loop = phase + PE of the run + the upstream loop Zup): an MCCB 16 A
+// trips magnetically at 160 A, so Zs <= 230 / 160 = 1.44 ohm; the run alone
+// on 4 mm2 is 2 x 0.126 x 5.52 = 1.39 ohm, so with any Zup > 0.05 ohm it
+// fails. The MCB 6 A curve D trips at 20 x 6 = 120 A: Zs <= 1.92 ohm. On
+// 2.5 mm2 the run is 2 x 0.126 x 8.87 = 2.235 ohm > 1.92 whatever Zup, so the
+// cable grows to 4 mm2 (1.39 ohm + Zup <= 1.92): that is the 7th
+// `cable-raised-for-ads` ("Booster set P-05: cable raised to 4 mm2"; the
+// other six are Feeder PP-Lt28..30 and Lift 1..3, unchanged). The judge-only `enclosure-temp-rise-exceeded` now also
 // flags the MEP board (36.4 K > 35 K in the smaller MCB enclosure).
 import 'dart:math' as math;
 

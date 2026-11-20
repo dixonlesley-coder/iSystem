@@ -55,6 +55,20 @@ class DrawingChrome {
   /// ([planComponentPrims]) beside its label. Empty ⇒ byte-identical.
   final List<NodeComponent> legendSymbols;
 
+  /// Fix round 6 part 2 (T4) — the row NAME of each [legendSymbols] entry
+  /// when it is not the component's own label (same length; null ⇒ every row
+  /// prints [NodeComponent.label]). A fire zone break tank keys as 'Fire
+  /// break tank' with its tank glyph (the derived naming G-003 and the riser
+  /// use), so a plan whose only roof-typed tank is a break tank never says
+  /// 'Roof tank'.
+  final List<String>? legendSymbolNames;
+
+  /// The printed name of legend symbol row [i].
+  String legendSymbolName(int i) =>
+      legendSymbolNames != null && i < legendSymbolNames!.length
+          ? legendSymbolNames![i]
+          : legendSymbols[i].label;
+
   /// Optional human label under the scale bar (e.g. `1 : 100` or `5 m`). The
   /// engine never computes a real-world scale (it has no calibration here); the
   /// caller passes a label when it can, else the bar is a graphic-only marker.
@@ -96,6 +110,7 @@ class DrawingChrome {
     this.legendServices = const [],
     this.legendNotes = const [],
     this.legendSymbols = const [],
+    this.legendSymbolNames,
     this.scaleBarLabel,
     this.clientName,
     this.drawingTitle,
@@ -143,6 +158,7 @@ class DrawingChrome {
         legendServices: legendServices,
         legendNotes: legendNotes,
         legendSymbols: legendSymbols,
+        legendSymbolNames: legendSymbolNames,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: title,
@@ -165,6 +181,7 @@ class DrawingChrome {
         legendServices: legendServices,
         legendNotes: legendNotes,
         legendSymbols: legendSymbols,
+        legendSymbolNames: legendSymbolNames,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -186,6 +203,7 @@ class DrawingChrome {
         legendServices: legendServices,
         legendNotes: legendNotes,
         legendSymbols: legendSymbols,
+        legendSymbolNames: legendSymbolNames,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -209,6 +227,7 @@ class DrawingChrome {
           legendServices: legendServices,
           legendNotes: [...legendNotes, ...notes],
           legendSymbols: legendSymbols,
+          legendSymbolNames: legendSymbolNames,
           scaleBarLabel: scaleBarLabel,
           clientName: clientName,
           drawingTitle: drawingTitle,
@@ -230,6 +249,7 @@ class DrawingChrome {
         legendServices: legendServices,
         legendNotes: notes,
         legendSymbols: legendSymbols,
+        legendSymbolNames: legendSymbolNames,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -264,6 +284,12 @@ class DrawingChrome {
           for (final c in legendSymbols)
             if (keepSymbol(c)) c,
         ],
+        legendSymbolNames: legendSymbolNames == null
+            ? null
+            : [
+                for (var i = 0; i < legendSymbols.length; i++)
+                  if (keepSymbol(legendSymbols[i])) legendSymbolName(i),
+              ],
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -276,7 +302,8 @@ class DrawingChrome {
 
   /// Round 34 — a copy with [symbols] as [legendSymbols] (every other field
   /// kept); empty ⇒ this same object (byte-identical).
-  DrawingChrome withLegendSymbols(List<NodeComponent> symbols) =>
+  DrawingChrome withLegendSymbols(List<NodeComponent> symbols,
+          {List<String>? names}) =>
       symbols.isEmpty
           ? this
           : DrawingChrome(
@@ -288,6 +315,7 @@ class DrawingChrome {
               legendServices: legendServices,
               legendNotes: legendNotes,
               legendSymbols: symbols,
+              legendSymbolNames: names,
               scaleBarLabel: scaleBarLabel,
               clientName: clientName,
               drawingTitle: drawingTitle,
@@ -312,6 +340,7 @@ class DrawingChrome {
         legendServices: legendServices,
         legendNotes: legendNotes,
         legendSymbols: legendSymbols,
+        legendSymbolNames: legendSymbolNames,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -630,7 +659,7 @@ String pdfLegend(
       }
       cs.writeln('BT /F1 8 Tf 0 0 0 rg '
           '${_n(originX + 18 + 6)} ${_n(y)} Td '
-          '(${_pdfText(symbols[i].label)}) Tj ET');
+          '(${_pdfText(chrome.legendSymbolName(i))}) Tj ET');
     }
     originY += symbols.length * _kLegendSymbolRowH;
   }
@@ -1002,8 +1031,9 @@ LabelBox? pdfLegendBox(
   for (final t in notes) {
     w = math.max(w, helveticaTextWidth(t, 7));
   }
-  for (final c in symbols) {
-    w = math.max(w, 18 + 6 + helveticaTextWidth(c.label, 8));
+  for (var i = 0; i < symbols.length; i++) {
+    w = math.max(
+        w, 18 + 6 + helveticaTextWidth(chrome.legendSymbolName(i), 8));
   }
   return (
     minX: originX - 2,
@@ -1321,7 +1351,8 @@ String dxfPlanChrome(
     }
     // Round 34 — the symbol key: each glyph (the plan-symbol library, one
     // geometry with the body) beside its label.
-    for (final c in chrome.legendSymbols) {
+    for (var si = 0; si < chrome.legendSymbols.length; si++) {
+      final c = chrome.legendSymbols[si];
       final cy = ly + txt / 2;
       final g = 5 * u;
       for (final pr
@@ -1340,7 +1371,8 @@ String dxfPlanChrome(
             break; // never produced by the plan-symbol library
         }
       }
-      text(kDxfLayerLegend, minX + 15 * u, ly, txt, c.label);
+      text(kDxfLayerLegend, minX + 15 * u, ly, txt,
+          chrome.legendSymbolName(si));
       ly -= 6 * u;
     }
     // Round 33 — the sheet notes under the swatch rows (PDF == DXF text).

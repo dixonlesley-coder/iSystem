@@ -33,7 +33,7 @@ import 'package:mechx_engine/report/plan_symbols.dart'
         customFixturePlanTags,
         equipmentNodeTags,
         fixturePlanTags,
-        planLegendSymbols,
+        planLegendSymbolRows,
         planEdgeElevationLabels,
         planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
@@ -1876,14 +1876,20 @@ DrawingChrome issuableChrome(
       FireHazardClass.extraHazard => 'extra hazard',
     },
   );
+  final legendRows = planLegendSymbolRows(net,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      fireBreakTankIds: ref.read(fireBreakTankIdsProvider));
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
     legendNotes: notes,
     // Round 34 — the symbol key: every component glyph on this floor.
-    legendSymbols:
-        planLegendSymbols(net, sheetId: sheetId, floorIndex: floorIndex),
+    // Fix round 6 part 2 (T4) — a fire zone break tank keys as 'Fire break
+    // tank' (the derived naming G-003 / the riser use).
+    legendSymbols: legendRows.symbols,
+    legendSymbolNames: legendRows.names,
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
     // `M-102`, never one number on every plan. A manual `documentNumber`

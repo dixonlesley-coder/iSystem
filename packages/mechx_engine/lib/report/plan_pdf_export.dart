@@ -569,6 +569,17 @@ List<PlanDetailCallout> planSheetDetails({
           linkPx: kPlanDetailLinkMm * pxPerMm * f,
           marginPx: kPlanDetailMarginMm * pxPerMm * f,
           existing: [for (final d in details) d.rectPx],
+          // Fix round 6 part 2 (T4) — no window cuts a drawn plant symbol
+          // (a pump / tank / unit: M-512 Detail C cut the relay jockey).
+          nodesPx: [
+            for (final nd in net.nodes)
+              if (nd.sheetId == sheetId &&
+                  nd.floorIndex == floorIndex &&
+                  (nd.component == NodeComponent.pump ||
+                      nd.component == NodeComponent.boosterSet))
+                (x: nd.x, y: nd.y),
+          ],
+          nodeRadiusPx: kPlanGlyphClearMm * pxPerMm,
         );
         final n = planDetailPack(sizesM: [
           for (final b in r)

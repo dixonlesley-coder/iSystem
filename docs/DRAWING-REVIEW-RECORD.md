@@ -1526,3 +1526,22 @@ Regenerated set: `drawings-z` (scratchpad); `tool/ref_drawings_precheck.py` repo
 Left open in this round (no change): T4 (per-plan legend symbol rows still use the component label, M-512 Detail C window edge), T7 (runs in 1:10 detail windows untagged), T10 (detail bubble over a run / flow chevron), observations 9 (M-505 unlabelled fixture), 11 (second key table inside a detail window) and 7 (E-501 bus boxes without ratings).
 
 PNGs to re-check in `drawings-z`: T1 `tower/png/Menara Contoh 30-riser-sld-p17.png`; T2 `tower/png/Menara Contoh 30-riser-sld-p18.png`; T3 `office/png/Kantor Contoh-riser-sld-p1.png`, `apartment/png/Apartemen Contoh-riser-sld-p1.png`, `tower/png/Menara Contoh 30-riser-sld-p1.png`; T5 `apartment/png/Apartemen Contoh-plan-1-Lantai 1-detail-p1.png`, `tower/png/Menara Contoh 30-plan-15-Lantai 15-detail-p1.png`; T6 `shophouse/png/Ruko Contoh-riser-sld-p3.png`; T8 `apartment/png/Apartemen Contoh-riser-sld-p9.png`, `-p10.png`; T9 `tower/png/Menara Contoh 30-panel-schedules-p4.png`; C5 `house/png/Rumah Contoh-riser-sld-p1.png` and `*-00-cover-sheets-p<last>.png`; C6 `tower/png/Menara Contoh 30-equipment-schedule-p2.png`; C8 `tower/png/Menara Contoh 30-electrical-overview-sld-p1.png`; C9 `tower/png/Menara Contoh 30-00-cover-sheets-p5.png`.
+
+### Fix round 6 part 2 (2026-11-20)
+
+Regenerated set: `drawings-z2` (scratchpad); `tool/ref_drawings_precheck.py` FAIL 0 on all five buildings; the new classes T4, T10, A and O7 fire on `drawings-y`.
+
+| Item | Root cause | Fix | Pre-check class |
+|---|---|---|---|
+| T4 plan legend 'Roof tank' | `DrawingChrome.legendSymbols` printed each symbol's type label. | `legendSymbolNames` + `planLegendSymbolRows(fireBreakTankIds:)`: 'Fire break tank' row with its glyph. | T4 (a break tank's plan prints its name). |
+| T4 Detail C cuts the jockey | Detail windows were sized from label clusters only. | A window grows to take in whole any pump / booster symbol it cuts; a clear one stays out. Runs leaving a window still end at the edge without a break mark (not done). | none (unit test). |
+| T7 untagged runs in 1:10 windows | Everything outside the callout box was left unlabelled as plan context. | A 1:10 window labels every node and run it shows unless another detail owns it. | none (geometry; unit test `drawing_review_s_test.dart`). |
+| T10 bubble B on FH-L1 | The first-ring bubble skipped the run / chevron test; later details' boundaries were not yet registered. | All boundaries first; every candidate tested against runs + chevrons; side-midpoint candidates. | T10 (a bubble struck by a line). |
+| Obs 7 E-501 ratings | The one-line nodes carried no rating input. | Root board incomer, busbar and transferred board incomer passed from the system result. | O7 (E-501 ratings exist and equal E-301's). |
+| New A key number on two circles | Intended: both surfaces key identical tags once. | The title says so ('same tag = same key'). | A. |
+| New B P-05 MCB | Rounds 38 / 43 / 54: an MCCB's 10 x In magnetic trip fails ADS on the 126 m run, so the MCB is kept with cascade back-up; 2.5 mm2 fails the MCB's own loop limit, so 4 mm2 (the 7th cable-raised-for-ads). | Pin comments carry the arithmetic. | n/a |
+
+Not done: T4 break marks at window edges, Obs 9 (M-505 is a coarser-than-1:10 window), Obs 11 (a split key-table block may still sit in a window).
+
+PNGs to re-check in `drawings-z2`: T4 `tower/png/Menara Contoh 30-plan-15-Lantai 15-p1.png`, `-plan-15-Lantai 15-detail-p1.png`; T7 `house/png/Rumah Contoh-plan-1-Lantai 1-detail-p1.png`, `house/png/Rumah Contoh-plan-2-Lantai 2-detail-p1.png`, `shophouse/png/Ruko Contoh-plan-3-Lantai 3-detail-p1.png`; T10 `tower/png/Menara Contoh 30-plan-1-Lantai 1-p1.png`; Obs 7 `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png`, `apartment/png/Apartemen Contoh-electrical-power-one-line-p1.png`; New A `tower/png/Menara Contoh 30-riser-sld-p17.png`, `apartment/png/Apartemen Contoh-riser-sld-p9.png`.
+

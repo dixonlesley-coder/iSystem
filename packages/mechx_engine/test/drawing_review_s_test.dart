@@ -94,9 +94,11 @@ void main() {
       final f = plot.details.single.frameMm;
       expect(dashed.single.x1, dashed.single.x2);
       expect(dashed.single.x1, inInclusiveRange(f.minX, f.maxX));
-      // The run crossing the cut (n2 at x=60 is outside the box) is drawn as
-      // unlabelled context: labelled on the neighbour's sheet instead.
-      expect(plot.unlabelledIds, contains('n2'));
+      // The run crossing the cut (n2 at x=60 is outside the box) is drawn
+      // and — fix round 6 part 2 (T7) — tagged here too: every node and run
+      // a detail window shows is labelled in it (no 'context' left bare).
+      expect(plot.unlabelledIds, isNot(contains('n2')));
+      expect(plot.unlabelledIds, isEmpty);
     });
   });
 

@@ -18,6 +18,7 @@ import 'dart:math' as math;
 import '../geometry/building.dart';
 import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
+import '../sizing/fire_zones.dart' show kFireBreakTankLabel;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/custom_fixture.dart';
 import '../standards/sni.dart' show PlumbingFixture;
@@ -572,6 +573,45 @@ List<NodeComponent> planLegendSymbols(Network net,
   ];
 }
 
+/// Fix round 6 part 2 (T4, 2026-11-20) — the plan legend's symbol ROWS of
+/// a sheet + floor: [planLegendSymbols] over the genuine components (every
+/// node but the fire zone break tanks, [fireBreakTankIds] — the zone chain's
+/// derived naming), then ONE 'Fire break tank' row drawn with the break
+/// tank's own glyph, right after the tank rows. [names] parallels [symbols]
+/// ([DrawingChrome.legendSymbolNames]). No break tank on the sheet ⇒ exactly
+/// [planLegendSymbols] and the component labels.
+({List<NodeComponent> symbols, List<String> names}) planLegendSymbolRows(
+    Network net,
+    {required String sheetId,
+    required int floorIndex,
+    Set<String> fireBreakTankIds = const {}}) {
+  bool here(NetNode n) =>
+      n.sheetId == sheetId && n.floorIndex == floorIndex && n.component != null;
+  final genuine = {
+    for (final n in net.nodes)
+      if (here(n) && !fireBreakTankIds.contains(n.id)) n.component!,
+  };
+  final breakTanks = [
+    for (final c in NodeComponent.values)
+      if (net.nodes.any((n) =>
+          here(n) && fireBreakTankIds.contains(n.id) && n.component == c))
+        c,
+  ];
+  final symbols = <NodeComponent>[];
+  final names = <String>[];
+  for (final c in NodeComponent.values) {
+    if (genuine.contains(c)) {
+      symbols.add(c);
+      names.add(c.label);
+    }
+    if (breakTanks.isNotEmpty && c == breakTanks.last) {
+      symbols.add(breakTanks.first);
+      names.add(kFireBreakTankLabel);
+    }
+  }
+  return (symbols: symbols, names: names);
+}
+
 /// Round 34 (fire-hvac-drawings-air-terminals-and-heads-carry-no-data) — the
 /// installer's tag of an AIR TERMINAL (supply / linear diffuser, return /
 /// exhaust grille): its design airflow and, when chosen, its face size —
@@ -913,7 +953,11 @@ PlanKeyTable? placePlanKeyTable(
       [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) + ts,
   ];
   final pitch = 1.5 * ts;
-  final tableW = colW.fold(0.0, (a, b) => a + b);
+  // Fix round 6 part 2 (New A) — the block is at least as wide as its
+  // title (which states the one-key-per-tag rule), so the title never runs
+  // past the space the table reserves.
+  final tableW = math.max(colW.fold(0.0, (a, b) => a + b),
+      helveticaTextWidth(kPipeKeyTableTitle, ts) + ts);
   double blockH(int n) => (n + 2) * pitch + 0.5 * ts;
   // Is the box [b] clear of every mark, run and grid line (and of the blocks
   // already chosen)?
@@ -998,7 +1042,7 @@ PlanKeyTable? placePlanKeyTable(
   final texts = <PlacedLabelLine>[];
   final rules = <LabelSegment>[];
   for (final (x0, yTop, i0, n) in plan) {
-    texts.add((text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts));
+    texts.add((text: kPipeKeyTableTitle, x: x0, y: yTop - ts));
     final gridTop = yTop - pitch - 0.3 * ts;
     final gridBot = gridTop - (n + 1) * pitch;
     for (final r in [0, 1, n + 1]) {
@@ -2323,3 +2367,11 @@ Map<String, String> planEdgeElevationLabels(
   MountingHeights mounting = const MountingHeights(),
 }) =>
     runCentrelineLabels(net, building, mounting: mounting);
+
+/// Fix round 6 part 2 (New A, 2026-11-20) — the ONE pipe-key table title of
+/// the plans and the risers. Both surfaces key IDENTICAL tag texts once (one
+/// row per distinct tag, its number printed on every segment that carries
+/// it); the title says so, so a key number seen on two circles reads as the
+/// rule.
+const String kPipeKeyTableTitle =
+    'KETERANGAN PIPA / PIPE KEY (same tag = same key)';

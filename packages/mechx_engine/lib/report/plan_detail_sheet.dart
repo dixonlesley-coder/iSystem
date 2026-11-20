@@ -204,6 +204,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
     final d = details[i];
     final r = d.rectPx;
     final n = pack.ns[i];
+    // Fix round 6 part 2 (T7) — a 1:10 window labels its whole view.
+    final labelMargin = n <= kPlanDetailLabelAllScale;
     final k = metersPerPixel * 1000 / n; // paper mm per sheet px
     final frame = pack.frames[i];
     final fw = frame.maxX - frame.minX, fh = frame.maxY - frame.minY;
@@ -245,7 +247,14 @@ PlanDetailSheetPlot planDetailSheetPlot({
       }
       used.add(nd.id);
       idOf[nd.id] = nd.id;
-      if (!d.containsPx(nd.x, nd.y)) unlabelled.add(nd.id);
+      // Fix round 6 part 2 (T7 / Obs 9) — on a 1:10 window (room to spare)
+      // every node and run it SHOWS is tagged or keyed there (a detail
+      // exists to be read): the margin outside the callout box used to be
+      // left unlabelled ('labelled on the plan'), so the house / shophouse
+      // 1:10 windows showed bare runs and fixtures. Coarser windows keep the
+      // margin as context (labelling it there crowded the tower's details
+      // into 14 more sheets).
+      if (!d.containsPx(nd.x, nd.y) && !labelMargin) unlabelled.add(nd.id);
       nodes.add(nd.copyWith(x: mx(nd.x), y: my(nd.y)));
     }
     String bare(String baseId, double x, double y, int fl) {
@@ -290,7 +299,16 @@ PlanDetailSheetPlot planDetailSheetPlot({
         final fromId = idOf[a.id] ?? bare(a.id, mx(x1), my(y1), floorIndex);
         final toId = idOf[c.id] ?? bare(c.id, mx(x2), my(y2), floorIndex);
         final id = fresh('${e.id}#${d.letter}');
-        if (!d.containsPx((a.x + c.x) / 2, (a.y + c.y) / 2)) unlabelled.add(id);
+        // A run another detail's box holds is labelled THERE (a split
+        // piece's neighbour); every other run the window shows is labelled
+        // here (T7).
+        final mx2 = (a.x + c.x) / 2, my2 = (a.y + c.y) / 2;
+        if (!d.containsPx(mx2, my2) &&
+            (!labelMargin ||
+                details.any(
+                    (o) => !identical(o, d) && o.containsPx(mx2, my2)))) {
+          unlabelled.add(id);
+        }
         edges.add(NetEdge(
             id: id,
             fromId: fromId,
@@ -308,7 +326,6 @@ PlanDetailSheetPlot planDetailSheetPlot({
         final otherId =
             bare(other.id, mx(here.x), my(here.y), other.floorIndex);
         final id = fresh('${e.id}#${d.letter}');
-        if (!d.containsPx(here.x, here.y)) unlabelled.add(id);
         edges.add(NetEdge(
             id: id,
             fromId: here.id == a.id ? here.id : otherId,
@@ -394,6 +411,10 @@ PlanDetailSheetPlot planDetailSheetPlot({
         planDetailOutsideFrames([for (final p in plots) p.frameMm], areaMm),
   );
 }
+
+/// Fix round 6 part 2 (T7) — the coarsest detail scale (1 : n) at which a
+/// window labels EVERY node and run it shows, its margin included.
+const int kPlanDetailLabelAllScale = 10;
 
 /// One paper mm per synthetic pixel, in metres per pixel at "1 : 1".
 const double _kMmPerPx = 0.001;

@@ -2137,8 +2137,11 @@ void main() {
       expect(c.read(prvHoseValvesProvider), hasLength(60));
       // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
       // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
-      // Fix round 6 (T9) — + one MEP way on its longer board-to-machine run
-      // (the 126 m roof booster P-05 grows 2.5 -> 4 mm2).
+      // Fix round 6 (T9) — + "Booster set P-05: cable raised to 4 mm2"
+      // (dumped warning list): its 126 m run on 2.5 mm2 is a 2 x 0.126 x 8.87
+      // = 2.235 ohm loop, above the 230 / (20 x 6 A) = 1.92 ohm a curve-D
+      // MCB 6 A needs; 4 mm2 gives 1.39 ohm + the upstream loop.
+      // (Derivation in test/fix6_t9_mep_length_test.dart.)
       expect(n('electrical:cable-raised-for-ads'), 7);
       // Backlog Z-3 — six fire pump ways (FP / FPS / FJ, FP2 / FP2S / FJ2).
       expect(n('electrical:fire-pump-protection'), 6);
