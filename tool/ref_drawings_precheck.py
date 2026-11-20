@@ -1017,9 +1017,14 @@ def round6_checks(bdir, project, pages, emit, lines):
                                re.search(r'(^|\s)' + re.escape(k) + r'(\s|$)',
                                          t) for t in labels):
                         miss.append(f'p{i} "{k}"')
+                # Key-table TAG cells (a keyed mark is listed in the table,
+                # one row under the other by design) are not drawn marks.
+                tagx = [w['x0'] for w in ws
+                        if w['text'].startswith('SIZE-SERVICE')]
                 marks = [w for w in ws
                          if w['text'].strip().startswith(('LANJUT KE',
-                                                          'LANJUTAN DARI'))]
+                                                          'LANJUTAN DARI'))
+                         and not any(abs(w['x0'] - x) < 2 for x in tagx)]
                 for a in range(len(marks)):
                     for b in range(a + 1, len(marks)):
                         m1, m2 = marks[a], marks[b]
@@ -1085,7 +1090,7 @@ def round6_checks(bdir, project, pages, emit, lines):
                     bad6.append(f'p{i} two page counters')
         svc = Counter()
         for l in stext.splitlines():
-            m = re.match(r'^(P-\d+) (Fire [^@]*?) \d', l)
+            m = re.match(r'^(P-\d+) (Fire .*?) \d+(?:\.\d+)? L/s', l)
             if m:
                 svc[m.group(2).strip()] += 1
         bad6 += [f'{k} x{n}' for k, n in svc.items() if n > 1]
@@ -1108,6 +1113,35 @@ def round6_checks(bdir, project, pages, emit, lines):
         emit('C9', 'FAIL' if miss else 'PASS', 'G-003 cable families',
              f'printed on E-201, not on G-003: {", ".join(miss)}' if miss
              else f'{len(used)} families all listed')
+
+    # T5 - a detail window's scale-bar end labels never run together
+    # ('0' + '500 mm' read as '0500 mm').
+    bad5 = []
+    for f in glob.glob(os.path.join(bdir, '*-detail*.pdf')):
+        with pdfplumber.open(f) as doc:
+            for i, pg in enumerate(doc.pages, 1):
+                ws = pg.extract_words(x_tolerance=1.5)
+                zeros = [w for w in ws if w['text'] == '0']
+                for z in zeros:
+                    for w in ws:
+                        if w is z or not re.match(r'^\d+(\.\d+)?$',
+                                                  w['text']):
+                            continue
+                        unit = any(u['text'] in ('mm', 'm') and
+                                   abs(u['top'] - w['top']) < 0.5 and
+                                   0 <= u['x0'] - w['x1'] < 3 for u in ws)
+                        if unit and abs(w['top'] - z['top']) < 0.5 and \
+                                0 <= w['x0'] - z['x1'] < 0.6 * (
+                                    z['bottom'] - z['top']):
+                            bad5.append(f'{short(stem_of(f), project)} '
+                                        f'p{i} "0" + "{w["text"]}"')
+                for w in ws:
+                    if re.match(r'^0\d+$', w['text']):
+                        bad5.append(f'{short(stem_of(f), project)} p{i} '
+                                    f'"{w["text"]}"')
+    emit('T5', 'FAIL' if bad5 else 'PASS', 'detail scale bars',
+         '; '.join(sorted(set(bad5))[:6]) if bad5 else
+         'every scale-bar label clear of the next')
 
 
 def run_building(root, b):

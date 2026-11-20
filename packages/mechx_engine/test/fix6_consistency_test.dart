@@ -3,7 +3,9 @@
 // G-003, C9 G-003 line styles as the plans draw them.
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/cover_sheet.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart' show helveticaTextWidth;
 import 'package:mechx_engine/report/number_format.dart';
+import 'package:mechx_engine/report/plan_detail.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:test/test.dart';
 
@@ -52,5 +54,23 @@ void main() {
     expect(swatches['V']!.dashed, isTrue);
     expect(swatches['V']!.dashDot, isFalse);
     expect(swatches['CW']!.dashed || swatches['CW']!.dashDot, isFalse);
+  });
+
+  // Fix round 6 (T5) — a short detail scale bar never prints '0' against its
+  // end figure: the '0' is dropped unless the end label clears it.
+  test('T5: a short scale bar drops its 0, a long one keeps it', () {
+    for (final n in [10, 20, 25, 50]) {
+      for (final maxLen in [null, 8.0, 12.0, 20.0, 40.0]) {
+        final b = planDetailScaleBar(
+            n: n, x0: 0, y0: 0, textMm: 2.0, maxLenMm: maxLen);
+        final end = b.texts.last;
+        if (b.texts.any((t) => t.text == '0')) {
+          // The end label starts at least half a text height past the 0.
+          expect(end.x,
+              greaterThanOrEqualTo(helveticaTextWidth('0', 2.0) + 1.0 - 1e-9),
+              reason: 'n $n max $maxLen');
+        }
+      }
+    }
   });
 }

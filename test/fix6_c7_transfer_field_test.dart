@@ -21,7 +21,6 @@ import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/hydraulics.dart' show headLossHazenWilliams;
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/units.dart';
 
 import 'reference_drawing_loader.dart';
 

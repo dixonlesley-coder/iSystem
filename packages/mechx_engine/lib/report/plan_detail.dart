@@ -550,10 +550,15 @@ PlanMarks planDetailScaleBar(
       ? '${v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1)} m'
       : '${(v * 1000).round()} mm';
   final ty = y0 + textMm * 1.4;
+  // Fix round 6 (T5) — on a short bar the end figure would run into the
+  // '0' ('0' + '500 mm' read '0500 mm'): the '0' is dropped when the end
+  // label does not clear it by half a text height (the bar's left end is
+  // its zero).
+  final endX = x0 + len - helveticaTextWidth(fig(m), textMm);
+  final zeroClear = endX >= x0 + helveticaTextWidth('0', textMm) + textMm / 2;
   return PlanMarks(lines: lines, texts: [
-    PlanMarkText(x0, ty, textMm, '0'),
-    PlanMarkText(x0 + len - helveticaTextWidth(fig(m), textMm), ty, textMm,
-        fig(m)),
+    if (zeroClear) PlanMarkText(x0, ty, textMm, '0'),
+    PlanMarkText(endX, ty, textMm, fig(m)),
   ]);
 }
 

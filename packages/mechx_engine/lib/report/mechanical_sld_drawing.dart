@@ -1565,6 +1565,10 @@ SldSheet _buildMechanicalRiserSld({
           size: 7, bold: true));
     }
   }
+  // Fix round 6 — notes placed only once EVERY line is reserved, the
+  // page-edge riser stubs included (the shophouse's rainwater stub struck
+  // 'KE SALURAN PEMBUANGAN').
+  final lateNotes = <void Function()>[];
   // ── G4 DRAINAGE TERMINUS: the exit to the disposal system ───────────────────
   // The network's drainage EXIT (the lowest stack base / main outlet) carries a
   // terminus glyph + a 'KE SALURAN PEMBUANGAN' label — the point where the
@@ -1591,12 +1595,12 @@ SldSheet _buildMechanicalRiserSld({
       // Drawing-review D4 — 8 units like the tags, so it still plots at
       // >= 7 pt on a page fitted below 1:1.
       const note = 'KE SALURAN PEMBUANGAN';
-      placer.place(p.dx + _symbolSize / 2 + 4, gy + 3, note,
+      lateNotes.add(() => placer.place(p.dx + _symbolSize / 2 + 4, gy + 3, note,
           size: 8,
           bold: true,
           anchorX: p.dx,
           anchorY: gy,
-          candidates: _riserLadder(note));
+          candidates: _riserLadder(note)));
     }
   }
 
@@ -1649,10 +1653,8 @@ SldSheet _buildMechanicalRiserSld({
       // Only marks close enough to pile onto each other (their risers less
       // than a mark's width apart) name their pipe.
       final reach = _labelWidth(base, 8) + 12;
-      final crowded = (lanjutAt[base] ?? const <double>[])
-              .where((o) => (o - x).abs() < reach)
-              .length >
-          1;
+      final at = lanjutAt[base] ?? const <double>[];
+      final crowded = at.where((o) => (o - x).abs() < reach).length > 1;
       final text = crowded
           ? '$base (${tags[e.id] ?? riserServiceCode(e.service)})'
           : base;
@@ -1755,11 +1757,19 @@ SldSheet _buildMechanicalRiserSld({
         });
       }
     }
+    for (final note in lateNotes) {
+      note();
+    }
+    lateNotes.clear();
     for (final place in deferred) {
       place();
     }
   }
 
+  // A page with no edge stubs places its notes here.
+  for (final note in lateNotes) {
+    note();
+  }
   // ── Drawing review S4 — the column-split CUT marks ──────────────────────────
   // Part 1: each part-1 node whose runs cross the cut gets ONE stub per
   // service lane to the band's right edge, marked 'LANJUT KE <floor> -
