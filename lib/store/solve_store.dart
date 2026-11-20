@@ -2716,18 +2716,10 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   }
   // Round 70 — the floors an intermediate break tank feeds are zoned from
   // that tank, never from the source tank's datum.
+  final sizing = ref.watch(sizingProvider);
   final regions = tankId == null
       ? const <String, Set<String>>{}
-      : downfeedTankRegions(
-          net: net,
-          service: ServiceType.coldWater,
-          sourceTankId: tankId,
-          sizing: ref.watch(sizingProvider),
-          deliveryNodeIds: {
-            for (final n in net.nodes)
-              if (n.role == NodeRole.fixture) n.id,
-          },
-        );
+      : _breakTankRegions(net, tankId, sizing);
   final regionOf = <String>{for (final r in regions.values) ...r};
   if (fedByTank != null && regionOf.isNotEmpty) {
     fedByTank = fedByTank.difference(regionOf);
@@ -2787,15 +2779,26 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   }
   // Reference shophouse F1 — every OTHER roof-tank component is zoned from
   // its own tank (plus its own booster lift), exactly like the main tank.
-  // (Its intermediate break tanks are not split out — recorded.)
+  // Backlog K-1 — and, exactly like the main tank, the floors one of ITS
+  // intermediate break tanks feeds ([_breakTankRegions] from that roof tank)
+  // leave its group and are zoned from the break tank's own datum (below,
+  // after the main tank's break tanks).
   final extraTanks = ref.watch(extraDownfeedTanksProvider);
+  final extraRegions = <Map<String, Set<String>>>[];
   if (extraTanks.isNotEmpty) {
     final heads = ref.watch(downfeedMoverHeadsProvider);
     final top = project.building.levelCount - 1;
     for (final x in extraTanks) {
       final w = _downfeedTankWalk(net, x.tank);
+      final xRegions = _breakTankRegions(net, x.tank, sizing);
+      extraRegions.add(xRegions);
+      final xRegionOf = <String>{for (final r in xRegions.values) ...r};
       int? lo, hi;
-      for (final id in (w.fed.intersection(w.delivery).toList()..sort())) {
+      for (final id in (w.fed
+          .intersection(w.delivery)
+          .difference(xRegionOf)
+          .toList()
+        ..sort())) {
         final n = net.nodeById(id)!;
         if (lo == null || n.floorIndex < lo) lo = n.floorIndex;
         if (hi == null || n.floorIndex > hi) hi = n.floorIndex;
@@ -2825,7 +2828,47 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
       ));
     }
   }
-  // Round 70 — each break tank zones the floors it feeds from its own datum.
+  // Round 70 — each break tank zones the floors it feeds from its own datum:
+  // the main tank's, then (backlog K-1) each other roof-tank component's, in
+  // [extraDownfeedTanksProvider] order — ONE routine for both.
+  for (final r in [regions, ...extraRegions]) {
+    groups.addAll(_breakTankZoneGroups(net, project, r,
+        effective: effective, maxFix: maxFix));
+  }
+  return groups;
+});
+
+/// Round 70 — the intermediate break-tank regions of ONE downfeed roof
+/// [tank]'s cold-water network ([downfeedTankRegions] with every fixture a
+/// delivery node). Backlog K-1 — read for the main tank AND for every other
+/// roof-tank component ([extraDownfeedTanksProvider]), so the two can never
+/// zone a break tank differently. Empty for a single-tank component.
+Map<String, Set<String>> _breakTankRegions(
+        Network net, String tank, Map<String, EdgeSizing> sizing) =>
+    downfeedTankRegions(
+      net: net,
+      service: ServiceType.coldWater,
+      sourceTankId: tank,
+      sizing: sizing,
+      deliveryNodeIds: {
+        for (final n in net.nodes)
+          if (n.role == NodeRole.fixture) n.id,
+      },
+    );
+
+/// Round 70 — one zone group per break tank of [regions]
+/// ([_breakTankRegions]): the floors its demand fixtures sit on, zoned from
+/// the break tank's OWN elevation (a free water surface restarts the static
+/// head). A region with no demand fixture opens no group. Ordered as
+/// [regions] (highest tank first).
+List<DownfeedZoneGroup> _breakTankZoneGroups(
+  Network net,
+  ProjectState project,
+  Map<String, Set<String>> regions, {
+  required Pressure effective,
+  required Pressure maxFix,
+}) {
+  final groups = <DownfeedZoneGroup>[];
   for (final MapEntry(key: t, value: nodes) in regions.entries) {
     int? lo, hi;
     for (final id in nodes) {
@@ -2857,7 +2900,7 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
     ));
   }
   return groups;
-});
+}
 
 /// Reference office O2 — the UPFEED zone datum: the elevation of the
 /// equivalent free surface the DELIVERED upfeed field implies

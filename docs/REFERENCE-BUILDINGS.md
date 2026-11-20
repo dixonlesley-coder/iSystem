@@ -74,7 +74,11 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
+_(empty)_
+
+### Backlog closed (2026-11-20)
+
+- **(g) Break tanks of extra roof tanks — backlog K-1.** An extra roof-tank component's intermediate break tanks are now zoned by the same Round-70 routine as the main tank's (`_breakTankRegions` / `_breakTankZoneGroups`): their floors leave the component's roof-tank group and hang from the break tank's own datum. The shophouse's units B and C have no break tank, so no figure moved (`test/backlog_k1_extra_tank_break_tank_test.dart` pins the shape).
 
 ### Backlog closed (2026-11-14)
 
