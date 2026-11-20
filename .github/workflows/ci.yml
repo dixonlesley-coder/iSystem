@@ -1,9 +1,15 @@
 name: CI
 
-# Lightweight gate on every push and pull request: the pure Dart engine tests,
-# the Flutter app tests (incl. golden screenshots), and a clean `flutter
-# analyze`. Packaging / the Windows build are NOT exercised here (that's the
-# Release workflow) — this stays fast and runs on Linux.
+# Gate on every push and pull request, in two jobs:
+#   verify          (Linux)   the pure Dart engine tests, the Flutter app tests
+#                             incl. golden screenshots, and a clean `flutter
+#                             analyze`.
+#   verify-windows  (Windows) the same engine + app tests on the platform the
+#                             app ships on, minus the Linux-locked goldens.
+# Packaging / the Windows BUILD are not exercised here (that's the Release
+# workflow). The Windows job exists because the v1.24.0 release gate failed
+# three times on tests that only fail on Windows (last-bit sin / cos, and file
+# times read at one-second resolution) — found at release time, not on the PR.
 
 on:
   push:
@@ -40,3 +46,33 @@ jobs:
 
       - name: Analyze (must be clean)
         run: flutter analyze
+
+  # The app ships on Windows only, and release.yml runs exactly these two test
+  # steps before it builds. Running them here too means a platform-sensitive
+  # test fails on the pull request that introduced it.
+  verify-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.3
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Engine tests (pure Dart)
+        working-directory: packages/mechx_engine
+        run: dart test
+
+      # Golden screenshots are platform-locked to their Linux generation host
+      # (font anti-aliasing differs on windows-latest), so they are tagged
+      # `golden` and enforced by the Linux job above. Keep this line identical
+      # to the release.yml gate.
+      - name: App tests (logic + widget; goldens enforced on Linux)
+        run: flutter test --exclude-tags golden
