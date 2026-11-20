@@ -134,6 +134,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-20)
 
+- **Downfeed ground tank in the delivered field — fix round 6 C7.** The open ground tank now reads 0 kPa (was the roof tank's gravity walked back: apartment 394.042, shophouse 115.345, tower 1139.324 kPa) and the transfer riser reads the transfer pump's discharge (outlet = (H − suction friction) x 9.81: 168.997 / 478.657 / 1263.520 kPa).
 - **(d) Mains pressure — the delivered field — backlog K-2.** Upstream of GT the pipe is on mains pressure: WM now reads the available mains head 10 m x 9.81 = 98.1 kPa (was −13.979 kPa flowing / −4.905 kPa no-flow, the pump solve back-calculated from GT); GT stays the pump-side datum 0 kPa; the tank inlet keeps 10 − (−0.5) − 0.312966 (0.694444 L/s on DN25 over 3.5 m) = 10.187034 m, printed on the calc report's mains line. Every other office figure is unchanged. The apartment, shophouse and tower meters read 98.1 kPa too (were 376.860 / 110.180 / 1128.601 kPa from the roof tank's gravity), see `test/backlog_k2_mains_feed_reference_test.dart`.
 
 ### Backlog closed (2026-11-14)

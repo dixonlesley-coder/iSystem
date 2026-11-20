@@ -18,9 +18,10 @@
 // Before K-2 the meters read the solve's back-calculation: office −13.979
 // (upfeed, from GT at 0 kPa), apartment 376.860, shophouse 110.180, tower
 // 1128.601 kPa (downfeed, the roof tank's gravity walked back down the
-// transfer riser). The ground tanks keep their solved figures (pump side,
-// byte-identical): office 0.000, apartment 394.042, shophouse 115.345,
-// tower 1139.324 kPa.
+// transfer riser). The ground tanks: office 0.000 kPa (the pump side);
+// since fix round 6 (C7) an open downfeed ground tank reads 0 kPa too (it
+// read the roof tank's gravity walked back: apartment 394.042, shophouse
+// 115.345, tower 1139.324 kPa).
 import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -85,7 +86,7 @@ final List<_Case> _cases = [
     feed: FeedStrategy.downfeed,
     meters: {'WM': 'GT'},
     hf: 0.339507,
-    tankKpa: 394.042,
+    tankKpa: 0.0,
   ),
   (
     name: 'shophouse',
@@ -93,7 +94,7 @@ final List<_Case> _cases = [
     feed: FeedStrategy.downfeed,
     meters: {'WM_A': 'GT_A', 'WM_B': 'GT_B', 'WM_C': 'GT_C'},
     hf: 0.014672,
-    tankKpa: 115.345,
+    tankKpa: 0.0,
   ),
   (
     name: 'tower',
@@ -101,7 +102,7 @@ final List<_Case> _cases = [
     feed: FeedStrategy.downfeed,
     meters: {'WM': 'GT'},
     hf: 0.055125,
-    tankKpa: 1139.324,
+    tankKpa: 0.0,
   ),
 ];
 

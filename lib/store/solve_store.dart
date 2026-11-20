@@ -545,8 +545,10 @@ final _upfeedPumpSideDeliveredProvider = Provider<PressureSolution?>((ref) {
 final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
   final s = ref.watch(_upfeedPumpSideDeliveredProvider);
   if (s == null) return null;
-  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds,
-      ref.watch(mainsFeedFieldProvider));
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds, {
+    ...ref.watch(transferSideFieldProvider),
+    ...ref.watch(mainsFeedFieldProvider),
+  });
   if (mains.isEmpty) return s;
   return PressureSolution(
     residualPressure: {
@@ -754,8 +756,13 @@ final _downfeedPumpSideDeliveredProvider = Provider<DownfeedSolution?>((ref) {
 final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   final s = ref.watch(_downfeedPumpSideDeliveredProvider);
   if (s == null) return null;
-  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds,
-      ref.watch(mainsFeedFieldProvider));
+  // Fix round 6 (C7) — and the transfer side (an open ground tank at 0 kPa,
+  // the transfer riser on the pump's discharge); the mains side wins on the
+  // meter feed.
+  final mains = _mainsSideOf(s.residualPressure, s.deliveryNodeIds, {
+    ...ref.watch(transferSideFieldProvider),
+    ...ref.watch(mainsFeedFieldProvider),
+  });
   if (mains.isEmpty) return s;
   return DownfeedSolution(
     residualPressure: {
@@ -1740,6 +1747,8 @@ Head? transferPumpHead({
   required FlowRate flow,
   required double Function(NetEdge e) lengthOf,
   required double Function(NetNode n) elevationOf,
+  Map<String, ({double flowing, double noFlow})>? fieldOut,
+  double? developedHeadM,
 }) {
   final hwC = const SniProfile().hazenWilliamsC(PipeMaterial.pvc);
   String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
@@ -1764,6 +1773,8 @@ Head? transferPumpHead({
   var upstreamFriction = 0.0;
   var node = mover.nodeId;
   final seen = <String>{node};
+  // Fix round 6 (C7) — friction from the pump up to each suction node.
+  final cumUp = <String, double>{node: 0.0};
   while (!_isStorageTank(net.nodeById(node)) || node == mover.nodeId) {
     NetEdge? inE;
     for (final e in supplyAt(node)) {
@@ -1778,6 +1789,7 @@ Head? transferPumpHead({
     if (!seen.add(up)) break;
     upstreamFriction += friction(inE);
     node = up;
+    cumUp[node] = upstreamFriction;
   }
   final source = net.nodeById(node);
   if (source == null) return null;
@@ -1794,8 +1806,10 @@ Head? transferPumpHead({
   double? worst;
   final visited = <String>{mover.nodeId};
   final stack = <(String, double)>[(mover.nodeId, 0.0)];
+  final downFr = <String, double>{};
   while (stack.isNotEmpty) {
     final (at, fr) = stack.removeLast();
+    if (at != mover.nodeId) downFr[at] = fr;
     final outs = [
       for (final e in supplyAt(at))
         if (sizing[e.id]?.flowFromId == at) e,
@@ -1815,7 +1829,43 @@ Head? transferPumpHead({
     }
   }
   if (worst == null) return null;
-  return Head(math.max(0, worst));
+  final head = math.max(0.0, worst);
+  // Fix round 6 (C7, 2026-11-20) — the TRANSFER side of the delivered
+  // field, from the SAME walk and terms the head is sized on: the source
+  // tank is a free surface (0); a suction node reads the tank's gravity less
+  // the friction from the tank; the pump (its outlet) and every node down to
+  // the tanks it fills read the developed head ([developedHeadM], else the
+  // sized head) less the rise from the pump and the friction from it — the
+  // worst tank's inlet keeps exactly [kTankInletResidualHeadM]. The no-flow
+  // figure drops the friction terms. The filled tanks are not written (each
+  // is a free surface / its own downfeed source).
+  if (fieldOut != null && pumpNode != null) {
+    final h = developedHeadM ?? head;
+    final zPump = elevationOf(pumpNode);
+    if (_isStorageTank(source)) {
+      fieldOut[source.id] = (flowing: 0.0, noFlow: 0.0);
+    }
+    for (final e in cumUp.entries) {
+      if (e.key == source.id || e.key == mover.nodeId) continue;
+      final n = net.nodeById(e.key);
+      if (n == null) continue;
+      final g = base - elevationOf(n);
+      fieldOut[e.key] =
+          (flowing: g - (upstreamFriction - e.value), noFlow: g);
+    }
+    final suction = base - zPump - upstreamFriction;
+    fieldOut[mover.nodeId] = (flowing: suction + h, noFlow: base - zPump + h);
+    for (final e in downFr.entries) {
+      final n = net.nodeById(e.key);
+      if (n == null) continue;
+      final rise = elevationOf(n) - zPump;
+      fieldOut[e.key] = (
+        flowing: suction + h - rise - e.value,
+        noFlow: base - zPump + h - rise,
+      );
+    }
+  }
+  return Head(head);
 }
 
 /// Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — the solved duty
@@ -1847,6 +1897,102 @@ final ejectorDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   return out;
 });
 
+/// Fix round 6 (C7) — the drawn supply movers (`supplyMovers`) with the
+/// root flows the duties are sized on: ONE list for [supplyMoverDutiesProvider]
+/// and the transfer side of the delivered field ([transferSideFieldProvider]).
+final _supplyMoversProvider = Provider<List<SupplyMover>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  final peak = ref.watch(supplyPeakFlowProvider);
+  return supplyMovers(net, sizing,
+      excludeEdgeIds: legs,
+      rootFlowOf: (root) {
+        final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
+            edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
+            flushSystem: flushSystemForRoot(net, kSupplyService, root,
+                ref.watch(supplyFlushValveNodeIdsProvider)),
+            excludeEdgeIds: legs);
+        return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
+      });
+});
+
+/// Fix round 6 (C7, 2026-11-20) — the TRANSFER side of the delivered field:
+/// for every sized transfer pump ([transferPumpHead]'s walk, developing its
+/// sized duty head), its source tank at 0 kPa (an open tank is atmospheric),
+/// its suction pipe, its outlet and its riser up to the tank(s) it fills. A
+/// standby pump on a mirrored parallel leg ([parallelLegEdgeIdsProvider])
+/// reads its duty twin's outlet (it shares the discharge header). Empty with
+/// no transfer pump.
+final transferSideFieldProvider =
+    Provider<Map<String, ({Pressure residual, Pressure noFlow})>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final duties = ref.watch(supplyMoverDutiesProvider);
+  final heads = <String, ({double flowing, double noFlow})>{};
+  final outletOf = <String, ({double flowing, double noFlow})>{};
+  for (final m in ref.watch(_supplyMoversProvider)) {
+    if (!m.transfer) continue;
+    final d = duties[m.nodeId];
+    if (d == null) continue;
+    final f = <String, ({double flowing, double noFlow})>{};
+    transferPumpHead(
+      net: net,
+      sizing: sizing,
+      mover: m,
+      flow: m.flow,
+      lengthOf: (e) => edgeLength(e, net,
+              calibrationBySheet: project.calibrations,
+              building: project.building,
+              mounting: project.mounting)
+          .meters,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters,
+      fieldOut: f,
+      developedHeadM: d.head.meters,
+    );
+    heads.addAll(f);
+    if (f[m.nodeId] case final o?) outletOf[m.nodeId] = o;
+  }
+  if (heads.isEmpty) return const {};
+  // A standby pump beside a transfer pump (both ends on its legs' ends).
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  for (final e in net.edges) {
+    if (!legs.contains(e.id)) continue;
+    for (final id in [e.fromId, e.toId]) {
+      final n = net.nodeById(id);
+      if (n == null || heads.containsKey(id)) continue;
+      if (n.component != NodeComponent.pump &&
+          n.component != NodeComponent.boosterSet) {
+        continue;
+      }
+      // Its duty twin: a transfer pump sharing a neighbour with it.
+      final nb = {
+        for (final x in net.edges)
+          if (x.fromId == id) x.toId else if (x.toId == id) x.fromId,
+      };
+      for (final o in outletOf.entries) {
+        final onb = {
+          for (final x in net.edges)
+            if (x.fromId == o.key) x.toId else if (x.toId == o.key) x.fromId,
+        };
+        if (nb.intersection(onb).isNotEmpty) {
+          heads[id] = o.value;
+          break;
+        }
+      }
+    }
+  }
+  return {
+    for (final e in heads.entries)
+      e.key: (
+        residual: pressureFromHead(Head(e.value.flowing)),
+        noFlow: pressureFromHead(Head(e.value.noFlow)),
+      ),
+  };
+});
+
 /// Round 16 — the solved duty of EVERY drawn supply mover, keyed by node id:
 /// the root pump / inline boosters sized in series ([seriesMoverHeads]) on
 /// the flow through each, and each transfer pump on its lift
@@ -1859,18 +2005,7 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final legs = ref.watch(parallelLegEdgeIdsProvider);
-  final peak = ref.watch(supplyPeakFlowProvider);
-  final movers = supplyMovers(net, sizing,
-      excludeEdgeIds: legs,
-      rootFlowOf: (root) {
-        final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
-            edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
-            flushSystem: flushSystemForRoot(net, kSupplyService, root,
-                ref.watch(supplyFlushValveNodeIdsProvider)),
-            excludeEdgeIds: legs);
-        return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
-      });
+  final movers = ref.watch(_supplyMoversProvider);
   if (movers.isEmpty) return const {};
   final out = <String, PumpDuty>{};
 
